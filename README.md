@@ -11,49 +11,80 @@ the algorithm — and it explains what it does so you can go further yourself.
 
 ```
 $ faceup doctor
-▌ faceup 0.1.0 · doctor
-Howdy
-  ✔ Howdy is installed; config at /etc/howdy/config.ini
-  ✔ PAM is wired (pam_howdy in common-auth): login, sudo and polkit can use it
-  ✔ `python3` on PATH (/usr/bin/python3) can import dlib + cv2
+▌ faceup 0.2.0 · doctor
 Cameras
   · /dev/video0  RGB  1920x1080  [MJPG/YUYV]  Integrated Camera
   ✔ /dev/video2  IR (greyscale)  640x360  [GREY]  Integrated Camera
-  ✔ Howdy uses device_path = /dev/video2
-Lighting right now (/dev/video2)
-  ! mean 40/255 → dim
+  ✔ config: ir = /dev/video2, rgb = /dev/video0
+  ! ir lighting now: mean 40/255 → dim
+    → dark IR = the emitter is probably not firing
 IR emitter (linux-enable-ir-emitter)
   ✘ installed but NO device configured — the tool has nothing to switch on
     → sudo faceup emitter configure
+Engine
+  ✔ `python3` on PATH (/usr/bin/python3) can import dlib + cv2
+  ✔ ir: 8 model(s) for octave: straight, keyboard, tilt-left, …
+PAM
+  ✔ faceup-auth is enabled in /etc/pam.d/common-auth
 ```
+
+## What v0.2 does
+
+faceup no longer wraps Howdy: it ships its **own authentication engine** (`faceup-auth`,
+called by PAM through the stock `pam_exec.so`) built on the same proven pieces — dlib's
+detector and ResNet face embedding, OpenCV, V4L2 — with what Howdy lacks:
+
+- **IR primary, RGB secondary.** Both cameras are read in lock-step (20 pairs/s on
+  the reference laptop).
+- **Multi-frame fusion.** Embeddings of the best frames are averaged before matching,
+  which removes the per-frame noise behind random rejects.
+- **Pose-guided dual-spectrum enrollment.** One model per pose *and* per camera.
+- **Liveness voters** with PASS / FAIL / ABSTAIN semantics — two PASSes and zero FAILs
+  needed, and abstaining never counts against you:
+  - *cross-spectrum consistency* — the face must appear in both cameras at the same place
+    (screens emit no IR; IR-tuned prints look wrong in colour)
+  - *non-rigid motion* — a head moves like a 3D object, a photo or screen like a plane
+  - *anti-spoof CNN* on the RGB crop (MiniFASNet, ONNX via OpenCV DNN; needs the model
+    file — not bundled yet, the voter is disabled until it's present)
+  - *emitter-modulation shadow test* — metric implemented, enabled once the LED toggle is
+    proven fast enough on the hardware (`shadow_test = "auto"`)
+- **Fail open.** Every failure — dark camera, busy camera, spoof suspected, timeout —
+  ends in the normal password prompt. One log line per attempt says why.
+
+Full rationale and thresholds: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Commands
 
 | Command | Root | What it does |
 |---|---|---|
-| `faceup doctor` | no | Diagnoses everything: Howdy + PAM, Python shadowing, cameras (IR vs RGB, via raw V4L2 ioctls), live lighting, emitter state, settings, enrolled models. Exit code 1 if anything needs fixing. |
-| `faceup setup` | yes | Guided, reversible setup: camera → emitter → detector benchmark → tolerance → pose-guided enrollment. Backs up `config.ini` before every change. |
-| `faceup enroll` | yes | Pose-guided enrollment: one model per real-world pose (straight, looking at the keyboard, tilts, turns, distance; optional glasses/headset/dark). |
-| `faceup tune` | yes | Change `certainty`, `timeout`, `dark_threshold`, device, or switch HOG ↔ CNN detector. |
-| `faceup bench` | no | Times Howdy's HOG and CNN detectors on a real frame from your camera and tells you whether CNN is affordable. |
-| `faceup emitter install\|configure\|test` | yes | Installs [linux-enable-ir-emitter](https://github.com/EmixamPP/linux-enable-ir-emitter) from its latest release, configures it for your IR camera, or measures whether the emitter lights you. |
+| `faceup doctor` | no | Diagnoses cameras (IR vs RGB via raw V4L2 ioctls), live lighting, emitter state, engine, enrolled models, PAM. Exit 1 if anything needs fixing. |
+| `faceup setup` | yes | Guided: cameras → emitter → detector benchmark → anti-spoof model → enrollment → PAM. |
+| `faceup enroll` | yes | Pose-guided enrollment on every configured camera, with calibration, wrong-person check and a 3-attempt self-check. |
+| `faceup auth -v` | yes | Runs one authentication and shows every step (what PAM calls without `-v`). |
+| `faceup tune [section.key VALUE]` | yes | Show or change `/etc/faceup/config.toml` with validation. |
+| `faceup pam enable\|disable\|status` | yes | The PAM line, with backup/restore; offers to retire `pam_howdy`. |
+| `faceup models [--remove LABEL]` | yes | List or remove enrolled poses. |
+| `faceup log` | no* | Recent attempts, one line each (*`adm` group). |
+| `faceup bench` | no | Times HOG vs CNN detectors on a live frame. |
+| `faceup emitter install\|configure\|test` | yes | IR emitter via linux-enable-ir-emitter. |
 
 ## Install
 
-`faceup` deliberately uses the **distro Python** — that's the one Howdy runs, and
-the one that has `python3-dlib` and `python3-opencv`. A virtualenv would not see
-them.
+`faceup` deliberately uses the **distro Python** — the one that has `python3-dlib`
+and `python3-opencv`. A virtualenv would not see them.
 
 ```bash
 git clone https://github.com/<you>/faceup && cd faceup
-sudo ./install.sh          # copies the package to /usr/local/lib/faceup, wrapper in /usr/local/bin
+sudo ./install.sh          # /usr/local/lib/faceup + /usr/local/bin/{faceup,faceup-auth}
 faceup doctor
-sudo faceup setup
+sudo faceup setup          # ends with: sudo -k && sudo true  → unlocks by face
 ```
 
-Requirements: Linux, Howdy 2.6+ (Ubuntu 24.04: `ppa:ubuntuhandbook1/howdy`),
-`python3-opencv`, `python3-dlib`, `dlib-models` (all pulled in by Howdy).
-Uninstall: `sudo rm -r /usr/local/lib/faceup /usr/local/bin/faceup`.
+Requirements: Linux, `python3-opencv`, `python3-dlib`, `dlib-models` (Ubuntu 24.04:
+all in the archive). Howdy is no longer required, but coexists.
+Uninstall: `sudo faceup pam disable && sudo ./install.sh --uninstall`.
+
+Tests (no camera needed): `python3 -m unittest discover tests`.
 
 ---
 
