@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "faceup"
-version = "0.1.0"
-description = "Make face unlock on Linux actually work: guided Howdy setup, IR camera detection, multi-pose enrollment, tuning and diagnostics."
+version = "0.2.0"
+description = "Face unlock for Linux that actually works: dual-spectrum (IR+RGB) recognition with liveness voters, fail-open PAM integration."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
