@@ -376,7 +376,10 @@ def cmd_auth(args) -> int:
     """The engine entry point. PAM calls it via /usr/local/bin/faceup-auth; exit 0 = authenticated."""
     from .engine.auth import Engine
     user = real_user(args)
+    svc = os.environ.get("PAM_SERVICE")
     out = Engine(verbose=args.verbose).authenticate(user)
+    if svc and not out.detail:
+        out.detail = f"via {svc}"
     if args.verbose or sys.stdout.isatty():
         (ui.ok if out.accepted else ui.fail)(out.logline())
     return 0 if out.accepted else 1

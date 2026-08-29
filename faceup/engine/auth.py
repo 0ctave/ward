@@ -84,28 +84,33 @@ class Engine:
         t0 = time.monotonic()
         cams, rec, live, timing, beh = (self.cfg[k] for k in ("cameras", "recognition", "liveness", "timing", "behaviour"))
 
+        def fail(reason: str, detail: str = "") -> Outcome:
+            out = Outcome(False, reason, user, detail=detail, elapsed_ms=int((time.monotonic() - t0) * 1000))
+            log(out)
+            return out
+
         if beh["abort_if_ssh"] and os.environ.get("SSH_CONNECTION"):
-            return Outcome(False, "ssh", user)
+            return fail("ssh")
         try:
             st = storemod.load(user)
         except (storemod.StoreError, OSError, ValueError) as e:
-            return Outcome(False, "store", user, detail=str(e))
+            return fail("store", str(e))
         if not st.models:
-            return Outcome(False, "no-models", user)
+            return fail("no-models")
 
         paths, notes = config.camera_paths(self.cfg)
         for n in notes:
             self.say(n)
         devices = {s: paths[s] for s in ("ir", "rgb") if paths.get(s) and s in st.spectra()}
         if not devices:
-            return Outcome(False, "camera", user, detail="; ".join(notes) or "no camera matches the enrolled spectra")
+            return fail("camera", "; ".join(notes) or "no camera matches the enrolled spectra")
         primary = "ir" if "ir" in devices else "rgb"
         # load the dlib models before the camera opens so their cost overlaps nothing user-visible
         self.models.sp5; self.models.rec
         try:
             cap = Capture(devices)
         except CaptureError as e:
-            return Outcome(False, "camera", user, detail=str(e))
+            return fail("camera", str(e))
 
         obs: dict[str, list[Obs]] = {s: [] for s in devices}
         last_votes: list[Vote] = []
