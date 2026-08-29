@@ -224,6 +224,22 @@ def cmd_enroll(args) -> int:
                 st.calib = calib; ui.ok(f"calibration dx={calib['dx']} dy={calib['dy']} s={calib['s']}")
             else:
                 ui.warn("calibration failed (no face in both cameras); keeping previous values")
+        if not args.guided:
+            from . import gui
+            ui.info("A camera window opens. Move your head slowly so the dot visits every highlighted cell;")
+            ui.info("green cells are captured. Enter finishes, Esc cancels.")
+            try:
+                done = gui.free_move_enroll(st, cap, models, cams)
+            except gui.GuiUnavailable as e:
+                ui.warn(f"no camera window available ({e}); falling back to the guided text flow")
+                args.guided = True
+            else:
+                st = storemod.load(user)
+                print()
+                ui.ok(f"{done} model(s) added. Total: {len(st.models)} ({', '.join(f'{s}:{len(st.by_spectrum(s))}' for s in sorted(st.spectra()))})")
+                if args.selfcheck or ui.confirm("Run a self-check now (3 authentication attempts)?", default=True):
+                    selfcheck(user, cfg)
+                return 0
         ui.info("Sit as you normally do. Each pose captures for about a second — hold still until it says done.")
         existing = {m.label for m in st.models}
         for label, instruction in poses:
@@ -433,11 +449,26 @@ def cmd_emitter(args) -> int:
     if not ir:
         ui.fail("no IR camera on this machine"); return 1
     cam = ir[0]
-    if args.action == "test":
-        L = probe.lighting(cam.path)
-        ui.info(f"{cam.path}: mean {L.mean:.0f}/255 → {L.verdict}")
-        ui.tip("Run this with the lights OFF: 'dark' means the emitter is not firing.")
-        return 0
+    if args.action in ("test", "check"):
+        from . import gui
+        from .engine.capture import Capture, CaptureError
+        from .engine.detect import Models
+        cfg = cfgmod.load()
+        devices = {"ir": cam.path}
+        rgb = cfg["cameras"]["rgb"] or next((c.path for c in cameras.list_cameras() if not c.is_ir), "")
+        if rgb:
+            devices["rgb"] = rgb
+        ui.info("Turn the room lights OFF. If the colour camera sees darkness while the IR camera still sees your face, the emitter works.")
+        try:
+            with Capture(devices) as cap:
+                cap.warm_up(8)
+                state, msg = gui.emitter_check(cap, Models(), gui=(args.action == "check"), seconds=2.0)
+        except CaptureError as e:
+            ui.fail(str(e)); return 1
+        {"ok": ui.ok, "dead": ui.fail, "inconclusive": ui.warn}.get(state, ui.info)(msg)
+        if state == "dead":
+            ui.tip("sudo faceup emitter configure")
+        return 0 if state == "ok" else 1
     need_root("emitter")
     if args.action == "install":
         if probe.emitter_status()["installed"]:
@@ -463,6 +494,7 @@ def main(argv=None) -> int:
     e.add_argument("-U", "--user"); e.add_argument("--fresh", action="store_true", help="delete existing models first")
     e.add_argument("--all", action="store_true", help="include optional poses without asking")
     e.add_argument("--selfcheck", action="store_true", help="run the self-check without asking")
+    e.add_argument("--guided", action="store_true", help="scripted 8-pose text flow instead of the free-move camera window")
     e.set_defaults(fn=cmd_enroll)
 
     t = sub.add_parser("tune", help="show config, or set section.key VALUE (root)")
@@ -481,8 +513,8 @@ def main(argv=None) -> int:
     m = sub.add_parser("models", help="list or remove enrolled models (root)")
     m.add_argument("-U", "--user"); m.add_argument("--remove", metavar="LABEL"); m.set_defaults(fn=cmd_models)
 
-    em = sub.add_parser("emitter", help="IR emitter: install | configure | test")
-    em.add_argument("action", choices=["install", "configure", "test"]); em.set_defaults(fn=cmd_emitter)
+    em = sub.add_parser("emitter", help="IR emitter: check (camera window) | test (text) | install | configure")
+    em.add_argument("action", choices=["check", "test", "install", "configure"]); em.set_defaults(fn=cmd_emitter)
 
     args = p.parse_args(argv)
     try:
