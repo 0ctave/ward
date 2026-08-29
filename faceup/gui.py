@@ -211,10 +211,12 @@ def _pick_target(cells: dict, current) -> tuple[int, int] | None:
     return min(todo, key=lambda c: abs(c[0] - cy) + abs(c[1] - cp))
 
 
-def _hint(current, target) -> str:
+def _hint(current, target, box=None) -> str:
     if target is None:
         return "All cells captured - press Enter to finish"
     if current is None:
+        if box is not None and box.w < MIN_ENROLL_FACE_PX:
+            return f"Come a bit closer - face is {box.w} px, need {MIN_ENROLL_FACE_PX}"
         return "Face the camera so it can find you"
     c = current.cell()
     if c == target:
@@ -359,7 +361,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             n = len(state["neutral_samples"])
             _text(img, f"Look at the centre of the screen naturally... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
         else:
-            _text(img, _hint(current, target), (10, 24), 0.62)
+            _text(img, _hint(current, target, box), (10, 24), 0.62)
         filled = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
         req = sum(1 for c in posemod.REQUIRED if cells.get(c) and cells[c].count("primary") >= CELL_DONE)
         status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f} | {state['fps']:.0f} fps"

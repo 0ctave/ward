@@ -11,7 +11,7 @@ from .detect import Box, Models, fuse
 from .quality import MIN_FACE_PX, measure
 from .store import Store
 
-MIN_ENROLL_FACE_PX = 80
+MIN_ENROLL_FACE_PX = 60      # ≈ 90 cm from a 640 px-wide laptop camera; dlib's chip is upscaled from here
 WRONG_PERSON_DIST = 0.6
 BEST_FRAMES = 3
 

@@ -16,7 +16,7 @@ import numpy as np
 DLIB_DIRS = [Path("/usr/share/dlib"), Path("/usr/lib/howdy/dlib-data"), Path("/usr/share/dlib-models")]
 YUNET_MODEL = Path(__file__).resolve().parents[1] / "models" / "face_detection_yunet_2022mar.onnx"
 YUNET_WIDTH = 480          # working width: 4 ms/frame on a laptop CPU, faces ≥ ~40 px
-YUNET_SCORE = 0.7
+YUNET_SCORE = 0.6          # small/far faces score lower; false positives are filtered by size and landmarks
 
 
 def model_path(name: str) -> Path:
