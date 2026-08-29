@@ -272,10 +272,20 @@ A camera window tracks the head and the user simply moves it around, as with Fac
    PnP against the user's own geometry replaces this. Angles pass through a **One Euro filter** (min_cutoff 0.6 Hz, β 0.05):
    ±1.5° landmark noise becomes ≤1.3° peak-to-peak when still, while a 30° turn is followed
    within 0.5 s — no wiggle, no lag.
-1b. **Neutral calibration.** The first ~30 face frames (user looking at the screen naturally)
-   define the neutral pose; the grid is relative to it. Laptop cameras sit above the eyes, so
-   "looking at the screen" reads as pitch +10…+20° in camera terms — without this offset the
-   "down" cells are unreachable. The offset is stored as `calib.pose_offset` for reference.
+1b. **Neutral calibration — in ratio space.** The first ~30 face frames (user looking at the
+   screen naturally) define the neutral pose. Two effects are absorbed: the camera sits above
+   the eyes (looking at the screen reads as pitch +10…+20°), and the generic proportions are
+   not the user's (a long nose or a narrow eye line reads as a large constant angle — observed
+   +35° pitch / +20° yaw on the reference user). Subtracting such offsets *after* the
+   nonlinear ratio→angle inversion pushed the working range into the region where the
+   inversion compresses, making the top rows unreachable. Instead the user's median landmark
+   **ratios** at neutral become the zero point: each ratio is shifted so the user's neutral
+   maps onto the generic model's neutral *before* inversion, keeping every user in the linear
+   region. Cues: nose tip between the eyes, between the mouth corners, between the nose wings
+   (yaw; averaged), nose tip between eye and mouth lines (pitch). Synthetic face with
+   different proportions: neutral reads 0/0 after calibration; residual error is a per-user
+   *gain* (a longer nose moves more per degree, up to ~25 % on the test face) that only the
+   personal 3D model (8.1.2) can remove. Stored as `calib.neutral_ratios` / `calib.pose_offset`.
 2. **Continuous coverage, not cells.** Every sample paints a Gaussian footprint (σ = 7°) on a
    2°-resolution (yaw, pitch) map. The **required region is an ellipse** around the neutral
    pose (semi-axes 34° yaw × 19° pitch, centred 4° below level because laptop use is

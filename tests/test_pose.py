@@ -29,6 +29,8 @@ def synth_landmarks(yaw_deg: float, pitch_deg: float, w=640, h=360) -> np.ndarra
     lm = np.zeros((68, 2))
     for i, idx in enumerate(pose._LM_IDX):
         lm[idx] = pts[i, 0]
+    wings, _ = cv2.projectPoints(np.array([(-45.0, -25.0, -50.0), (45.0, -25.0, -50.0)]), rvec, tvec, K, np.zeros(4))
+    lm[31], lm[35] = wings[0, 0], wings[1, 0]
     # eye sets = their outer corners, mouth top/bottom = mouth centre (all on the model's eye/mouth lines)
     lm[36:42] = lm[36]; lm[42:48] = lm[45]
     lm[51] = lm[57] = (lm[48] + lm[54]) / 2
@@ -59,6 +61,39 @@ class PoseTests(unittest.TestCase):
             self.assertAlmostEqual(p.yaw, yaw, delta=5, msg=f"yaw for {(yaw, pitch)} → {p}")
             self.assertAlmostEqual(p.pitch, pitch, delta=4, msg=f"pitch for {(yaw, pitch)} → {p}")
         self.assertAlmostEqual(pose.estimate(synth_landmarks(0, 0), 640, 360).roll, 0.0, delta=1)
+
+    def test_ratio_space_neutral_handles_other_proportions(self):
+        """A face unlike the generic model: with its neutral ratios calibrated, angles come out
+        right across the range — including the top rows that a post-hoc angle offset compresses."""
+        W, H = 640, 360
+        K = np.array([[W, 0, W / 2], [0, W, H / 2], [0, 0, 1]], dtype=np.float64)
+        other = {36: (-190, 150, -150), 45: (210, 160, -150), 30: (0, 10, 0), 48: (-130, -120, -140),
+                 54: (150, -125, -140), 31: (-40, -20, -60), 35: (50, -22, -60), 8: (0, -300, -80)}
+
+        def lm_at(yaw, pitch):
+            ry, rp = np.deg2rad(yaw), np.deg2rad(-pitch)
+            Ry = np.array([[np.cos(ry), 0, np.sin(ry)], [0, 1, 0], [-np.sin(ry), 0, np.cos(ry)]])
+            Rx = np.array([[1, 0, 0], [0, np.cos(rp), -np.sin(rp)], [0, np.sin(rp), np.cos(rp)]])
+            rvec, _ = cv2.Rodrigues(Ry @ Rx)
+            pts, _ = cv2.projectPoints(np.array([other[i] for i in other], float), rvec, np.array([[0.0], [0.0], [1400.0]]), K, np.zeros(4))
+            lm = np.zeros((68, 2))
+            for i, pt in zip(other, pts[:, 0]):
+                lm[i] = pt
+            lm[36:42] = lm[36]; lm[42:48] = lm[45]; lm[51] = lm[57] = (lm[48] + lm[54]) / 2
+            return lm
+
+        neutral = pose.Neutral(pose.ratios(lm_at(0, 0), 0.0))
+        p0 = pose.estimate(lm_at(0, 0), W, H, neutral=neutral)
+        self.assertAlmostEqual(p0.yaw, 0, delta=1); self.assertAlmostEqual(p0.pitch, 0, delta=1)   # neutral maps to 0
+        for yaw, pitch in ((0, 18), (-25, 15), (30, -15), (0, -20), (35, 10)):
+            p = pose.estimate(lm_at(yaw, pitch), W, H, neutral=neutral)
+            # a longer nose moves more per degree: without a personal model the gain is off by up to
+            # ~25 % on this face, so tolerance grows with the angle (the direction and the top rows are right)
+            self.assertAlmostEqual(p.yaw, yaw, delta=3 + 0.3 * abs(yaw), msg=f"yaw at {(yaw, pitch)} → {p}")
+            self.assertAlmostEqual(p.pitch, pitch, delta=3 + 0.3 * abs(pitch), msg=f"pitch at {(yaw, pitch)} → {p}")
+        # without calibration this face reads far from neutral even when it is neutral
+        p0 = pose.estimate(lm_at(0, 0), W, H)
+        self.assertGreater(abs(p0.pitch) + abs(p0.yaw), 4)
 
     def test_nearest_cell_clips(self):
         self.assertEqual(pose.nearest_cell(60, 0), (pose.NY - 1, 1))
