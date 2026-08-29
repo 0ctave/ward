@@ -221,8 +221,14 @@ Over the window, take the 68-point landmarks of the first and last good frames (
 A camera window tracks the head and the user simply moves it around, as with Face ID:
 
 1. **Head pose per frame.** dlib's 68 landmarks → `cv2.solvePnP` against a generic 3D face
-   (nose tip, chin, eye corners, mouth corners) → yaw / pitch / roll, exponentially smoothed.
-   Verified on synthetic projections to ±4°.
+   (nose tip, chin, eye corners, mouth corners) → yaw / pitch / roll. Verified on synthetic
+   projections to ±4°. Angles pass through a **One Euro filter** (min_cutoff 0.6 Hz, β 0.05):
+   ±1.5° landmark noise becomes ≤1.3° peak-to-peak when still, while a 30° turn is followed
+   within 0.5 s — no wiggle, no lag.
+1b. **Neutral calibration.** The first ~30 face frames (user looking at the screen naturally)
+   define the neutral pose; the grid is relative to it. Laptop cameras sit above the eyes, so
+   "looking at the screen" reads as pitch +10…+20° in camera terms — without this offset the
+   "down" cells are unreachable. The offset is stored as `calib.pose_offset` for reference.
 2. **Pose grid.** 5 yaw cells (far-left … far-right, edges ±9/±24/±45°) × 3 pitch cells
    (down / level / up, edges −13/+9°). The seven cells on the centre cross are **required**
    (that is where a face sits at a laptop, including "looking at the keyboard"); the eight

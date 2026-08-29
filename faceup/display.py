@@ -42,9 +42,7 @@ def user_wayland_env() -> dict[str, str]:
             env["WAYLAND_DISPLAY"] = sock
             env.setdefault("GDK_BACKEND", "wayland,x11")
             break
-    bus = f"/run/user/{uid}/bus"
-    if os.path.exists(bus) and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
-        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"     # GTK settings; avoids the dbus-launch warning
+    # (the user's session bus refuses root, so GTK runs without one — its warning is silenced below)
     return env
 
 
@@ -56,6 +54,10 @@ class GtkDisplay:
         for k, v in user_wayland_env().items():
             os.environ.setdefault(k, v)
         os.environ.setdefault("GSK_RENDERER", "ngl")     # GL renderer: texture uploads stay on the GPU
+        if os.geteuid() == 0:
+            # GTK4's accessibility backend is what tries to acquire a session bus ("Unable to
+            # acquire session bus" as root, where there is none). A camera preview needs no AT-SPI.
+            os.environ.setdefault("GTK_A11Y", "none")
         try:
             import gi
             gi.require_version("Gtk", "4.0"); gi.require_version("Gdk", "4.0")

@@ -90,3 +90,47 @@ def smooth(prev: Pose | None, new: Pose, alpha: float = 0.7) -> Pose:
         return new
     return Pose(prev.yaw + alpha * (new.yaw - prev.yaw), prev.pitch + alpha * (new.pitch - prev.pitch),
                 prev.roll + alpha * (new.roll - prev.roll))
+
+
+class OneEuro:
+    """One Euro filter (Casiez et al. 2012): adaptive low-pass — smooth when the signal is
+    still, responsive when it moves. Tuned for head angles in degrees at ~30 Hz."""
+
+    def __init__(self, min_cutoff: float = 0.6, beta: float = 0.05, d_cutoff: float = 1.0):
+        self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
+        self.x_prev = None
+        self.dx_prev = 0.0
+        self.t_prev = None
+
+    @staticmethod
+    def _alpha(cutoff: float, dt: float) -> float:
+        tau = 1.0 / (2.0 * 3.141592653589793 * cutoff)
+        return 1.0 / (1.0 + tau / dt)
+
+    def __call__(self, x: float, t: float) -> float:
+        if self.x_prev is None or self.t_prev is None:
+            self.x_prev, self.t_prev = x, t
+            return x
+        dt = max(t - self.t_prev, 1e-3)
+        self.t_prev = t
+        dx = (x - self.x_prev) / dt
+        a_d = self._alpha(self.d_cutoff, dt)
+        dx_hat = a_d * dx + (1 - a_d) * self.dx_prev
+        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
+        a = self._alpha(cutoff, dt)
+        x_hat = a * x + (1 - a) * self.x_prev
+        self.x_prev, self.dx_prev = x_hat, dx_hat
+        return x_hat
+
+
+class PoseFilter:
+    """One Euro per angle; call reset() when the face is lost so it doesn't drag old state in."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self) -> None:
+        self.f = [OneEuro(), OneEuro(), OneEuro()]
+
+    def __call__(self, p: Pose, t: float) -> Pose:
+        return Pose(self.f[0](p.yaw, t), self.f[1](p.pitch, t), self.f[2](p.roll, t))

@@ -251,7 +251,11 @@ def cmd_enroll(args) -> int:
                 st = storemod.load(user)
                 print()
                 ui.ok(f"{done} model(s) added. Total: {len(st.models)} ({', '.join(f'{s}:{len(st.by_spectrum(s))}' for s in sorted(st.spectra()))})")
-                if args.selfcheck or ui.confirm("Run a self-check now (3 authentication attempts)?", default=True):
+                if st.calib.get("pose_offset"):
+                    ui.info(f"neutral pose offset: yaw {st.calib['pose_offset'][0]:+.0f}°, pitch {st.calib['pose_offset'][1]:+.0f}°")
+                want_check = args.selfcheck or ui.confirm("Run a self-check now (3 authentication attempts)?", default=True)
+                cap.close()                     # the engine opens the cameras itself
+                if want_check:
                     selfcheck(user, cfg)
                 return 0
         ui.info("Sit as you normally do. Each pose captures for about a second — hold still until it says done.")
