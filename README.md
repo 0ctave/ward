@@ -40,7 +40,9 @@ detector and ResNet face embedding, OpenCV, V4L2 — with what Howdy lacks:
   which removes the per-frame noise behind random rejects.
 - **Free-move enrollment.** A native Wayland (GTK 4) camera window tracks your head angle (yaw/pitch from facial
   landmarks) and fills a 5×3 pose grid as you move — no scripted poses. Adjacent cells are
-  interpolated at match time so the angles in between are covered too.
+  interpolated at match time so the angles in between are covered too. Enrollment ends with a
+  structure-from-motion solve that builds *your* 3D face model from the recorded landmarks, so
+  head pose is then measured against your own geometry, not a generic head.
 - **Liveness voters** with PASS / FAIL / ABSTAIN semantics — two PASSes and zero FAILs
   needed, and abstaining never counts against you:
   - *cross-spectrum consistency* — the face must appear in both cameras at the same place
@@ -67,6 +69,7 @@ Full rationale and thresholds: [docs/DESIGN.md](docs/DESIGN.md).
 | `faceup auth -v` | yes | Runs one authentication and shows every step (what PAM calls without `-v`). |
 | `faceup tune [section.key VALUE]` | yes | Show or change `/etc/faceup/config.toml` with validation. |
 | `faceup pam enable\|disable\|status` | yes | The PAM line, with backup/restore; offers to retire `pam_howdy`. |
+| `faceup calibrate` | yes | Rebuild the personal 3D face model from the last enrollment's landmark tracks. |
 | `faceup models [--remove LABEL]` | yes | List or remove enrolled poses. |
 | `faceup log` | no* | Recent attempts, one line each (*`adm` group). |
 | `faceup bench` | no | Times the detectors on a live frame. |

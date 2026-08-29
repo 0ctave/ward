@@ -272,6 +272,26 @@ module offers 15 or 30, nothing above):
   socket (`/run/user/<SUDO_UID>/wayland-0`), which sudo otherwise strips. OpenCV's Qt/X11
   HighGUI remains as a fallback when PyGObject or a session is unavailable.
 
+### 8.1.2 Post-calibration: a personal 3D face model
+
+The live estimator uses a *generic* head, so it carries a per-user bias (nose length,
+eye–mouth spacing). Enrollment records the 68 landmarks of every processed frame (up to 900,
+landmarks only — no images). When the window closes, a batch **structure-from-motion** solve
+over the 13 rigid landmarks (eye corners, nose bridge/base, mouth corners — no jaw, chin,
+lids, lips or brows) recovers the user's own 3D geometry and the true rotation of every
+frame: Tomasi–Kanade factorization under scaled orthography → metric upgrade (least-squares
+on the rotation-row constraints) → similarity Procrustes alignment to the generic model's
+frame on the shared landmarks (reflection allowed; orthography cannot tell a face from its
+mirror image). `engine/sfm.py`; needs ≥ 40 frames.
+
+The model (13 × 3 mm) is stored as `calib.shape3d` and from then on the live estimator runs a
+13-point PnP against the user's own face — all three angles, ~1 ms. A report compares the
+fast generic estimator to the personal model over the recorded frames (bias and rms per
+angle) and is printed after enrollment; `faceup calibrate` re-runs the solve from the saved
+tracks (`<user>.tracks.npz`). Synthetic check (face with individual proportions, random poses ±35° yaw / −22…+18° pitch,
+1 px landmark noise, 150 frames): fit residual 1.9 px, recovered poses within 2.8° rms for
+both yaw and pitch, pitch bias −1.1°.
+
 ### 8.2 Interpolation between poses
 
 The store synthesises a **virtual model** for every pair of grid-adjacent filled cells: the

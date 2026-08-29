@@ -98,10 +98,26 @@ def pitch_from_ratio(landmarks68: np.ndarray, roll_deg: float) -> float | None:
     return float(np.degrees(np.arctan2(_EYE_Y - r * dy, r * dz - _EYE_Z)))
 
 
-def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int) -> Pose | None:
-    pts = landmarks68[_LM_IDX].astype(np.float64)
+def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int, shape3d: np.ndarray | None = None) -> Pose | None:
+    """Head pose. With `shape3d` (the user's personal rigid-landmark model from sfm.calibrate) all
+    three angles come from a 13-point PnP against the user's own geometry; without it, yaw/roll
+    come from the generic 6-point PnP and pitch from the chin-free nose-ratio proxy."""
     f = float(frame_w)
     K = np.array([[f, 0, frame_w / 2.0], [0, f, frame_h / 2.0], [0, 0, 1]], dtype=np.float64)
+    if shape3d is not None:
+        from .sfm import RIGID_IDX
+        pts = landmarks68[RIGID_IDX].astype(np.float64)
+        ok, rvec, _ = cv2.solvePnP(np.asarray(shape3d, dtype=np.float64), pts, K, np.zeros(4), flags=cv2.SOLVEPNP_ITERATIVE)
+        if not ok:
+            return None
+        R, _ = cv2.Rodrigues(rvec)
+        pitch, yaw, roll = (float(a) for a in cv2.RQDecomp3x3(R)[0])
+        if pitch > 90:
+            pitch -= 180
+        elif pitch < -90:
+            pitch += 180
+        return Pose(yaw, -pitch, roll)
+    pts = landmarks68[_LM_IDX].astype(np.float64)
     ok, rvec, _ = cv2.solvePnP(_MODEL_3D, pts, K, np.zeros(4), flags=cv2.SOLVEPNP_ITERATIVE)
     if not ok:
         return None
