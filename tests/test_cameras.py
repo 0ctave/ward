@@ -85,3 +85,11 @@ class GeneralHardwareTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModuleLayoutTests(unittest.TestCase):
+    def test_terminal_ui_and_app_ui_are_separate_modules(self):
+        from faceup import appui, ui
+        for name in ("ok", "warn", "fail", "banner", "section", "confirm", "ask"):
+            self.assertTrue(hasattr(ui, name), f"faceup.ui lost {name}")
+        self.assertTrue(hasattr(appui, "EnrollWindow") and hasattr(appui, "EmitterWindow"))
