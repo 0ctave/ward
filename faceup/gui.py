@@ -340,10 +340,15 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                     current = posemod.Pose(filt.yaw - ny, filt.pitch - npch, filt.roll)
                 stable = state["stability"].push(current)
                 state["prev_pose"] = current
-                cell = current.cell()
+                cell = current.cell() or posemod.nearest_cell(current.yaw, current.pitch)
                 cov = state["coverage"]
-                if (not calibrating and cell is not None and stable and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS
-                        and not sampler.busy and cov.at(current.yaw, current.pitch) < cov.FULL):
+                covered = cov.at(current.yaw, current.pitch) >= cov.FULL
+                worker_ok = sampler.alive
+                busy = sampler.busy if worker_ok else False
+                gate = ("calibrating" if calibrating else "moving" if not stable else "covered here" if covered
+                        else "worker busy" if busy else "")
+                state["gate"] = gate
+                if not gate and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS:
                     c = cells.setdefault(cell, Cell())
                     if True:
                         items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True)]
@@ -356,17 +361,35 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                                 continue
                             sx, sy = f2.gray.shape[1] / w, f2.gray.shape[0] / h
                             items.append((sp, f2.rgb, (int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy)), q2.score(), False))
-                        if sampler.submit(cell, (current.yaw, current.pitch), items):
+                        if worker_ok:
+                            ok = sampler.submit(cell, (current.yaw, current.pitch), items)
+                        else:
+                            # worker process unavailable: sample inline (slower preview, but it works)
+                            if not state.get("inline_warned"):
+                                print("[faceup] sampling worker unavailable — computing embeddings inline (preview will be slower)", flush=True)
+                                state["inline_warned"] = True
+                            res = []
+                            for sp, rgb, hint, qq, exact in items:
+                                gg = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+                                b = Box(*hint) if exact else models.detect(gg, Box(*hint))
+                                if b is not None and b.w >= MIN_ENROLL_FACE_PX:
+                                    res.append((sp, qq, models.embed(rgb, b)))
+                            absorb([(cell, (current.yaw, current.pitch), res)])
+                            ok = True
+                        if ok:
                             c.n_primary += 1
+                            cov.add(current.yaw, current.pitch)       # THE line that was missing: coverage never grew
                             state["last_sample_t"] = now
                             sampled = True
         else:
             state["prev_pose"] = None
+            state["gate"] = "no face" if box is None else ("too dark" if light_state == "dark" else "too far")
             state["filter"].reset(); state["lmfilter"].reset(); state["stability"].reset()
         prof.lap("pose+sample")
         absorb(sampler.drain())
         if not sampler.alive and state["restarts"] < 2:
             state["restarts"] += 1
+            print(f"[faceup] sampling worker died (exit {sampler.proc.exitcode}); restarting", flush=True)
             state["sampler"] = _Sampler(models)
 
         cov = state["coverage"]
@@ -394,7 +417,9 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         else:
             _text(img, _hint(disp_current, disp_target, box), (10, 24), 0.62)
         n_models = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
-        status = f"coverage {frac * 100:3.0f}% | {n_models} poses stored | {primary.upper()} {q.mean:.0f}{(' face ' + light_state) if light_state else ''} | {state['fps']:.0f} fps"
+        gate = state.get("gate", "")
+        status = (f"coverage {frac * 100:3.0f}% | {n_models} poses | {primary.upper()} {q.mean:.0f}{(' face ' + light_state) if light_state else ''}"
+                  f" | {state['fps']:.0f} fps" + (f" | {gate}" if gate else " | sampling"))
         if current is not None:
             status += f" | yaw {sgn * current.yaw:+.0f} pitch {current.pitch:+.0f} roll {sgn * current.roll:+.0f}"
         _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
