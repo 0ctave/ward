@@ -19,7 +19,10 @@ _MODEL_3D = np.array([
 _LM_IDX = [30, 8, 36, 45, 48, 54]
 
 YAW_EDGES = [-45.0, -24.0, -9.0, 9.0, 24.0, 45.0]      # 5 cells: far-left, left, centre, right, far-right
-PITCH_EDGES = [-35.0, -13.0, 9.0, 35.0]                # 3 cells: down, level, up
+# Pitch is relative to the calibrated neutral pose and deliberately asymmetric: at a laptop you
+# look far DOWN (keyboard ≈ −25°) but only a little UP before looking above the screen, and the
+# PnP estimate compresses pitch. down < −10°, level −10…+6°, up > +6°.
+PITCH_EDGES = [-32.0, -10.0, 6.0, 22.0]                # 3 cells: down, level, up
 YAW_NAMES = ["L2", "L1", "C", "R1", "R2"]
 PITCH_NAMES = ["down", "level", "up"]
 REQUIRED = {(2, 0), (0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (2, 2)}   # centre cross (yaw_i, pitch_i)
