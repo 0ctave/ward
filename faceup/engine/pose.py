@@ -85,7 +85,7 @@ def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int) -> Pose | None
     return Pose(yaw, pitch, roll)
 
 
-def smooth(prev: Pose | None, new: Pose, alpha: float = 0.5) -> Pose:
+def smooth(prev: Pose | None, new: Pose, alpha: float = 0.7) -> Pose:
     if prev is None:
         return new
     return Pose(prev.yaw + alpha * (new.yaw - prev.yaw), prev.pitch + alpha * (new.pitch - prev.pitch),

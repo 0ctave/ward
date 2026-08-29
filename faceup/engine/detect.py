@@ -54,6 +54,7 @@ class Models:
         self.detector_kind = detector
         self.max_height = max_height
         self._hog = dlib.get_frontal_face_detector()
+        self._misses = 0          # consecutive full-frame misses; the 2x-upsampled search runs on every 4th
         self._cnn = None
         self._sp5 = None
         self._sp68 = None
@@ -109,9 +110,13 @@ class Models:
         if self.detector_kind == "cnn":
             dets = [d.rect for d in self.cnn(img, 0)]
         else:
-            dets = list(self._hog(img, 0)) or list(self._hog(img, 1))
+            dets = list(self._hog(img, 0))
+            if not dets and self._misses % 4 == 0:      # expensive 2x search only now and then
+                dets = list(self._hog(img, 1))
         if not dets:
+            self._misses += 1
             return None
+        self._misses = 0
         r = max(dets, key=lambda d: d.width() * d.height())
         return Box(r.left(), r.top(), r.width(), r.height()).scaled(1.0 / s)
 

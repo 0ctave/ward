@@ -240,6 +240,22 @@ A camera window tracks the head and the user simply moves it around, as with Fac
    or on Enter. Per cell and spectrum the samples are fused into one model with its mean
    pose; cells are labelled `C/level`, `L1/down`, …
 
+### 8.1.1 Keeping the preview at camera rate
+
+Measured on the reference laptop (both cameras are hardware-limited to **30 fps**; the IR
+module offers 15 or 30, nothing above):
+
+- `CAP_PROP_BUFFERSIZE = 1` halves the IR frame rate (29.7 → 15.3 fps). Never set it; a
+  reader **thread per camera** keeps the newest frame instead, and the UI never blocks on the
+  driver.
+- dlib's Python bindings hold the GIL during detection and embedding, so a worker *thread*
+  froze the preview (30 → 14 fps). Sampling runs in a separate **process** (spawn context;
+  frames travel over a pipe, ~0.7 MB per sample). The UI loop then does only ROI
+  tracking (~5 ms), 68 landmarks + PnP (~2.5 ms) and drawing, and holds 29–30 fps while
+  samples are being embedded concurrently.
+- Face detection tracks a region around the previous box without upsampling; the
+  expensive 2× full-frame search runs only on every fourth miss.
+
 ### 8.2 Interpolation between poses
 
 The store synthesises a **virtual model** for every pair of grid-adjacent filled cells: the

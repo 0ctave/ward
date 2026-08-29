@@ -5,6 +5,7 @@ cannot open a window (no DISPLAY, headless), callers fall back to the text flows
 """
 from __future__ import annotations
 
+import queue
 import time
 from dataclasses import dataclass, field
 
@@ -70,6 +71,86 @@ class Cell:
         del lst[SAMPLES_PER_CELL:]
 
 
+def _sampler_main(req, res, detector_kind: str, max_height: int) -> None:
+    """Worker PROCESS: dlib's Python bindings hold the GIL during detection and embedding, so a
+    thread would freeze the preview (measured: 30 → 14 fps). A separate process keeps the UI
+    at camera rate; frames travel over a pipe (~0.7 MB per sample, a few times per second)."""
+    models = Models(detector_kind, max_height)
+    models.sp5; models.rec
+    while True:
+        job = req.get()
+        if job is None:
+            break
+        cell, pose, items = job
+        results = []
+        for sp, rgb, hint, q, exact in items:
+            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+            box = Box(*hint)
+            if not exact:
+                box = models.detect(gray, box)
+            if box is None or box.w < MIN_ENROLL_FACE_PX:
+                continue
+            results.append((sp, q, models.embed(rgb, box)))
+        res.put((cell, pose, results))
+
+
+class _Sampler:
+    def __init__(self, models: Models):
+        import multiprocessing as mp
+        ctx = mp.get_context("spawn")
+        self.req = ctx.Queue(maxsize=2)
+        self.res = ctx.Queue()
+        # never let interpreter exit block on a queue feeder thread if the worker died
+        self.req.cancel_join_thread(); self.res.cancel_join_thread()
+        self.proc = ctx.Process(target=_sampler_main, args=(self.req, self.res, models.detector_kind, models.max_height), daemon=True)
+        self.proc.start()
+        self.pending = 0
+
+    @property
+    def alive(self) -> bool:
+        return self.proc.is_alive()
+
+    @property
+    def busy(self) -> bool:
+        return self.pending >= 1 or not self.proc.is_alive()
+
+    def submit(self, cell, pose, items) -> bool:
+        try:
+            self.req.put_nowait((cell, pose, items))
+        except queue.Full:
+            return False
+        self.pending += 1
+        return True
+
+    def drain(self) -> list:
+        out = []
+        while True:
+            try:
+                out.append(self.res.get_nowait())
+            except queue.Empty:
+                break
+        self.pending = max(0, self.pending - len(out))
+        return out
+
+    def close(self, timeout: float = 3.0) -> list:
+        """Wait for in-flight jobs, collect their results, stop the process."""
+        t_end = time.monotonic() + timeout
+        out = []
+        while self.pending > 0 and self.proc.is_alive() and time.monotonic() < t_end:
+            got = self.drain()
+            out += got
+            if not got:
+                time.sleep(0.02)
+        try:
+            self.req.put_nowait(None)
+        except queue.Full:
+            pass
+        self.proc.join(timeout=1.0)
+        if self.proc.is_alive():
+            self.proc.terminate()
+        return out
+
+
 def _grid_panel(width: int, cells: dict, current, target) -> np.ndarray:
     """5×3 pose grid drawn as a panel: green = filled, orange = required & empty, grey = optional."""
     cw, ch = width // 5, 34
@@ -130,9 +211,18 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     _open_window()
     models.sp68; models.sp5; models.rec                     # preload: no stall on the first face
     primary = "ir" if "ir" in cap.spectra else "rgb"
-    others = [sp for sp in cap.spectra if sp != primary]
     cells: dict[tuple[int, int], Cell] = {}
+    others = [sp for sp in cap.spectra if sp != primary]
+    sampler = _Sampler(models)
+    restarts = 0
     prev_pose = None
+
+    def absorb(results) -> None:
+        for cell, pose, items in results:
+            c = cells.setdefault(cell, Cell())
+            for sp, qq, emb in items:
+                c.push(sp, qq, emb)
+            c.poses.append(pose)
     prev_box: Box | None = None
     last_sample_t = 0.0
     finished = False
@@ -158,29 +248,29 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                     prev_pose = current
                     cell = current.cell()
                     now = time.monotonic()
-                    if cell is not None and stable and (now - last_sample_t) * 1000 >= SAMPLE_EVERY_MS:
+                    if cell is not None and stable and (now - last_sample_t) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy:
                         c = cells.setdefault(cell, Cell())
                         if not c.full:
-                            c.push(primary, q.score(), models.embed(fr.rgb, box))
-                            c.n_primary += 1
+                            items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True)]
                             for sp in others:
-                                f2 = cap.read_one(sp, flush=1)
+                                f2 = cap.read_one(sp, flush=0)
                                 if f2 is None:
                                     continue
                                 q2 = measure(f2.gray, models.max_height)
                                 if q2.reason(cams[f"{sp}_dark_threshold"]):
                                     continue
-                                # same module, same field of view: the primary box is a good ROI hint
                                 sx, sy = f2.gray.shape[1] / w, f2.gray.shape[0] / h
-                                hint = Box(int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy))
-                                b2 = models.detect(f2.gray, hint)
-                                if b2 is not None and b2.w >= MIN_ENROLL_FACE_PX:
-                                    c.push(sp, q2.score(), models.embed(f2.rgb, b2))
-                            c.poses.append((current.yaw, current.pitch))
-                            last_sample_t = now
-                            sampled = True
+                                items.append((sp, f2.rgb, (int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy)), q2.score(), False))
+                            if sampler.submit(cell, (current.yaw, current.pitch), items):
+                                c.n_primary += 1          # reserved now; embeddings arrive from the worker
+                                last_sample_t = now
+                                sampled = True
             else:
                 prev_pose = None
+            absorb(sampler.drain())
+            if not sampler.alive and restarts < 2:
+                restarts += 1
+                sampler = _Sampler(models)
 
             target = _pick_target(cells, current)
             required_done = all(cells.get(c) and cells[c].count("primary") >= CELL_DONE for c in posemod.REQUIRED)
@@ -216,6 +306,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                 break
     finally:
         cv2.destroyAllWindows(); cv2.waitKey(1)
+        absorb(sampler.close())
 
     if not finished and not cells:
         return 0
