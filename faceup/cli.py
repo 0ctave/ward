@@ -268,8 +268,8 @@ def cmd_enroll(args) -> int:
                 ui.warn("calibration failed (no face in both cameras); keeping previous values")
         if not args.guided:
             from . import gui
-            ui.info("A camera window opens. Move your head slowly so the dot visits every highlighted cell;")
-            ui.info("green cells are captured. Enter finishes, Esc cancels.")
+            ui.info("A camera window opens. First look at the middle of the screen for a second (calibration),")
+            ui.info("then move your head slowly toward the ring until the pose map is covered. Enter finishes, Esc cancels.")
             try:
                 # The live preview always tracks with HOG (~5 ms); the CNN (~700 ms/frame) is an
                 # auth-engine option and would make the window unusable.
