@@ -270,3 +270,48 @@ class PoseFilter:
 
     def __call__(self, p: Pose, t: float) -> Pose:
         return Pose(self.f[0](p.yaw, t), self.f[1](p.pitch, t), self.f[2](p.roll, t))
+
+
+class LandmarkFilter:
+    """One Euro filter on every landmark coordinate (and the face box) BEFORE the pose is
+    computed: the ratio estimators pass landmark jitter straight through, so smoothing the
+    input is far more effective than smoothing the angles. reset() when the face is lost."""
+
+    def __init__(self, n: int = 68, min_cutoff: float = 1.2, beta: float = 0.01):
+        self.n, self.mc, self.beta = n, min_cutoff, beta
+        self.reset()
+
+    def reset(self) -> None:
+        self.f = [[OneEuro(self.mc, self.beta), OneEuro(self.mc, self.beta)] for _ in range(self.n)]
+        self.box = [OneEuro(1.0, 0.01) for _ in range(4)]
+
+    def __call__(self, lm: np.ndarray, t: float) -> np.ndarray:
+        out = np.empty_like(lm)
+        for i in range(self.n):
+            out[i, 0] = self.f[i][0](float(lm[i, 0]), t)
+            out[i, 1] = self.f[i][1](float(lm[i, 1]), t)
+        return out
+
+    def smooth_box(self, box, t: float):
+        vals = [self.box[i](float(v), t) for i, v in enumerate((box.x, box.y, box.w, box.h))]
+        return type(box)(int(vals[0]), int(vals[1]), int(vals[2]), int(vals[3]))
+
+
+class Stability:
+    """Pose is 'stable' when the last N filtered poses stay within `deg` in yaw and pitch —
+    a windowed criterion instead of frame-to-frame, which flicker never satisfies."""
+
+    def __init__(self, n: int = 6, deg: float = 5.0):
+        self.n, self.deg = n, deg
+        self.hist: list[tuple[float, float]] = []
+
+    def reset(self) -> None:
+        self.hist.clear()
+
+    def push(self, p: Pose) -> bool:
+        self.hist.append((p.yaw, p.pitch))
+        del self.hist[:-self.n]
+        if len(self.hist) < self.n:
+            return False
+        ys = [h[0] for h in self.hist]; ps = [h[1] for h in self.hist]
+        return (max(ys) - min(ys)) <= self.deg and (max(ps) - min(ps)) <= self.deg
