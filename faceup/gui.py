@@ -181,55 +181,62 @@ class _Sampler:
         return out
 
 
-def _grid_panel(width: int, cells: dict, current, target) -> np.ndarray:
-    """5×3 pose grid drawn as a panel: green = filled, orange = required & empty, grey = optional."""
-    cw, ch = width // 5, 34
-    panel = np.full((ch * 3 + 8, width, 3), 28, np.uint8)
-    for (yi, pi) in posemod.ALL_CELLS:
-        x0, y0 = yi * cw + 3, (2 - pi) * ch + 4          # pitch "up" drawn at the top
-        filled = cells.get((yi, pi)) is not None and cells[(yi, pi)].count("primary") >= CELL_DONE
-        col = COL_OK if filled else (COL_REQ if (yi, pi) in posemod.REQUIRED else COL_OPT)
-        cv2.rectangle(panel, (x0, y0), (x0 + cw - 6, y0 + ch - 6), col, -1 if filled else 1)
-        if (yi, pi) == target:
-            cv2.rectangle(panel, (x0 - 1, y0 - 1), (x0 + cw - 5, y0 + ch - 5), COL_CUR, 2)
-        _text(panel, posemod.cell_name((yi, pi)), (x0 + 5, y0 + 22), 0.45, COL_TXT if not filled else (20, 40, 20))
+PANEL_H = 110
+
+
+def _coverage_panel(width: int, cov, current, target) -> np.ndarray:
+    """Heatmap of (yaw, pitch) coverage: the required ellipse outlined, covered areas green,
+    uncovered required areas orange, the current pose as a dot, the next target as a ring."""
+    m = np.minimum(cov.map / cov.FULL, 1.0)                          # rows = pitch (low→high), cols = yaw
+    img = np.zeros((m.shape[0], m.shape[1], 3), np.uint8)
+    img[..., 1] = (60 + 130 * m).astype(np.uint8)                     # green channel = coverage
+    img[..., 0] = (40 + 30 * (1 - m)).astype(np.uint8)
+    img[..., 2] = (40 + 30 * (1 - m)).astype(np.uint8)
+    req = cov.required
+    img[req & (m < 1.0)] = (np.array([[255, 140, 60]]) * (1 - m[req & (m < 1.0)])[:, None]
+                            + np.array([[90, 190, 90]]) * m[req & (m < 1.0)][:, None]).astype(np.uint8)
+    img[~req] = (img[~req] * 0.45).astype(np.uint8)
+    img = cv2.flip(img, 0)                                            # pitch "up" at the top
+    panel = cv2.resize(img, (width, PANEL_H), interpolation=cv2.INTER_LINEAR)
+
+    def to_px(yaw, pitch):
+        x = (yaw - posemod.YAW_EDGES[0]) / (posemod.YAW_EDGES[-1] - posemod.YAW_EDGES[0]) * width
+        y = (posemod.PITCH_EDGES[-1] - pitch) / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * PANEL_H
+        return int(np.clip(x, 4, width - 4)), int(np.clip(y, 4, PANEL_H - 4))
+
+    # ellipse outline of the required region
+    cx, cy = to_px(*posemod.REQ_CENTRE)
+    ax = int(posemod.REQ_AXES[0] / (posemod.YAW_EDGES[-1] - posemod.YAW_EDGES[0]) * width)
+    ay = int(posemod.REQ_AXES[1] / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * PANEL_H)
+    cv2.ellipse(panel, (cx, cy), (ax, ay), 0, 0, 360, (230, 230, 230), 1, cv2.LINE_AA)
+    _text(panel, "left", (6, PANEL_H // 2 + 4), 0.4, (200, 200, 200)); _text(panel, "right", (width - 42, PANEL_H // 2 + 4), 0.4, (200, 200, 200))
+    _text(panel, "up", (width // 2 - 10, 14), 0.4, (200, 200, 200)); _text(panel, "down", (width // 2 - 18, PANEL_H - 6), 0.4, (200, 200, 200))
+    if target is not None:
+        tx, ty = to_px(*target)
+        cv2.circle(panel, (tx, ty), 9, (0, 0, 0), 2, cv2.LINE_AA); cv2.circle(panel, (tx, ty), 9, COL_CUR, 1, cv2.LINE_AA)
     if current is not None:
-        cx = int((posemod.YAW_EDGES[0] - current.yaw) / (posemod.YAW_EDGES[0] - posemod.YAW_EDGES[-1]) * width)
-        cy = int((posemod.PITCH_EDGES[-1] - current.pitch) / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * ch * 3) + 4
-        cx = max(6, min(width - 6, cx)); cy = max(6, min(ch * 3, cy))
-        cv2.circle(panel, (cx, cy), 7, (0, 0, 0), -1); cv2.circle(panel, (cx, cy), 5, COL_CUR, -1)
+        px, py = to_px(current.yaw, current.pitch)
+        # dot with a short "roll" tick so head tilt is visible too
+        cv2.circle(panel, (px, py), 6, (0, 0, 0), -1, cv2.LINE_AA); cv2.circle(panel, (px, py), 4, COL_CUR, -1, cv2.LINE_AA)
+        r = np.deg2rad(current.roll)
+        cv2.line(panel, (px, py), (int(px + 12 * np.cos(r)), int(py + 12 * np.sin(r))), COL_CUR, 2, cv2.LINE_AA)
     return panel
 
 
-def _pick_target(cells: dict, current) -> tuple[int, int] | None:
-    todo = [c for c in posemod.REQUIRED if not (cells.get(c) and cells[c].count("primary") >= CELL_DONE)]
-    if not todo:
-        todo = [c for c in posemod.ALL_CELLS if not (cells.get(c) and cells[c].count("primary") >= CELL_DONE)]
-    if not todo:
-        return None
-    if current is None or current.cell() is None:
-        return (2, 1) if (2, 1) in todo else sorted(todo)[0]
-    cy, cp = current.cell()
-    return min(todo, key=lambda c: abs(c[0] - cy) + abs(c[1] - cp))
-
-
-def _hint(current, target, box=None) -> str:
+def _hint(current, target, box=None, calibrating=False) -> str:
     if target is None:
-        return "All cells captured - press Enter to finish"
+        return "Coverage complete - press Enter to finish"
     if current is None:
         if box is not None and box.w < MIN_ENROLL_FACE_PX:
             return f"Come a bit closer - face is {box.w} px, need {MIN_ENROLL_FACE_PX}"
         return "Face the camera so it can find you"
-    c = current.cell()
-    if c == target:
-        return "Hold still..."
-    ty, tp = posemod.cell_centre(target)
+    ty, tp = target
     parts = []
-    if abs(ty - current.yaw) > 6:
-        parts.append("turn a little " + ("left" if ty < current.yaw else "right"))
-    if abs(tp - current.pitch) > 6:
-        parts.append("look a little " + ("down" if tp < current.pitch else "up"))
-    return "Move the dot into the highlighted cell: " + ", ".join(parts) if parts else "Almost - hold still"
+    if abs(ty - current.yaw) > 5:
+        parts.append("turn " + ("left" if ty < current.yaw else "right"))
+    if abs(tp - current.pitch) > 5:
+        parts.append("look " + ("down" if tp < current.pitch else "up"))
+    return ("Slowly " + " and ".join(parts) + " toward the ring") if parts else "Hold still..."
 
 
 def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror: bool = True, profile: bool = False) -> int:
@@ -257,19 +264,19 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     prev_box: Box | None = None
     last_sample_t = 0.0
     finished = False
-    t_all_required = None
     fps_t, fps_n, fps = time.monotonic(), 0, 0.0
     prof = _Profile(profile, cap)
     state = {"finished": False, "cancel": False, "fps_t": fps_t, "fps_n": 0, "fps": 0.0,
-             "prev_pose": None, "prev_box": None, "last_sample_t": 0.0, "t_all_required": None,
+             "prev_pose": None, "prev_box": None, "last_sample_t": 0.0,
              "sampler": sampler, "restarts": 0,
              "filter": posemod.PoseFilter(), "neutral": None, "neutral_samples": [], "neutral_t0": None,
-             "tracks": [], "fast_poses": [], "shape3d": (np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None)}
+             "tracks": [], "fast_poses": [], "shape3d": (np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None),
+             "coverage": posemod.Coverage(), "t_complete": None}
     NEUTRAL_SAMPLES = 30          # ~1 s of face at 30 fps
     probe = cap.read_one(primary, flush=0)
     ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
     try:
-        screen = disp.open_display(WIN, pw, ph + 34 * 3 + 8)
+        screen = disp.open_display(WIN, pw, ph + PANEL_H)
     except disp.DisplayUnavailable as e:
         sampler.close()
         raise GuiUnavailable(str(e))
@@ -327,9 +334,11 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                     and abs(current.pitch - prev_pose.pitch) < STABLE_DEG
                 state["prev_pose"] = current
                 cell = current.cell()
-                if not calibrating and cell is not None and stable and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy:
+                cov = state["coverage"]
+                if (not calibrating and cell is not None and stable and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS
+                        and not sampler.busy and cov.at(current.yaw, current.pitch) < cov.FULL):
                     c = cells.setdefault(cell, Cell())
-                    if not c.full:
+                    if True:
                         items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True)]
                         for sp in others:
                             f2 = cap.read_one(sp, flush=0)
@@ -353,10 +362,11 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             state["restarts"] += 1
             state["sampler"] = _Sampler(models)
 
-        target = _pick_target(cells, current)
-        required_done = all(cells.get(c) and cells[c].count("primary") >= CELL_DONE for c in posemod.REQUIRED)
-        if required_done and state["t_all_required"] is None:
-            state["t_all_required"] = time.monotonic()
+        cov = state["coverage"]
+        target = None if calibrating else cov.target(current.yaw if current else None, current.pitch if current else None)
+        frac = cov.fraction()
+        if frac >= 0.97 and state["t_complete"] is None:
+            state["t_complete"] = time.monotonic()
 
         state["fps_n"] += 1
         if time.monotonic() - state["fps_t"] >= 1.0:
@@ -374,17 +384,16 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             _text(img, f"Look at the centre of the screen naturally... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
         else:
             _text(img, _hint(current, target, box), (10, 24), 0.62)
-        filled = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
-        req = sum(1 for c in posemod.REQUIRED if cells.get(c) and cells[c].count("primary") >= CELL_DONE)
-        status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f}{(' face ' + light_state) if light_state else ''} | {state['fps']:.0f} fps"
+        n_models = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
+        status = f"coverage {frac * 100:3.0f}% | {n_models} poses stored | {primary.upper()} {q.mean:.0f}{(' face ' + light_state) if light_state else ''} | {state['fps']:.0f} fps"
         if current is not None:
-            status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f}"
+            status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f} roll {current.roll:+.0f}"
         _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
         _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
-        canvas = np.vstack([img, _grid_panel(w, cells, current, target)])
+        canvas = np.vstack([img, _coverage_panel(w, cov, current, target)])
         prof.lap("draw")
         prof.frame()
-        if (required_done and filled >= 15) or (state["t_all_required"] and time.monotonic() - state["t_all_required"] > 12):
+        if state["t_complete"] and time.monotonic() - state["t_complete"] > 3:
             state["finished"] = True
         return canvas
 

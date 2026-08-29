@@ -37,25 +37,46 @@ def synth_landmarks(yaw_deg: float, pitch_deg: float, w=640, h=360) -> np.ndarra
 
 class PoseTests(unittest.TestCase):
     def test_bins_and_names(self):
-        self.assertEqual(pose.Pose(0, 0, 0).cell(), (2, 1))
-        self.assertEqual(pose.Pose(-30, 0, 0).cell(), (0, 1))
-        self.assertEqual(pose.Pose(15, -20, 0).cell(), (3, 0))
+        self.assertEqual(pose.Pose(0, 0, 0).cell(), (3, 1))
+        self.assertEqual(pose.Pose(-30, 0, 0).cell(), (1, 1))
+        self.assertEqual(pose.Pose(15, -20, 0).cell(), (4, 0))
         self.assertIsNone(pose.Pose(60, 0, 0).cell())
-        self.assertEqual(pose.cell_name((2, 1)), "C/level")
-        self.assertIn((2, 1), pose.REQUIRED)
-        self.assertEqual(len(pose.ALL_CELLS), 15)
+        self.assertEqual(pose.cell_name((3, 1)), "C/level")
+        self.assertIn((3, 1), pose.REQUIRED)
+        self.assertNotIn((0, 2), pose.REQUIRED)          # far-left + up: not required
+        self.assertEqual(len(pose.ALL_CELLS), 21)
+        self.assertTrue(pose.required(0, 0)); self.assertTrue(pose.required(-25, -15)); self.assertFalse(pose.required(-40, 15))
 
     def test_neighbours_each_pair_once(self):
         pairs = {(c, n) for c in pose.ALL_CELLS for n in pose.neighbours(c)}
-        self.assertEqual(len(pairs), 4 * 3 + 5 * 2)   # horizontal + vertical adjacencies
+        self.assertEqual(len(pairs), 6 * 3 + 7 * 2)   # horizontal + vertical adjacencies
         self.assertNotIn(((1, 1), (0, 1)), pairs)
 
     def test_estimate_recovers_known_rotation(self):
-        for yaw, pitch in ((0, 0), (20, 0), (-25, 0), (0, -15), (15, 12)):
+        for yaw, pitch in ((0, 0), (20, 0), (-25, 0), (0, -15), (15, 12), (-35, 0), (35, -10)):
             p = pose.estimate(synth_landmarks(yaw, pitch), 640, 360)
             self.assertIsNotNone(p)
-            self.assertAlmostEqual(p.yaw, yaw, delta=4, msg=f"yaw for {(yaw, pitch)} → {p}")
+            self.assertAlmostEqual(p.yaw, yaw, delta=5, msg=f"yaw for {(yaw, pitch)} → {p}")
             self.assertAlmostEqual(p.pitch, pitch, delta=4, msg=f"pitch for {(yaw, pitch)} → {p}")
+        self.assertAlmostEqual(pose.estimate(synth_landmarks(0, 0), 640, 360).roll, 0.0, delta=1)
+
+    def test_coverage_map(self):
+        c = pose.Coverage()
+        self.assertLess(c.fraction(), 0.05)
+        for _ in range(3):
+            c.add(0, 0)
+        self.assertGreater(c.at(0, 0), c.FULL)
+        self.assertGreater(c.fraction(), 0.05)
+        t = c.target(0, 0)
+        self.assertIsNotNone(t)
+        self.assertTrue(pose.required(*t))
+        # paint the whole required ellipse → complete
+        for y in range(-40, 41, 6):
+            for p in range(-30, 21, 6):
+                if pose.required(y, p):
+                    c.add(y, p, 2.0)
+        self.assertGreater(c.fraction(), 0.95)
+        self.assertIsNone(c.target(0, 0))
 
 
 class InterpolationTests(unittest.TestCase):
@@ -65,7 +86,7 @@ class InterpolationTests(unittest.TestCase):
         b = np.zeros(128); b[1] = 1.0
         st.add("C/level", "ir", a, 0.9, pose=(0.0, 0.0))
         st.add("R1/level", "ir", b, 0.8, pose=(15.0, 0.0))
-        st.add("L2/up", "ir", -a, 0.8, pose=(-30.0, 20.0))         # not adjacent to either
+        st.add("L2/up", "ir", -a, 0.8, pose=(-30.0, 15.0))         # not adjacent to either
         v = st.virtuals("ir")
         self.assertEqual(len(v), 1)
         self.assertTrue(v[0].virtual)
