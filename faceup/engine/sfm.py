@@ -86,6 +86,33 @@ def procrustes(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray, np.
     return s, R, t
 
 
+def fix_chirality(S: np.ndarray) -> np.ndarray:
+    """Orthographic SfM cannot tell a shape from its mirror image, and a mirrored model makes PnP
+    return yaw with the wrong sign. In the generic frame the left eye corner (36) has x < 0, the
+    right one (45) x > 0, and the nose tip (30) is nearer the camera (largest z) than the eye
+    corners. Flip whichever axis disagrees, then re-fit a proper (rotation-only) alignment."""
+    S = S.copy()
+    i36, i45, i30 = RIGID_IDX.index(36), RIGID_IDX.index(45), RIGID_IDX.index(30)
+    if S[i36, 0] > S[i45, 0]:
+        S[:, 0] *= -1
+    if S[i30, 2] < (S[i36, 2] + S[i45, 2]) / 2:
+        S[:, 2] *= -1
+    return S
+
+
+def procrustes_rotation_only(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
+    """Similarity transform with det(R) = +1 enforced (no reflection)."""
+    mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
+    A, B = src - mu_s, dst - mu_d
+    U, sig, Vt = np.linalg.svd(A.T @ B)
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    D = np.diag([1.0, 1.0, d])
+    R = (Vt.T @ D @ U.T)
+    s = (sig * np.array([1.0, 1.0, d])).sum() / (A ** 2).sum()
+    t = mu_d - s * (R @ mu_s)
+    return s, R, t
+
+
 def personal_model(tracks: np.ndarray) -> tuple[np.ndarray, float]:
     """Rigid-landmark 3D model (len(RIGID_IDX)×3) in the generic frame, plus factorization rms."""
     if tracks.shape[0] < MIN_FRAMES:
@@ -93,7 +120,13 @@ def personal_model(tracks: np.ndarray) -> tuple[np.ndarray, float]:
     S, _, rms = factorize(tracks)
     S = S.T                                    # P×3
     idx = [RIGID_IDX.index(k) for k in _GENERIC]
-    s, R, t = procrustes(S[idx], np.array([_GENERIC[k] for k in _GENERIC]))
+    gen = np.array([_GENERIC[k] for k in _GENERIC])
+    # first alignment may use a reflection (the SfM shape may be mirrored); fix chirality on the
+    # aligned shape, then re-align with a proper rotation so the frame is exactly the generic one
+    s, R, t = procrustes(S[idx], gen)
+    S = (s * (R @ S.T)).T + t
+    S = fix_chirality(S)
+    s, R, t = procrustes_rotation_only(S[idx], gen)
     return (s * (R @ S.T)).T + t, rms
 
 
@@ -112,14 +145,20 @@ def calibrate(tracks68: np.ndarray, frame_w: int, frame_h: int, fast_poses: list
     shape, rms = personal_model(rigid)
     report: dict = {"frames": int(tracks68.shape[0]), "rms_px": round(rms, 2)}
     if fast_poses is not None and len(fast_poses) == tracks68.shape[0]:
-        err_y, err_p = [], []
+        fy, fp, py, pp = [], [], [], []
         for f in range(tracks68.shape[0]):
             p = posemod.estimate(tracks68[f], frame_w, frame_h, shape3d=shape)
             if p is None:
                 continue
-            err_y.append(fast_poses[f][0] - p.yaw); err_p.append(fast_poses[f][1] - p.pitch)
-        if err_y:
-            ey, ep = np.array(err_y), np.array(err_p)
-            report.update(yaw_bias=round(float(ey.mean()), 1), yaw_rms=round(float(np.sqrt((ey ** 2).mean())), 1),
-                          pitch_bias=round(float(ep.mean()), 1), pitch_rms=round(float(np.sqrt((ep ** 2).mean())), 1))
+            fy.append(fast_poses[f][0]); fp.append(fast_poses[f][1]); py.append(p.yaw); pp.append(p.pitch)
+        if len(fy) >= 10:
+            # the fast estimator is relative to the user's neutral, the personal PnP is absolute:
+            # compare the two as centred series and report gain (slope) + residual after a linear fit
+            for name, a, b in (("yaw", fy, py), ("pitch", fp, pp)):
+                a = np.array(a) - np.median(a); b = np.array(b) - np.median(b)
+                slope = float(np.polyfit(b, a, 1)[0]) if b.std() > 1e-6 else float("nan")
+                resid = a - slope * b
+                report[f"{name}_gain"] = round(slope, 2)               # fast / personal: 1.0 = same scale
+                report[f"{name}_rms"] = round(float(np.sqrt((resid ** 2).mean())), 1)
+                report[f"{name}_range"] = round(float(np.percentile(b, 97) - np.percentile(b, 3)), 1)
     return Calibration(shape, int(tracks68.shape[0]), rms, report)
