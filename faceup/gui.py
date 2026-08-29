@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 from . import display as disp
+from .engine import brightness
 from .engine import pose as posemod
 from .engine.capture import Capture
 from .engine.detect import Box, Models, fuse
@@ -291,15 +292,18 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             return np.zeros((ph, pw, 3), np.uint8)
         h, w = fr.gray.shape[:2]
         q = measure(fr.gray, models.max_height)
-        box = None if q.reason(cams[f"{primary}_dark_threshold"]) else models.detect(fr.gray, state["prev_box"])
+        gray_n = brightness.normalise(fr.gray, q.mean)
+        box = None if (q.sharpness < 5.0 and q.mean < cams[f"{primary}_dark_threshold"]) else models.detect(gray_n, state["prev_box"])
         state["prev_box"] = box
+        light = cap.meter(primary, fr.gray, box) if box is not None else None
+        light_state = light.state(primary) if light else ""
         prof.lap("detect")
         current = None
         sampled = False
         prev_pose = state["prev_pose"]
         calibrating = state["neutral"] is None
-        if box is not None and box.w >= MIN_ENROLL_FACE_PX:
-            lm68 = models.landmarks68(fr.gray, box)
+        if box is not None and box.w >= MIN_ENROLL_FACE_PX and light_state != "dark":
+            lm68 = models.landmarks68(gray_n, box)
             raw = posemod.estimate(lm68, w, h, shape3d=state["shape3d"])
             if raw is not None:
                 now = time.monotonic()
@@ -363,14 +367,16 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         if box is not None:
             bx = (w - box.x - box.w) if mirror else box.x
             cv2.rectangle(img, (bx, box.y), (bx + box.w, box.y + box.h), COL_OK if sampled else COL_CUR, 2)
-        if calibrating:
+        if light_state == "dark":
+            _text(img, "Face too dark - is the IR emitter on? (turn on a light to continue)", (10, 24), 0.62, (255, 120, 90))
+        elif calibrating:
             n = len(state["neutral_samples"])
             _text(img, f"Look at the centre of the screen naturally... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
         else:
             _text(img, _hint(current, target, box), (10, 24), 0.62)
         filled = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
         req = sum(1 for c in posemod.REQUIRED if cells.get(c) and cells[c].count("primary") >= CELL_DONE)
-        status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f} | {state['fps']:.0f} fps"
+        status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f}{(' face ' + light_state) if light_state else ''} | {state['fps']:.0f} fps"
         if current is not None:
             status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f}"
         _text(img, status, (10, h - 12), 0.5, (200, 200, 200))

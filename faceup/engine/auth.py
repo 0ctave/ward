@@ -9,11 +9,16 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import config, store as storemod
+from . import brightness, config, store as storemod
 from .capture import Capture, CaptureError, Frame
 from .detect import Box, Models, fuse
 from .liveness import Result, Vote, antispoof_cnn, cross_spectrum, motion, shadow
 from .quality import MIN_FACE_PX, Quality, measure
+
+
+def cv2_gray_to_rgb(gray):
+    import cv2
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
 
 
 @dataclass
@@ -23,6 +28,7 @@ class Obs:
     box: Box | None
     embedding: np.ndarray | None
     dark: bool
+    light: str = ""          # face light state: ok | dim | bright | dark | blown ("" = no face)
 
 
 @dataclass
@@ -64,7 +70,9 @@ class Engine:
     def __init__(self, cfg: dict | None = None, models: Models | None = None, verbose: bool = False):
         self.cfg = cfg or config.load()
         rec = self.cfg["recognition"]
-        self.models = models or Models(rec["detector"], rec["max_height"])
+        from .. import hw
+        hw.apply()
+        self.models = models or Models(rec["detector"], rec["max_height"], rec.get("accel", "cpu"))
         self.verbose = verbose
 
     def say(self, msg: str) -> None:
@@ -117,7 +125,7 @@ class Engine:
                 n_sets += 1
                 for s, fr in fs.items():
                     prev = next((o.box for o in reversed(obs[s]) if o.box is not None), None)
-                    obs[s].append(self._observe(fr, s, cams, rec, prev))
+                    obs[s].append(self._observe(fr, s, cams, rec, prev, cap))
                 for s in fs:
                     if obs[s][-1].box is not None:
                         saw_face = True
@@ -125,11 +133,16 @@ class Engine:
                         all_dark = False
                 if "ir" in fs:
                     ir_means.append(obs["ir"][-1].quality.mean)
-                # emitter dead at night: every IR frame dark → RGB carries this attempt (DESIGN §10)
-                if primary == "ir" and "rgb" in devices and n_sets >= 3 and all(o.dark for o in obs["ir"]):
-                    primary = "rgb"
+                # adaptive primary (DESIGN §10): IR is preferred, but if its face is dark/unusable
+                # (emitter off, too far for the LEDs) while RGB sees the face well, RGB carries this attempt
+                if primary == "ir" and "rgb" in devices and n_sets >= 3:
+                    ir_bad = all(o.dark or o.embedding is None for o in obs["ir"][-3:])
+                    rgb_ok = any(o.embedding is not None and o.light in ("ok", "dim", "bright") for o in obs["rgb"][-3:])
+                    if ir_bad and rgb_ok:
+                        primary = "rgb"
+                        self.say("IR face unusable, RGB carries this attempt")
                 self.say(f"set {n_sets}: " + ", ".join(
-                    f"{s}: {'dark' if obs[s][-1].dark else ('face' if obs[s][-1].box else 'no-face')}" for s in fs))
+                    f"{s}: {'dark' if obs[s][-1].dark else ('face:' + obs[s][-1].light if obs[s][-1].box else 'no-face')}" for s in fs))
 
                 decision = self._decide(st, obs, primary, devices, rec, live)
                 if decision is None:
@@ -183,16 +196,22 @@ class Engine:
                 break
         return int((time.monotonic() - t0) * 1000)
 
-    def _observe(self, fr: Frame, s: str, cams: dict, rec: dict, near: Box | None = None) -> Obs:
+    def _observe(self, fr: Frame, s: str, cams: dict, rec: dict, near: Box | None = None, cap: Capture | None = None) -> Obs:
         q = measure(fr.gray, rec["max_height"])
-        dark = q.mean < cams[f"{s}_dark_threshold"]
-        if q.reason(cams[f"{s}_dark_threshold"]):
-            return Obs(fr, q, None, None, dark)
-        box = self.models.detect(fr.gray, near)
+        frame_dark = q.mean < cams[f"{s}_dark_threshold"]
+        if q.sharpness < 5.0 and frame_dark:        # nothing at all in the frame: skip the detector
+            return Obs(fr, q, None, None, True)
+        gray = brightness.normalise(fr.gray, q.mean)      # identity when the frame is in range
+        box = self.models.detect(gray, near)
         if box is None or box.w < MIN_FACE_PX:
-            return Obs(fr, q, None, None, dark)
-        emb = self.models.embed(fr.rgb, box)
-        return Obs(fr, q, box, emb, dark)
+            return Obs(fr, q, None, None, frame_dark)
+        light = (cap.meter(s, fr.gray, box) if cap is not None else brightness.meter(fr.gray, box))
+        state = light.state(s)
+        if state == "dark":
+            return Obs(fr, q, box, None, True, state)     # a face, but unusably dark (emitter off?)
+        rgb = fr.rgb if s == "ir" and gray is fr.gray else (cv2_gray_to_rgb(gray) if s == "ir" else brightness.normalise_rgb(fr.rgb, fr.gray))
+        emb = self.models.embed(rgb, box)
+        return Obs(fr, q, box, emb, False, state)
 
     def _fused(self, obs: list[Obs], n: int) -> np.ndarray | None:
         good = [o for o in obs if o.embedding is not None]
