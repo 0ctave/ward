@@ -183,14 +183,14 @@ class Cv2Display:
 
 
 def open_display(title: str, width: int, height: int, prefer: str = "gtk", kind: str = "raw", canvas=None, **kw):
-    """Open a window. kind="enroll" / "emitter": the libadwaita application windows (faceup.ui),
+    """Open a window. kind="enroll" / "emitter": the libadwaita application windows (faceup.appui),
     which consume snapshot dicts (`screen.snapshot` is True); kind="raw" or any fallback: a
     canvas display (GTK4 picture, then OpenCV HighGUI). Raises DisplayUnavailable if nothing works."""
     errors = []
     if kind in ("enroll", "emitter") and prefer == "gtk":
         try:
-            from . import ui
-            cls = ui.EnrollWindow if kind == "enroll" else ui.EmitterWindow
+            from . import appui
+            cls = appui.EnrollWindow if kind == "enroll" else appui.EmitterWindow
             return cls(title, width, height, **kw)
         except DisplayUnavailable as e:
             errors.append(f"adwaita: {e}")
