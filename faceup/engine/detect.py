@@ -14,6 +14,9 @@ import dlib
 import numpy as np
 
 DLIB_DIRS = [Path("/usr/share/dlib"), Path("/usr/lib/howdy/dlib-data"), Path("/usr/share/dlib-models")]
+YUNET_MODEL = Path(__file__).resolve().parents[1] / "models" / "face_detection_yunet_2022mar.onnx"
+YUNET_WIDTH = 480          # working width: 4 ms/frame on a laptop CPU, faces ≥ ~40 px
+YUNET_SCORE = 0.7
 
 
 def model_path(name: str) -> Path:
@@ -49,11 +52,21 @@ class Box:
         return (self.x / width, self.y / height, self.w / width, self.h / height)
 
 
+def yunet_available() -> bool:
+    return YUNET_MODEL.exists() and hasattr(cv2, "FaceDetectorYN_create")
+
+
 class Models:
-    def __init__(self, detector: str = "hog", max_height: int = 320):
+    """detector: "yunet" (default: fast AND pose-robust), "hog" (frontal only), "cnn" (slow)."""
+
+    def __init__(self, detector: str = "yunet", max_height: int = 320):
+        if detector == "yunet" and not yunet_available():
+            detector = "hog"
         self.detector_kind = detector
         self.max_height = max_height
         self._hog = dlib.get_frontal_face_detector()
+        self._yunet = None
+        self._yunet_size = None
         self._misses = 0          # consecutive full-frame misses; the 2x-upsampled search runs on every 4th
         self._cnn = None
         self._sp5 = None
@@ -85,8 +98,34 @@ class Models:
             self._rec = dlib.face_recognition_model_v1(str(model_path("dlib_face_recognition_resnet_model_v1.dat")))
         return self._rec
 
+    def _yunet_detect(self, gray: np.ndarray) -> Box | None:
+        H, W = gray.shape[:2]
+        s = min(1.0, YUNET_WIDTH / W)
+        size = (int(round(W * s)), int(round(H * s)))
+        if self._yunet is None:
+            self._yunet = cv2.FaceDetectorYN_create(str(YUNET_MODEL), "", size, YUNET_SCORE, 0.3, 500)
+            self._yunet_size = size
+        elif size != self._yunet_size:
+            self._yunet.setInputSize(size); self._yunet_size = size
+        img = cv2.cvtColor(gray if s == 1.0 else cv2.resize(gray, size), cv2.COLOR_GRAY2BGR)
+        _, faces = self._yunet.detect(img)
+        if faces is None or len(faces) == 0:
+            return None
+        f = max(faces, key=lambda r: r[2] * r[3])
+        x, y, w, h = (float(v) / s for v in f[:4])
+        # dlib's landmark predictors were trained on square HOG-style boxes (brow to chin);
+        # YuNet's are taller (forehead to chin). Normalise so the 68/5-point fits stay accurate.
+        side = max(w, h * 0.85)
+        cx, cy = x + w / 2, y + h * 0.55
+        return Box(int(cx - side / 2), int(cy - side / 2), int(side), int(side))
+
     # -- operations -------------------------------------------------------------
     def detect(self, gray: np.ndarray, near: Box | None = None) -> Box | None:
+        if self.detector_kind == "yunet":
+            return self._yunet_detect(gray)
+        return self._detect_dlib(gray, near)
+
+    def _detect_dlib(self, gray: np.ndarray, near: Box | None = None) -> Box | None:
         """Largest face in the frame, in full-frame coordinates.
 
         `near`: the face box from the previous frame. Detection then runs only on a region

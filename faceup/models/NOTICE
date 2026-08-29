@@ -1,0 +1,6 @@
+face_detection_yunet_2022mar.onnx — YuNet face detector by Shiqi Yu et al. (OpenCV Zoo),
+licensed under the Apache License 2.0. Source: https://github.com/opencv/opencv_zoo
+(commit c97242ce7f2a, models/face_detection_yunet/). sha256:
+50ef07f702a31741ca46a4c0d947773b64143b9362780237bf0d427d6c79bab7
+The 2022 model is bundled because the 2023 revision requires OpenCV >= 4.8, while
+Ubuntu 24.04 ships 4.6.

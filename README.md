@@ -50,6 +50,8 @@ detector and ResNet face embedding, OpenCV, V4L2 — with what Howdy lacks:
     file — not bundled yet, the voter is disabled until it's present)
   - *emitter-modulation shadow test* — metric implemented, enabled once the LED toggle is
     proven fast enough on the hardware (`shadow_test = "auto"`)
+- **YuNet face detection.** OpenCV's detector (bundled, Apache-2.0): 4 ms per frame on a laptop
+  CPU and robust to turned/tilted heads — dlib's HOG is frontal-only, its CNN 700 ms.
 - **Fail open.** Every failure — dark camera, busy camera, spoof suspected, timeout —
   ends in the normal password prompt. One log line per attempt says why.
 
@@ -67,7 +69,7 @@ Full rationale and thresholds: [docs/DESIGN.md](docs/DESIGN.md).
 | `faceup pam enable\|disable\|status` | yes | The PAM line, with backup/restore; offers to retire `pam_howdy`. |
 | `faceup models [--remove LABEL]` | yes | List or remove enrolled poses. |
 | `faceup log` | no* | Recent attempts, one line each (*`adm` group). |
-| `faceup bench` | no | Times HOG vs CNN detectors on a live frame. |
+| `faceup bench` | no | Times the detectors on a live frame. |
 | `faceup emitter check` | yes | Lights off → IR/RGB side by side → tells you whether the emitter fires. `install`/`configure` via linux-enable-ir-emitter. |
 
 ## Install

@@ -21,7 +21,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "cameras": {"ir": "", "rgb": "", "ir_dark_threshold": 25, "rgb_dark_threshold": 40},
     "recognition": {
         "certainty": 0.40, "rgb_certainty": 0.38, "fusion_frames": 4,
-        "require_rgb_match": False, "detector": "hog", "max_height": 320,
+        "require_rgb_match": False, "detector": "yunet", "max_height": 320,
     },
     "liveness": {
         "required_votes": 2, "cross_spectrum": True, "antispoof_cnn": True,
