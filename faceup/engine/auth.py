@@ -38,6 +38,8 @@ class Outcome:
     user: str = ""
     ir_dist: float | None = None
     rgb_dist: float | None = None
+    wdist: dict = field(default_factory=dict)      # spectrum -> (whitened distance, threshold)
+    learned: str = ""                             # label of a model added by online adaptation
     votes: list[Vote] = field(default_factory=list)
     elapsed_ms: int = 0
     frames: int = 0
@@ -49,8 +51,13 @@ class Outcome:
             parts.append(f"ir={self.ir_dist:.2f}")
         if self.rgb_dist is not None:
             parts.append(f"rgb={self.rgb_dist:.2f}")
+        for sp, (d, thr) in self.wdist.items():
+            if d is not None:
+                parts.append(f"{sp}w={d:.2f}/{thr:.2f}")
         if self.votes:
             parts.append("votes=" + ",".join(str(v) for v in self.votes))
+        if self.learned:
+            parts.append(f"learned={self.learned}")
         parts.append(f"frames={self.frames}")
         parts.append(f"t={self.elapsed_ms}ms")
         if self.detail:
@@ -155,8 +162,9 @@ class Engine:
                 accepted, votes, dists = decision
                 last_votes = votes
                 if accepted:
-                    out = Outcome(True, "accept", user, dists.get("ir"), dists.get("rgb"), votes,
+                    out = Outcome(True, "accept", user, dists.get("ir"), dists.get("rgb"), getattr(self, "_last_w", {}), "", votes,
                                   int((time.monotonic() - t0) * 1000), n_sets)
+                    out.learned = self._learn(st, obs, dists, votes, beh, rec)
                     log(out)
                     return out
                 if time.monotonic() > hard:
@@ -181,9 +189,56 @@ class Engine:
             reason, detail = "no-face", ""
         if n_sets == 0:
             reason, detail = "camera", "no frames"
-        out = Outcome(False, reason, user, dists.get("ir"), dists.get("rgb"), last_votes, elapsed, n_sets, detail)
+        out = Outcome(False, reason, user, dists.get("ir"), dists.get("rgb"), getattr(self, "_last_w", {}), "", last_votes, elapsed, n_sets, detail)
         log(out)
         return out
+
+    # ------------------------------------------------------------- learning ----
+    def _learn(self, st, obs, dists, votes, beh, rec) -> str:
+        """Online adaptation (§6.5b): after a CONFIDENT accept — raw distance well inside the gate
+        and liveness passed with no FAIL — store the live fused embedding as a learned model if it
+        is novel (far enough from every existing model of that bin), so real night-time / new-glasses
+        conditions enter the store from use. Strict on purpose: a stranger never gets near
+        learn_max_dist, and originals are never replaced."""
+        if not beh.get("learn", True):
+            return ""
+        if any(v.result == Result.FAIL for v in votes) or not any(v.result == Result.PASS for v in votes):
+            return ""
+        learned = []
+        for sp, fused in getattr(self, "_last_fused", {}).items():
+            d = dists.get(sp)
+            if fused is None or d is None or d > beh.get("learn_max_dist", 0.30) or not st.by_spectrum(sp):
+                continue
+            # pose bin of the best-quality observation with a face
+            best = max((o for o in obs.get(sp, []) if o.box is not None), key=lambda o: o.quality.score(), default=None)
+            label = None
+            if best is not None:
+                try:
+                    from . import pose as posemod
+                    lm = self.models.landmarks68(best.frame.gray, best.box)
+                    shape = np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None
+                    p = posemod.estimate(lm, best.frame.gray.shape[1], best.frame.gray.shape[0], shape3d=shape)
+                    if p is not None:
+                        label = posemod.cell_name(p.cell() or posemod.nearest_cell(p.yaw, p.pitch))
+                except Exception:
+                    label = None
+            label = label or "unknown"
+            same = [m for m in st.by_spectrum(sp) if m.label == label]
+            if same and min(float(np.linalg.norm(m.embedding - fused)) for m in same) < beh.get("learn_min_novelty", 0.15):
+                continue                                      # nothing new about this condition
+            mine = [m for m in same if m.learned]
+            if len(mine) >= beh.get("learn_per_bin", 2):
+                st.models.remove(min(mine, key=lambda m: m.time))   # rotate the oldest learned one
+            st.add(label, sp, fused, 0.5, None, samples=[fused], learned=True)
+            learned.append(f"{sp}:{label}")
+        if learned:
+            try:
+                for sp in st.spectra():
+                    st.fit_whitening(sp)
+                st.save()
+            except OSError:
+                pass
+        return ",".join(learned)
 
     # ---------------------------------------------------------------- steps ----
     @staticmethod
@@ -232,13 +287,31 @@ class Engine:
             out[s] = st.min_distance(f, s)[0] if f is not None and st.by_spectrum(s) else None
         return out
 
+    def _recognised(self, st, fused: np.ndarray | None, spectrum: str, raw: float | None, gate: float, rec: dict) -> tuple[bool, tuple]:
+        """Raw gate, or — if the store has whitening for this spectrum — the whitened gate under a hard
+        raw cap. The whitened path extends acceptance only along directions this user's own face is
+        known to vary in (pose, expression, lighting), never along identity directions (§6.5a)."""
+        if raw is None or fused is None:
+            return False, (None, None)
+        if raw <= gate:
+            return True, st.wdist(fused, spectrum) if rec.get("whitened", True) else (None, None)
+        if rec.get("whitened", True) and raw <= rec.get("hard_cap", 0.55):
+            wd, thr = st.wdist(fused, spectrum)
+            if wd is not None and wd <= thr:
+                return True, (wd, thr)
+            return False, (wd, thr)
+        return False, (None, None)
+
     def _decide(self, st, obs, primary, devices, rec, live):
         """None = not enough evidence yet; else (accepted, votes, dists)."""
         dists = self._best_dists(st, obs, rec)
         if dists.get(primary) is None:
             return None
-        rec_ir = dists.get("ir") is not None and dists["ir"] <= rec["certainty"]
-        rec_rgb = dists.get("rgb") is not None and dists["rgb"] <= rec["rgb_certainty"]
+        fused = {s: self._fused(obs[s], rec["fusion_frames"]) for s in obs}
+        rec_ir, w_ir = self._recognised(st, fused.get("ir"), "ir", dists.get("ir"), rec["certainty"], rec)
+        rec_rgb, w_rgb = self._recognised(st, fused.get("rgb"), "rgb", dists.get("rgb"), rec["rgb_certainty"], rec)
+        self._last_w = {sp: w for sp, w in (("ir", w_ir), ("rgb", w_rgb)) if w[0] is not None}
+        self._last_fused = fused
         recognised = rec_ir if primary == "ir" else rec_rgb
         if primary == "ir" and rec["require_rgb_match"]:
             recognised = recognised and rec_rgb
