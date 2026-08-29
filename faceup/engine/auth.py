@@ -89,6 +89,8 @@ class Engine:
         if not devices:
             return Outcome(False, "no-models", user, detail="no camera matches the enrolled spectra")
         primary = "ir" if "ir" in devices else "rgb"
+        # load the dlib models before the camera opens so their cost overlaps nothing user-visible
+        self.models.sp5; self.models.rec
         try:
             cap = Capture(devices)
         except CaptureError as e:
@@ -98,11 +100,13 @@ class Engine:
         last_votes: list[Vote] = []
         saw_face = False
         all_dark = True
-        deadline = t0 + timing["window_ms"] / 1000
         hard = t0 + timing["hard_timeout_ms"] / 1000
         n_sets = 0
+        ir_means: list[float] = []
         try:
-            cap.warm_up(2)
+            settle_ms = self._settle(cap, primary, timing["settle_ms"])
+            self.say(f"exposure settled in {settle_ms} ms")
+            deadline = min(hard, time.monotonic() + timing["window_ms"] / 1000)   # window starts now
             while time.monotonic() < deadline:
                 fs = cap.read_set()
                 if not fs:
@@ -115,6 +119,11 @@ class Engine:
                         saw_face = True
                     if not obs[s][-1].dark:
                         all_dark = False
+                if "ir" in fs:
+                    ir_means.append(obs["ir"][-1].quality.mean)
+                # emitter dead at night: every IR frame dark → RGB carries this attempt (DESIGN §10)
+                if primary == "ir" and "rgb" in devices and n_sets >= 3 and all(o.dark for o in obs["ir"]):
+                    primary = "rgb"
                 self.say(f"set {n_sets}: " + ", ".join(
                     f"{s}: {'dark' if obs[s][-1].dark else ('face' if obs[s][-1].box else 'no-face')}" for s in fs))
 
@@ -140,6 +149,10 @@ class Engine:
             reason, detail = f"spoof:{fails[0].voter}", fails[0].reason
         elif not saw_face:
             reason, detail = ("dark", "") if all_dark and n_sets else ("no-face", "")
+        elif dists.get(primary) is None and any(d is not None for d in dists.values()):
+            n_ir = sum(o.box is not None for o in obs.get("ir", []))
+            rng = f"{min(ir_means):.0f}..{max(ir_means):.0f}" if ir_means else "-"
+            reason, detail = f"no-face:{primary}", f"{primary} faces {n_ir}/{len(obs.get(primary, []))}, ir brightness {rng}"
         elif any(d is not None for d in dists.values()):
             reason, detail = "no-match", ""
         else:
@@ -151,6 +164,21 @@ class Engine:
         return out
 
     # ---------------------------------------------------------------- steps ----
+    @staticmethod
+    def _settle(cap: Capture, primary: str, max_ms: int) -> int:
+        """Read frames until the primary camera's auto-exposure stops drifting (or max_ms)."""
+        t0 = time.monotonic()
+        last: list[float] = []
+        while (time.monotonic() - t0) * 1000 < max_ms:
+            fs = cap.read_set()
+            fr = fs.get(primary)
+            if fr is None:
+                continue
+            last.append(float(fr.gray.mean()))
+            if len(last) >= 4 and max(last[-4:]) - min(last[-4:]) < 3.0:
+                break
+        return int((time.monotonic() - t0) * 1000)
+
     def _observe(self, fr: Frame, s: str, cams: dict, rec: dict) -> Obs:
         q = measure(fr.gray, rec["max_height"])
         dark = q.mean < cams[f"{s}_dark_threshold"]

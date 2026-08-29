@@ -28,7 +28,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "shadow_test": "auto", "motion": True, "motion_challenge": False,
         "require_liveness_when_available": True,
     },
-    "timing": {"window_ms": 1500, "hard_timeout_ms": 2500},
+    "timing": {"settle_ms": 1200, "window_ms": 2000, "hard_timeout_ms": 4000},
     "behaviour": {"abort_if_ssh": True, "lockout_failures": 0, "log_images": False},
 }
 
@@ -36,7 +36,7 @@ _COMMENTS = {
     "cameras": "Device paths; empty string = no camera of that kind.",
     "recognition": "certainty = max embedding distance (dlib scale: 0.6 is 'same person', 0.40 is strict).",
     "liveness": "Voters return PASS/FAIL/ABSTAIN; `required_votes` PASSes and zero FAILs are needed.",
-    "timing": "Milliseconds.",
+    "timing": "Milliseconds. settle = wait for auto-exposure before the window starts.",
     "behaviour": "log_images saves failed frames under /var/lib/faceup/snapshots (opt-in).",
 }
 
