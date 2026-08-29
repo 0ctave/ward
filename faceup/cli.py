@@ -229,7 +229,7 @@ def cmd_enroll(args) -> int:
             ui.info("A camera window opens. Move your head slowly so the dot visits every highlighted cell;")
             ui.info("green cells are captured. Enter finishes, Esc cancels.")
             try:
-                done = gui.free_move_enroll(st, cap, models, cams)
+                done = gui.free_move_enroll(st, cap, models, cams, profile=args.profile)
             except gui.GuiUnavailable as e:
                 ui.warn(f"no camera window available ({e}); falling back to the guided text flow")
                 args.guided = True
@@ -495,6 +495,7 @@ def main(argv=None) -> int:
     e.add_argument("--all", action="store_true", help="include optional poses without asking")
     e.add_argument("--selfcheck", action="store_true", help="run the self-check without asking")
     e.add_argument("--guided", action="store_true", help="scripted 8-pose text flow instead of the free-move camera window")
+    e.add_argument("--profile", action="store_true", help="print per-stage timings once a second (diagnose a laggy preview)")
     e.set_defaults(fn=cmd_enroll)
 
     t = sub.add_parser("tune", help="show config, or set section.key VALUE (root)")
