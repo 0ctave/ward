@@ -217,6 +217,51 @@ accept = recognised ∧ live
 - ABSTAIN never counts against the user. This is how a still user, a dark room, or a missing optional model degrade gracefully.
 - `required_votes` is automatically capped at the number of *available* voters for the profile.
 
+### 6.5a Lighting: what actually varies, and the whitened gate
+
+Measured on the reference IR camera (dim room, mean 47–64): two consecutive frames of the
+same face already differ by 0.15–0.32 in embedding distance (pose/expression/noise), while
+simulated lighting changes shift a frame's embedding by 0.10–0.23 (dark γ2.2, bright, side
+light, night = ×0.35 + sensor noise). Photometric normalisation does not help: Tan–Triggs
+*doubles* the shift (dlib's network was not trained on such images) and CLAHE only helps
+gamma-type changes. So the lighting problem is not one of pixels but of **where the user's
+embedding cloud extends**, and the principled tool is to learn that cloud:
+
+- **Samples, not just means.** Each stored model keeps the individual embeddings it was fused
+  from; enrollment additionally embeds synthetic lighting variants of every sample (night =
+  ×0.35 + noise, bright γ0.45, side-lit ramp). The variants are never match targets — they
+  only teach the next step which directions are "just lighting".
+- **Within-class whitening (WCCN).** From all samples' deviations around their model means,
+  Σ_w = within-class scatter; W = (Σ_w + λI)^(−1/2) with λ = trace(Σ_w)/128 (shrinkage — 128
+  dims from a few hundred samples). The whitened distance |W(x − μ)| scales down the
+  directions this user's face is known to vary in (pose, expression, lighting) and leaves
+  identity directions alone: a night-time embedding of the user comes out close, a stranger
+  — who differs along identity directions — stays far. Threshold = 95th percentile of
+  leave-one-out whitened distances (each sample vs the mean of the others in its bin, the
+  same situation as a live fused embedding against a stored model) × 1.15. Synthetic sweep:
+  the user at night (raw 0.56) accepted, a 28 %-different "sibling" (raw 0.40) and strangers
+  rejected — whitening *reorders* them correctly where the raw distance cannot.
+- **Decision.** `recognised = raw ≤ certainty`, OR (`raw ≤ hard_cap` (0.55, below dlib's
+  0.6 same-person radius) AND `whitened ≤ threshold`). The whitened path only ever extends
+  acceptance along the user's own variation directions. Both distances are logged
+  (`irw=2.9/4.1`).
+
+### 6.5b Online adaptation
+
+The only way to get *real* night-time samples from a daytime enrollment is use. After a
+confident accept — raw ≤ 0.30 (a stranger never gets near), at least one liveness PASS and
+no FAIL — the live fused embedding is stored as a **learned** model of its pose bin if it is
+novel (≥ 0.15 from every existing model there), at most 2 learned models per bin and
+spectrum (oldest rotated out), originals never replaced; whitening is refitted. `faceup
+models` marks them, `faceup models --forget-learned` drops them. Over a few evenings the
+store thus acquires the user's actual dark-room appearance.
+
+### 6.5c Hardware path (future): emitter-differential imaging
+
+`I_on − I_off` over an emitter toggle contains only the emitter's light — daylight cancels
+exactly, day and night produce the same IR image. Depends on the same toggle-speed
+measurement as the shadow test (§7.3, §15.1).
+
 ### 6.6 Result
 Exit 0 → PAM `sufficient` succeeds. Any other outcome → exit 1, one log line:
 `2026-08-28T21:02:11 user=octave result=accept ir=0.31 rgb=0.36 votes=cross:PASS cnn:PASS shadow:ABSTAIN motion:PASS t=380ms`

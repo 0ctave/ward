@@ -22,6 +22,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "recognition": {
         "certainty": 0.40, "rgb_certainty": 0.38, "fusion_frames": 4,
         "require_rgb_match": False, "detector": "yunet", "max_height": 320, "accel": "cpu",
+        "whitened": True, "hard_cap": 0.55,
     },
     "liveness": {
         "required_votes": 2, "cross_spectrum": True, "antispoof_cnn": True,
@@ -29,15 +30,16 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "require_liveness_when_available": True,
     },
     "timing": {"settle_ms": 0, "window_ms": 2500, "hard_timeout_ms": 4000},
-    "behaviour": {"abort_if_ssh": True, "lockout_failures": 0, "log_images": False},
+    "behaviour": {"abort_if_ssh": True, "lockout_failures": 0, "log_images": False,
+                  "learn": True, "learn_max_dist": 0.30, "learn_min_novelty": 0.15, "learn_per_bin": 2},
 }
 
 _COMMENTS = {
     "cameras": "Stable ids usb:<vid>:<pid>:<iface> (setup writes them), 'auto', or a /dev path; '' = none.",
-    "recognition": "certainty = max embedding distance (dlib scale: 0.6 is 'same person', 0.40 is strict).",
+    "recognition": "certainty = max raw distance (dlib scale; 0.6 is 'same person'). whitened: also accept raw <= hard_cap when the distance whitened by the user's own variation is under its learned threshold.",
     "liveness": "Voters return PASS/FAIL/ABSTAIN; `required_votes` PASSes and zero FAILs are needed.",
     "timing": "Milliseconds. settle_ms > 0 waits for auto-exposure before the window (not needed with YuNet).",
-    "behaviour": "log_images saves failed frames under /var/lib/faceup/snapshots (opt-in).",
+    "behaviour": "learn: after a confident accept (raw <= learn_max_dist, liveness passed) store the live embedding as a learned model when it is novel (>= learn_min_novelty from existing ones), max learn_per_bin per pose bin and spectrum.",
 }
 
 

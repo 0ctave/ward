@@ -94,11 +94,26 @@ class Cell:
     def full(self) -> bool:
         return self.n_primary >= SAMPLES_PER_CELL
 
-    def push(self, spectrum: str, q: float, emb: np.ndarray) -> None:
+    def push(self, spectrum: str, q: float, emb: np.ndarray, aug: list | None = None) -> None:
         lst = self.samples.setdefault(spectrum, [])
-        lst.append((q, emb))
+        lst.append((q, emb, aug or []))
         lst.sort(key=lambda t: t[0], reverse=True)
         del lst[SAMPLES_PER_CELL:]
+
+
+_LUT_DARK = np.array([255 * (i / 255) ** 2.2 for i in range(256)], np.uint8)
+_LUT_BRIGHT = np.array([255 * (i / 255) ** 0.45 for i in range(256)], np.uint8)
+
+
+def _light_variants(rgb: np.ndarray) -> list[np.ndarray]:
+    """Synthetic illumination variants of a face frame: night (dark + sensor noise), bright,
+    side-lit. Deterministic, cheap; embeddings of these enter the whitening scatter only."""
+    rng = np.random.default_rng(int(rgb[::16, ::16].sum()) & 0xFFFF)
+    night = np.clip(rgb.astype(np.float32) * 0.35 + rng.normal(0, 6, rgb.shape), 0, 255).astype(np.uint8)
+    bright = cv2.LUT(rgb, _LUT_BRIGHT)
+    ramp = np.linspace(0.4, 1.0, rgb.shape[1], dtype=np.float32)[None, :, None]
+    side = np.clip(rgb * ramp, 0, 255).astype(np.uint8)
+    return [night, bright, side]
 
 
 def _sampler_main(req, res, detector_kind: str, max_height: int) -> None:
@@ -120,7 +135,11 @@ def _sampler_main(req, res, detector_kind: str, max_height: int) -> None:
                 box = models.detect(gray, box)
             if box is None or box.w < MIN_ENROLL_FACE_PX:
                 continue
-            results.append((sp, q, models.embed(rgb, box)))
+            emb = models.embed(rgb, box)
+            # lighting variants of the same frame: not match targets, but they teach the
+            # whitening which embedding directions are "just lighting" for this user
+            aug = [models.embed(v, box) for v in _light_variants(rgb)]
+            results.append((sp, q, emb, aug))
         res.put((cell, pose, results))
 
 
@@ -291,8 +310,9 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     def absorb(results) -> None:
         for cell, pose, items in results:
             c = cells.setdefault(cell, Cell())
-            for sp, qq, emb in items:
-                c.push(sp, qq, emb)
+            for item in items:
+                sp, qq, emb = item[0], item[1], item[2]
+                c.push(sp, qq, emb, item[3] if len(item) > 3 else None)
             c.poses.append(pose)
     prev_box: Box | None = None
     last_sample_t = 0.0
@@ -501,6 +521,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     if not finished and not cells:
         return 0
     added = 0
+    extra: dict[str, list] = {}
     for cell, c in cells.items():
         if c.count("primary") < CELL_DONE:
             continue
@@ -510,9 +531,14 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         for sp, lst in c.samples.items():
             if not lst:
                 continue
-            st.add(label, sp, fuse([e for _, e in lst]), float(np.mean([qq for qq, _ in lst])), mean_pose)
+            st.add(label, sp, fuse([e for _, e, _ in lst]), float(np.mean([qq for qq, _, _ in lst])), mean_pose,
+                   samples=[e for _, e, _ in lst])
+            for _, _, aug in lst:
+                extra.setdefault(sp, []).extend((label, a) for a in aug)
             added += 1
     if added:
+        for sp in st.spectra():
+            st.fit_whitening(sp, extra.get(sp))
         st.save()
     return added
 

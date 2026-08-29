@@ -424,11 +424,19 @@ def cmd_models(args) -> int:
     if args.remove:
         n = st.remove_label(args.remove); st.save()
         ui.ok(f"removed {n} model(s) labelled {args.remove}"); return 0
+    if args.forget_learned:
+        n = len([m for m in st.models if m.learned])
+        st.models = [m for m in st.models if not m.learned]
+        for sp in st.spectra():
+            st.fit_whitening(sp)
+        st.save(); ui.ok(f"forgot {n} learned model(s)"); return 0
     if not st.models:
         ui.warn(f"no models for {user}"); return 1
-    ui.info(f"{user}: calib={st.calib}")
+    ui.info(f"{user}: {len(st.models)} models · calib keys {sorted(k for k in st.calib if k != 'shape3d')}")
+    for sp, e in st.whitening.items():
+        ui.info(f"whitening[{sp}]: {e['n']} deviations, threshold {e['threshold']:.2f}")
     for m in st.models:
-        ui.info(f"#{m.id:<3} {m.label:<12} {m.spectrum:<4} quality {m.quality:.2f}  {m.time}")
+        ui.info(f"#{m.id:<3} {m.label:<12} {m.spectrum:<4} quality {m.quality:.2f}  samples {len(m.samples)}  {'learned ' if m.learned else ''}{m.time}")
     return 0
 
 
@@ -606,7 +614,9 @@ def main(argv=None) -> int:
     cb.add_argument("-U", "--user"); cb.set_defaults(fn=cmd_calibrate)
 
     m = sub.add_parser("models", help="list or remove enrolled models (root)")
-    m.add_argument("-U", "--user"); m.add_argument("--remove", metavar="LABEL"); m.set_defaults(fn=cmd_models)
+    m.add_argument("-U", "--user"); m.add_argument("--remove", metavar="LABEL")
+    m.add_argument("--forget-learned", action="store_true", help="drop models added by online adaptation")
+    m.set_defaults(fn=cmd_models)
 
     em = sub.add_parser("emitter", help="IR emitter: check (camera window) | test (text) | install | configure")
     em.add_argument("action", choices=["check", "test", "install", "configure"]); em.set_defaults(fn=cmd_emitter)
