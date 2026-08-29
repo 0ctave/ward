@@ -206,10 +206,10 @@ def _coverage_panel(width: int, cov, current, target, sgn: float = 1.0) -> np.nd
         y = (posemod.PITCH_EDGES[-1] - pitch) / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * PANEL_H
         return int(np.clip(x, 4, width - 4)), int(np.clip(y, 4, PANEL_H - 4))
 
-    # ellipse outline of the required region (centre mirrored with everything else)
-    cx, cy = to_px(sgn * posemod.REQ_CENTRE[0], posemod.REQ_CENTRE[1])
-    ax = int(posemod.REQ_AXES[0] / (posemod.YAW_EDGES[-1] - posemod.YAW_EDGES[0]) * width)
-    ay = int(posemod.REQ_AXES[1] / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * PANEL_H)
+    # ellipse outline of the (adaptive) required region, centre mirrored with everything else
+    cx, cy = to_px(sgn * cov.centre[0], cov.centre[1])
+    ax = int(cov.axes[0] / (posemod.YAW_EDGES[-1] - posemod.YAW_EDGES[0]) * width)
+    ay = int(cov.axes[1] / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * PANEL_H)
     cv2.ellipse(panel, (cx, cy), (ax, ay), 0, 0, 360, (230, 230, 230), 1, cv2.LINE_AA)
     _text(panel, "left", (6, PANEL_H // 2 + 4), 0.4, (200, 200, 200)); _text(panel, "right", (width - 42, PANEL_H // 2 + 4), 0.4, (200, 200, 200))
     _text(panel, "up", (width // 2 - 10, 14), 0.4, (200, 200, 200)); _text(panel, "down", (width // 2 - 18, PANEL_H - 6), 0.4, (200, 200, 200))
@@ -350,6 +350,8 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                     current = filt                                     # already relative: estimated with the neutral ratios
                 stable = state["stability"].push(current)
                 state["prev_pose"] = current
+                if not calibrating:
+                    state["coverage"].observe(current.yaw, current.pitch)
                 cell = current.cell() or posemod.nearest_cell(current.yaw, current.pitch)
                 cov = state["coverage"]
                 covered = cov.at(current.yaw, current.pitch) >= cov.FULL
@@ -423,7 +425,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             _text(img, "Face too dark - is the IR emitter on? (turn on a light to continue)", (10, 24), 0.62, (255, 120, 90))
         elif calibrating:
             n = len(state["neutral_samples"])
-            _text(img, f"Look at the centre of the screen naturally... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
+            _text(img, f"Look at the MIDDLE of the screen (not the camera)... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
         else:
             _text(img, _hint(disp_current, disp_target, box), (10, 24), 0.62)
         n_models = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)

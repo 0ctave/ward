@@ -95,6 +95,19 @@ class PoseTests(unittest.TestCase):
         p0 = pose.estimate(lm_at(0, 0), W, H)
         self.assertGreater(abs(p0.pitch) + abs(p0.yaw), 4)
 
+    def test_coverage_requirement_follows_the_user(self):
+        c = pose.Coverage()
+        self.assertEqual(c.centre, tuple(pose.REQ_CENTRE))
+        # a user whose readings are biased down: reaches −30…+4 pitch, −25…+25 yaw
+        rng = np.random.default_rng(0)
+        for _ in range(200):
+            c.observe(float(rng.uniform(-25, 25)), float(rng.uniform(-30, 4)))
+        self.assertLess(c.centre[1], -8)                     # ellipse moved down to the user's range
+        self.assertLess(c.axes[1], pose.REQ_AXES[1])           # and shrank to what was shown
+        self.assertGreaterEqual(c.axes[1], c.MIN_AXES[1])
+        self.assertTrue(c.is_required(0, -28))                 # bottom of the shown range is required…
+        self.assertFalse(c.is_required(0, 14))                 # …the unreachable top is not
+
     def test_nearest_cell_clips(self):
         self.assertEqual(pose.nearest_cell(60, 0), (pose.NY - 1, 1))
         self.assertEqual(pose.nearest_cell(-60, -50), (0, 0))
