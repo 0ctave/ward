@@ -297,12 +297,19 @@ A camera window tracks the head and the user simply moves it around, as with Fac
    Storage bins remain discrete — 7 yaw × 3 pitch cells (12° yaw bins, 18° centre; pitch
    down < −10°, level, up > +6°) — one fused model per bin and spectrum (best 3 samples by
    quality), labelled `C/level`, `L2/down`, …
-4. **Guidance.** The window shows the mirrored camera image; below it the coverage heatmap
-   (green = covered, orange = required and not yet, dimmed = optional) with the required
-   ellipse outlined, a dot for the current pose with a tick showing roll, and a ring on the
-   least-covered required direction nearest the current pose; the hint says "slowly turn
-   left and look down toward the ring". Guidance is visual, so it does not depend on angle
-   sign conventions for a given camera mounting.
+4. **Guidance.** A GTK 4 / libadwaita window (`faceup/appui.py`, native Wayland, follows the
+   system theme): the mirrored camera preview with a soft face outline (accent while
+   tracking, green pulse on sample, red when dark); a coverage view — the required ellipse as
+   a fixed outline, coverage as a smooth accent-coloured field, the current pose as an eased
+   dot with a roll tick, the target as a pulsing ring; a guidance card with the phase and the
+   hint ("slowly turn left toward the ring"); coverage % and face-light state; Cancel/Finish.
+   The engine hands the window a *snapshot* (frame, box, pose, coverage, hint, phase…) per
+   frame; an OpenCV window renders the same snapshot as a fallback where GTK is unavailable.
+   **One coordinate convention for everything the user sees:** `gui.to_display()` converts
+   the camera-convention pose to display space exactly once (display yaw = −camera yaw when
+   the preview is mirrored, because camera yaw is negative when the user turns to *their*
+   right); the coverage map, target, hints and view all live in display space and apply no
+   sign of their own. (A second sign inside the view once inverted the dot.)
 5. **Finish.** Automatically 3 s after the required ellipse is ≥ 97 % covered, or on Enter.
    Roll is displayed and used for de-rotation in the pitch measure but is not an enrollment
    axis: dlib aligns the face chip by the eyes, so embeddings are roll-invariant already.
