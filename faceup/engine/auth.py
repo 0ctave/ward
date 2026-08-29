@@ -113,7 +113,8 @@ class Engine:
                     continue
                 n_sets += 1
                 for s, fr in fs.items():
-                    obs[s].append(self._observe(fr, s, cams, rec))
+                    prev = next((o.box for o in reversed(obs[s]) if o.box is not None), None)
+                    obs[s].append(self._observe(fr, s, cams, rec, prev))
                 for s in fs:
                     if obs[s][-1].box is not None:
                         saw_face = True
@@ -179,12 +180,12 @@ class Engine:
                 break
         return int((time.monotonic() - t0) * 1000)
 
-    def _observe(self, fr: Frame, s: str, cams: dict, rec: dict) -> Obs:
+    def _observe(self, fr: Frame, s: str, cams: dict, rec: dict, near: Box | None = None) -> Obs:
         q = measure(fr.gray, rec["max_height"])
         dark = q.mean < cams[f"{s}_dark_threshold"]
         if q.reason(cams[f"{s}_dark_threshold"]):
             return Obs(fr, q, None, None, dark)
-        box = self.models.detect(fr.gray)
+        box = self.models.detect(fr.gray, near)
         if box is None or box.w < MIN_FACE_PX:
             return Obs(fr, q, None, None, dark)
         emb = self.models.embed(fr.rgb, box)
