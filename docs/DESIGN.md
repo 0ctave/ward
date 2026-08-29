@@ -112,8 +112,8 @@ motion         = true
 motion_challenge = false   # active "turn your head slightly" prompt
 
 [timing]
-settle_ms   = 1200         # wait for the camera's auto-exposure to stop drifting (max)
-window_ms   = 2000         # capture window, starts after settle
+settle_ms   = 0            # >0: wait for auto-exposure before the window (needed HOG; YuNet copes)
+window_ms   = 2500         # capture window
 hard_timeout_ms = 4000     # absolute cap incl. settle and model loading
 
 [behaviour]
