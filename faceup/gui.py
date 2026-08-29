@@ -258,7 +258,9 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     prof = _Profile(profile, cap)
     state = {"finished": False, "cancel": False, "fps_t": fps_t, "fps_n": 0, "fps": 0.0,
              "prev_pose": None, "prev_box": None, "last_sample_t": 0.0, "t_all_required": None,
-             "sampler": sampler, "restarts": 0}
+             "sampler": sampler, "restarts": 0,
+             "filter": posemod.PoseFilter(), "neutral": None, "neutral_samples": [], "neutral_t0": None}
+    NEUTRAL_SAMPLES = 30          # ~1 s of face at 30 fps
     probe = cap.read_one(primary, flush=0)
     ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
     try:
@@ -291,16 +293,29 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         current = None
         sampled = False
         prev_pose = state["prev_pose"]
+        calibrating = state["neutral"] is None
         if box is not None and box.w >= MIN_ENROLL_FACE_PX:
-            p = posemod.estimate(models.landmarks68(fr.gray, box), w, h)
-            if p is not None:
-                current = posemod.smooth(prev_pose, p)
+            raw = posemod.estimate(models.landmarks68(fr.gray, box), w, h)
+            if raw is not None:
+                now = time.monotonic()
+                filt = state["filter"](raw, now)
+                if calibrating:
+                    # neutral pose: the user looking at the screen naturally. The camera sits above
+                    # the eyes, so "level" reads as pitch +10..+20 — the grid is made relative to this.
+                    state["neutral_samples"].append((filt.yaw, filt.pitch))
+                    if len(state["neutral_samples"]) >= NEUTRAL_SAMPLES:
+                        ys = sorted(a for a, _ in state["neutral_samples"]); ps = sorted(b for _, b in state["neutral_samples"])
+                        state["neutral"] = (ys[len(ys) // 2], ps[len(ps) // 2])
+                        st.calib["pose_offset"] = [round(state["neutral"][0], 1), round(state["neutral"][1], 1)]
+                    current = posemod.Pose(0.0, 0.0, filt.roll)      # dot sits in the centre while calibrating
+                else:
+                    ny, npch = state["neutral"]
+                    current = posemod.Pose(filt.yaw - ny, filt.pitch - npch, filt.roll)
                 stable = prev_pose is not None and abs(current.yaw - prev_pose.yaw) < STABLE_DEG \
                     and abs(current.pitch - prev_pose.pitch) < STABLE_DEG
                 state["prev_pose"] = current
                 cell = current.cell()
-                now = time.monotonic()
-                if cell is not None and stable and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy:
+                if not calibrating and cell is not None and stable and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy:
                     c = cells.setdefault(cell, Cell())
                     if not c.full:
                         items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True)]
@@ -319,6 +334,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                             sampled = True
         else:
             state["prev_pose"] = None
+            state["filter"].reset()
         prof.lap("pose+sample")
         absorb(sampler.drain())
         if not sampler.alive and state["restarts"] < 2:
@@ -339,7 +355,11 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         if box is not None:
             bx = (w - box.x - box.w) if mirror else box.x
             cv2.rectangle(img, (bx, box.y), (bx + box.w, box.y + box.h), COL_OK if sampled else COL_CUR, 2)
-        _text(img, _hint(current, target), (10, 24), 0.62)
+        if calibrating:
+            n = len(state["neutral_samples"])
+            _text(img, f"Look at the centre of the screen naturally... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
+        else:
+            _text(img, _hint(current, target), (10, 24), 0.62)
         filled = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
         req = sum(1 for c in posemod.REQUIRED if cells.get(c) and cells[c].count("primary") >= CELL_DONE)
         status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f} | {state['fps']:.0f} fps"

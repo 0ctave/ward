@@ -98,5 +98,22 @@ class YuNetTests(unittest.TestCase):
         self.assertIsNone(m.detect(blank))            # no face → None, and the net initialises fine
 
 
+
+class OneEuroTests(unittest.TestCase):
+    def test_smooths_noise_but_follows_motion(self):
+        import random
+        rng = random.Random(3)
+        f = pose.OneEuro()
+        # still head with ±1.5° landmark noise → output jitter well under the noise
+        out = [f(10 + rng.uniform(-1.5, 1.5), i / 30) for i in range(90)]
+        tail = out[30:]
+        self.assertLess(max(tail) - min(tail), 1.3)      # ±1.5° input noise → ≤1.3° output p2p
+        # fast turn 10° → 40° over 0.5 s: must follow within a few degrees by the end
+        f2 = pose.OneEuro()
+        for i in range(15):
+            y = f2(10 + 30 * i / 14, i / 30)
+        self.assertGreater(y, 33)
+
+
 if __name__ == "__main__":
     unittest.main()
