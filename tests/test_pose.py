@@ -102,7 +102,12 @@ class PoseTests(unittest.TestCase):
         rng = np.random.default_rng(0)
         for _ in range(200):
             c.observe(float(rng.uniform(-25, 25)), float(rng.uniform(-30, 4)))
+        self.assertTrue(c.adapted)
         self.assertLess(c.centre[1], -8)                     # ellipse moved down to the user's range
+        centre_after = c.centre
+        for _ in range(100):
+            c.observe(20.0, 10.0)
+        self.assertEqual(c.centre, centre_after)               # …and then stays put
         self.assertLess(c.axes[1], pose.REQ_AXES[1])           # and shrank to what was shown
         self.assertGreaterEqual(c.axes[1], c.MIN_AXES[1])
         self.assertTrue(c.is_required(0, -28))                 # bottom of the shown range is required…

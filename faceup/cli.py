@@ -326,8 +326,8 @@ def report_pose_calibration(st) -> None:
         ui.warn(f"personal 3D face model not built: {r['error']}"); return
     ui.ok(f"personal 3D face model built from {r['frames']} frames (fit residual {r['rms_px']} px)")
     if "pitch_rms" in r:
-        ui.info(f"fast estimator vs personal model — yaw: bias {r['yaw_bias']:+.1f}°, rms {r['yaw_rms']}°  ·  "
-                f"pitch: bias {r['pitch_bias']:+.1f}°, rms {r['pitch_rms']}°")
+        ui.info(f"fast estimator vs personal model — yaw: gain {r['yaw_gain']} (1.0 = same scale), residual {r['yaw_rms']}° over a {r['yaw_range']}° range  ·  "
+                f"pitch: gain {r['pitch_gain']}, residual {r['pitch_rms']}° over {r['pitch_range']}°")
         ui.tip("the personal model is used for live pose from the next enrollment on")
 
 

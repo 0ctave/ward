@@ -99,6 +99,7 @@ class Coverage:
         self.centre = tuple(REQ_CENTRE)
         self.axes = tuple(REQ_AXES)
         self.obs: list[tuple[float, float]] = []
+        self.adapted = False
         self._rebuild()
 
     def _rebuild(self) -> None:
@@ -110,9 +111,12 @@ class Coverage:
         return ((yaw - cy) / ay) ** 2 + ((pitch - cp) / ap) ** 2 <= 1.0
 
     def observe(self, yaw: float, pitch: float) -> None:
-        """Every frame with a face (after calibration): learn the user's reachable range."""
+        """Every frame with a face (after calibration): learn the user's reachable range.
+        The ellipse adapts ONCE (at MIN_OBS frames) and then stays fixed — a target that keeps
+        moving is disorienting; `adapted` tells the UI when it happened."""
         self.obs.append((yaw, pitch))
-        if len(self.obs) >= self.MIN_OBS and len(self.obs) % 15 == 0:
+        if len(self.obs) == self.MIN_OBS and not self.adapted:
+            self.adapted = True
             ys = np.array([o[0] for o in self.obs]); ps = np.array([o[1] for o in self.obs])
             y_lo, y_hi = np.percentile(ys, [3, 97]); p_lo, p_hi = np.percentile(ps, [3, 97])
             centre = ((y_lo + y_hi) / 2, (p_lo + p_hi) / 2)
@@ -120,8 +124,7 @@ class Coverage:
                     min(REQ_AXES[1], max(self.MIN_AXES[1], self.SPAN_FACTOR * (p_hi - p_lo))))
             centre = (float(np.clip(centre[0], YAW_EDGES[0] + axes[0], YAW_EDGES[-1] - axes[0])),
                       float(np.clip(centre[1], PITCH_EDGES[0] + axes[1], PITCH_EDGES[-1] - axes[1])))
-            self.centre = (0.5 * self.centre[0] + 0.5 * centre[0], 0.5 * self.centre[1] + 0.5 * centre[1])
-            self.axes = (0.5 * self.axes[0] + 0.5 * axes[0], 0.5 * self.axes[1] + 0.5 * axes[1])
+            self.centre, self.axes = centre, axes
             self._rebuild()
 
     def add(self, yaw: float, pitch: float, weight: float = 0.5) -> None:

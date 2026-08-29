@@ -73,6 +73,21 @@ class SfmTests(unittest.TestCase):
         self.assertLess(rms_yaw, 3.0, f"yaw rms {rms_yaw:.2f}")
         self.assertLess(rms_pitch, 3.0, f"pitch rms {rms_pitch:.2f}")
 
+    def test_mirrored_shape_is_repaired(self):
+        S = np.array([TRUE[k] for k in sfm.RIGID_IDX], dtype=np.float64)
+        for axis in (0, 2):
+            M = S.copy(); M[:, axis] *= -1
+            fixed = sfm.fix_chirality(M)
+            np.testing.assert_allclose(fixed, S)
+        # a mirrored model must never survive personal_model(): yaw sign would flip
+        tracks, angles, _ = synth_tracks(seed=3)
+        cal = sfm.calibrate(tracks, W, H)
+        i36, i45, i30, i39 = (sfm.RIGID_IDX.index(k) for k in (36, 45, 30, 39))
+        self.assertLess(cal.shape3d[i36, 0], cal.shape3d[i45, 0])
+        self.assertGreater(cal.shape3d[i30, 2], cal.shape3d[i36, 2])
+        pp = pose.estimate(tracks[0], W, H, shape3d=cal.shape3d)
+        self.assertAlmostEqual(pp.yaw, angles[0][0], delta=3)
+
     def test_needs_enough_frames(self):
         tracks, _, _ = synth_tracks(n=10)
         with self.assertRaises(sfm.CalibrationError):
