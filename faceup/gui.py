@@ -184,7 +184,7 @@ class _Sampler:
 PANEL_H = 110
 
 
-def _coverage_panel(width: int, cov, current, target) -> np.ndarray:
+def _coverage_panel(width: int, cov, current, target, sgn: float = 1.0) -> np.ndarray:
     """Heatmap of (yaw, pitch) coverage: the required ellipse outlined, covered areas green,
     uncovered required areas orange, the current pose as a dot, the next target as a ring."""
     m = np.minimum(cov.map / cov.FULL, 1.0)                          # rows = pitch (low→high), cols = yaw
@@ -197,6 +197,8 @@ def _coverage_panel(width: int, cov, current, target) -> np.ndarray:
                             + np.array([[90, 190, 90]]) * m[req & (m < 1.0)][:, None]).astype(np.uint8)
     img[~req] = (img[~req] * 0.45).astype(np.uint8)
     img = cv2.flip(img, 0)                                            # pitch "up" at the top
+    if sgn < 0:
+        img = cv2.flip(img, 1)                                        # mirror: user's left on the left
     panel = cv2.resize(img, (width, PANEL_H), interpolation=cv2.INTER_LINEAR)
 
     def to_px(yaw, pitch):
@@ -204,8 +206,8 @@ def _coverage_panel(width: int, cov, current, target) -> np.ndarray:
         y = (posemod.PITCH_EDGES[-1] - pitch) / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * PANEL_H
         return int(np.clip(x, 4, width - 4)), int(np.clip(y, 4, PANEL_H - 4))
 
-    # ellipse outline of the required region
-    cx, cy = to_px(*posemod.REQ_CENTRE)
+    # ellipse outline of the required region (centre mirrored with everything else)
+    cx, cy = to_px(sgn * posemod.REQ_CENTRE[0], posemod.REQ_CENTRE[1])
     ax = int(posemod.REQ_AXES[0] / (posemod.YAW_EDGES[-1] - posemod.YAW_EDGES[0]) * width)
     ay = int(posemod.REQ_AXES[1] / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * PANEL_H)
     cv2.ellipse(panel, (cx, cy), (ax, ay), 0, 0, 360, (230, 230, 230), 1, cv2.LINE_AA)
@@ -271,7 +273,12 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
              "sampler": sampler, "restarts": 0,
              "filter": posemod.PoseFilter(), "neutral": None, "neutral_samples": [], "neutral_t0": None,
              "tracks": [], "fast_poses": [], "shape3d": (np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None),
-             "coverage": posemod.Coverage(), "t_complete": None}
+             "coverage": posemod.Coverage(), "t_complete": None,
+             "lmfilter": posemod.LandmarkFilter(), "stability": posemod.Stability()}
+    # Mirror convention for everything the user sees: the preview is mirrored, so "left" on the
+    # panel and in the hints must be the USER's left. Camera yaw is negative when the nose moves
+    # camera-left, i.e. when the user turns to THEIR right → display yaw = −camera yaw.
+    sgn = -1.0 if mirror else 1.0
     NEUTRAL_SAMPLES = 30          # ~1 s of face at 30 fps
     probe = cap.read_one(primary, flush=0)
     ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
@@ -310,10 +317,11 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         prev_pose = state["prev_pose"]
         calibrating = state["neutral"] is None
         if box is not None and box.w >= MIN_ENROLL_FACE_PX and light_state != "dark":
-            lm68 = models.landmarks68(gray_n, box)
+            now = time.monotonic()
+            sbox = state["lmfilter"].smooth_box(box, now)
+            lm68 = state["lmfilter"](models.landmarks68(gray_n, sbox), now)
             raw = posemod.estimate(lm68, w, h, shape3d=state["shape3d"])
             if raw is not None:
-                now = time.monotonic()
                 if len(state["tracks"]) < MAX_TRACKS:
                     state["tracks"].append(lm68.astype(np.float32))
                     state["fast_poses"].append((raw.yaw, raw.pitch))
@@ -330,8 +338,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                 else:
                     ny, npch = state["neutral"]
                     current = posemod.Pose(filt.yaw - ny, filt.pitch - npch, filt.roll)
-                stable = prev_pose is not None and abs(current.yaw - prev_pose.yaw) < STABLE_DEG \
-                    and abs(current.pitch - prev_pose.pitch) < STABLE_DEG
+                stable = state["stability"].push(current)
                 state["prev_pose"] = current
                 cell = current.cell()
                 cov = state["coverage"]
@@ -355,7 +362,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                             sampled = True
         else:
             state["prev_pose"] = None
-            state["filter"].reset()
+            state["filter"].reset(); state["lmfilter"].reset(); state["stability"].reset()
         prof.lap("pose+sample")
         absorb(sampler.drain())
         if not sampler.alive and state["restarts"] < 2:
@@ -365,6 +372,8 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         cov = state["coverage"]
         target = None if calibrating else cov.target(current.yaw if current else None, current.pitch if current else None)
         frac = cov.fraction()
+        disp_current = posemod.Pose(sgn * current.yaw, current.pitch, sgn * current.roll) if current else None
+        disp_target = (sgn * target[0], target[1]) if target else None
         if frac >= 0.97 and state["t_complete"] is None:
             state["t_complete"] = time.monotonic()
 
@@ -383,14 +392,14 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             n = len(state["neutral_samples"])
             _text(img, f"Look at the centre of the screen naturally... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
         else:
-            _text(img, _hint(current, target, box), (10, 24), 0.62)
+            _text(img, _hint(disp_current, disp_target, box), (10, 24), 0.62)
         n_models = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
         status = f"coverage {frac * 100:3.0f}% | {n_models} poses stored | {primary.upper()} {q.mean:.0f}{(' face ' + light_state) if light_state else ''} | {state['fps']:.0f} fps"
         if current is not None:
-            status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f} roll {current.roll:+.0f}"
+            status += f" | yaw {sgn * current.yaw:+.0f} pitch {current.pitch:+.0f} roll {sgn * current.roll:+.0f}"
         _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
         _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
-        canvas = np.vstack([img, _coverage_panel(w, cov, current, target)])
+        canvas = np.vstack([img, _coverage_panel(w, cov, disp_current, disp_target, sgn)])
         prof.lap("draw")
         prof.frame()
         if state["t_complete"] and time.monotonic() - state["t_complete"] > 3:
