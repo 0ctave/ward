@@ -274,7 +274,8 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
              "filter": posemod.PoseFilter(), "neutral": None, "neutral_samples": [], "neutral_t0": None,
              "tracks": [], "fast_poses": [], "shape3d": (np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None),
              "coverage": posemod.Coverage(), "t_complete": None,
-             "lmfilter": posemod.LandmarkFilter(), "stability": posemod.Stability()}
+             "lmfilter": posemod.LandmarkFilter(), "stability": posemod.Stability(),
+             "neutral_ratio_samples": [], "neutral_ratios": None}
     # Mirror convention for everything the user sees: the preview is mirrored, so "left" on the
     # panel and in the hints must be the USER's left. Camera yaw is negative when the nose moves
     # camera-left, i.e. when the user turns to THEIR right → display yaw = −camera yaw.
@@ -320,24 +321,33 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             now = time.monotonic()
             sbox = state["lmfilter"].smooth_box(box, now)
             lm68 = state["lmfilter"](models.landmarks68(gray_n, sbox), now)
-            raw = posemod.estimate(lm68, w, h, shape3d=state["shape3d"])
+            raw = posemod.estimate(lm68, w, h, shape3d=state["shape3d"], neutral=state.get("neutral_ratios"))
             if raw is not None:
                 if len(state["tracks"]) < MAX_TRACKS:
                     state["tracks"].append(lm68.astype(np.float32))
                     state["fast_poses"].append((raw.yaw, raw.pitch))
                 filt = state["filter"](raw, now)
                 if calibrating:
-                    # neutral pose: the user looking at the screen naturally. The camera sits above
-                    # the eyes, so "level" reads as pitch +10..+20 — the grid is made relative to this.
+                    # Neutral pose = the user looking at the screen naturally. Generic path: the
+                    # user's own landmark RATIOS become the zero point (the inversion then stays in
+                    # its linear region for every face). Personal-model path: angle offsets.
                     state["neutral_samples"].append((filt.yaw, filt.pitch))
+                    state["neutral_ratio_samples"].append(posemod.ratios(lm68, filt.roll))
                     if len(state["neutral_samples"]) >= NEUTRAL_SAMPLES:
                         ys = sorted(a for a, _ in state["neutral_samples"]); ps = sorted(b for _, b in state["neutral_samples"])
                         state["neutral"] = (ys[len(ys) // 2], ps[len(ps) // 2])
+                        keys = set().union(*[set(r) for r in state["neutral_ratio_samples"]])
+                        med = {k: float(np.median([r[k] for r in state["neutral_ratio_samples"] if k in r])) for k in keys}
+                        state["neutral_ratios"] = posemod.Neutral(med)
+                        st.calib["neutral_ratios"] = {k: round(v, 5) for k, v in med.items()}
                         st.calib["pose_offset"] = [round(state["neutral"][0], 1), round(state["neutral"][1], 1)]
+                        state["filter"].reset(); state["stability"].reset()
                     current = posemod.Pose(0.0, 0.0, filt.roll)      # dot sits in the centre while calibrating
-                else:
+                elif state["shape3d"] is not None:
                     ny, npch = state["neutral"]
                     current = posemod.Pose(filt.yaw - ny, filt.pitch - npch, filt.roll)
+                else:
+                    current = filt                                     # already relative: estimated with the neutral ratios
                 stable = state["stability"].push(current)
                 state["prev_pose"] = current
                 cell = current.cell() or posemod.nearest_cell(current.yaw, current.pitch)

@@ -171,36 +171,84 @@ def roll_from_eyes(landmarks68: np.ndarray) -> float:
     return float(np.degrees(np.arctan2(re[1] - le[1], re[0] - le[0])))
 
 
-def yaw_from_ratio(landmarks68: np.ndarray, roll_deg: float) -> float | None:
-    """Yaw from where the nose tip sits horizontally between the eyes and between the mouth corners.
+# Generic-model geometry behind each cue (mm): depth of the reference line below the nose tip
+# and its span. r = (depth/span)·tan(angle) under orthography.
+_CUES = {
+    "yaw_eyes":  (135.0, 450.0),    # eye line z=-135, outer-corner span 450
+    "yaw_mouth": (125.0, 300.0),    # mouth corners z=-125, span 300
+    "yaw_wings": (50.0, 90.0),      # nose wings z=-50, span 90 — local, pitch-insensitive
+}
+_PITCH_R0 = 170.0 / 320.0           # nose-tip position between eye and mouth lines at neutral (generic)
 
-    The nose protrudes in front of both lines (eyes: z=−135, mouth: z=−125 in the generic model),
-    so turning the head shifts its projected tip sideways:  r_eyes = (nose_x − eyes_mid_x)/eye_span
-    = (135/450)·tan ψ,  r_mouth = (nose_x − mouth_mid_x)/mouth_span = (125/300)·tan ψ.
-    Chin-free, distance-independent; the two references are averaged. Measured in image axes on
-    purpose: the projected eye line tilts under combined yaw+pitch (apparent roll), and
-    de-rotating by it *worsens* yaw (synthetic sweep: rms 5.2° → 4.1° without de-rotation). A
-    gain of YAW_GAIN corrects the orthographic formula's compression under perspective
-    (rms 1.6°, max 4° over ±35° yaw × −20…+12° pitch)."""
+
+def ratios(landmarks68: np.ndarray, roll_deg: float) -> dict[str, float]:
+    """Raw geometric ratios from the landmarks (pitch de-rotated by roll; yaw cues in image axes —
+    see yaw notes). All chin-free, distance-independent."""
     lm = landmarks68
-    le = lm[36:42].mean(axis=0); re = lm[42:48].mean(axis=0)
-    ml = lm[48]; mr = lm[54]; nose = lm[30]
+    out: dict[str, float] = {}
+    le = lm[36:42].mean(axis=0); re = lm[42:48].mean(axis=0); nose = lm[30]
+    ml, mr = lm[48], lm[54]
+    wl, wr = lm[31], lm[35]
+    for key, (a, b) in (("yaw_eyes", (le, re)), ("yaw_mouth", (ml, mr)), ("yaw_wings", (wl, wr))):
+        span = b[0] - a[0]
+        if abs(span) > 1e-3:
+            out[key] = float((nose[0] - (a[0] + b[0]) / 2) / span)
+    th = np.deg2rad(-roll_deg)
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    e, m, n = (R @ (v - le) for v in ((le + re) / 2, (ml + mr + lm[51] + lm[57]) / 4, nose))
+    span = m[1] - e[1]
+    if abs(span) > 1e-3:
+        out["pitch"] = float((n[1] - e[1]) / span)
+    return out
+
+
+@dataclass
+class Neutral:
+    """The user's own ratios at their neutral pose (median over the calibration frames)."""
+    r: dict[str, float]
+
+    def as_offsets(self) -> tuple[float, float]:
+        """Equivalent angle offsets for display/report: what the generic mapping would have said."""
+        p = angles_from_ratios(self.r)
+        return (p.yaw, p.pitch) if p else (0.0, 0.0)
+
+
+def _pitch_from_r(r: float) -> float:
+    dy, dz = _EYE_Y - _MOUTH_Y, _EYE_Z - _MOUTH_Z
+    return float(np.degrees(np.arctan2(_EYE_Y - r * dy, r * dz - _EYE_Z)))
+
+
+def angles_from_ratios(r: dict[str, float], neutral: "Neutral | None" = None) -> Pose | None:
+    """Invert the ratios into angles. With `neutral`, each ratio is first shifted so the user's
+    neutral maps onto the generic model's neutral — the inversion then works in its linear
+    region for every user instead of after a large angle offset. Roll must be added by the caller."""
     ests = []
-    eye_span = re[0] - le[0]
-    if abs(eye_span) > 1e-3:
-        r = (nose[0] - (le[0] + re[0]) / 2) / eye_span
-        ests.append(np.degrees(np.arctan(r / (135.0 / 450.0))))
-    mouth_span = mr[0] - ml[0]
-    if abs(mouth_span) > 1e-3:
-        r = (nose[0] - (ml[0] + mr[0]) / 2) / mouth_span
-        ests.append(np.degrees(np.arctan(r / (125.0 / 300.0))))
-    return float(np.mean(ests)) * YAW_GAIN if ests else None
+    for key, (depth, span) in _CUES.items():
+        if key not in r:
+            continue
+        val = r[key]
+        if neutral is not None and key in neutral.r:
+            val = val - neutral.r[key]              # generic neutral yaw ratio is 0 (symmetric face)
+        ests.append(np.degrees(np.arctan(val / (depth / span))))
+    if not ests or "pitch" not in r:
+        return None
+    yaw = float(np.mean(ests)) * YAW_GAIN
+    pr = r["pitch"]
+    if neutral is not None and "pitch" in neutral.r:
+        pr = pr - neutral.r["pitch"] + _PITCH_R0
+    return Pose(yaw, _pitch_from_r(pr), 0.0)
+
+
+def yaw_from_ratio(landmarks68: np.ndarray, roll_deg: float) -> float | None:
+    p = angles_from_ratios(ratios(landmarks68, roll_deg))
+    return p.yaw if p else None
 
 
 YAW_GAIN = 1.2
 
 
-def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int, shape3d: np.ndarray | None = None) -> Pose | None:
+def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int, shape3d: np.ndarray | None = None,
+             neutral: "Neutral | None" = None) -> Pose | None:
     """Head pose. With `shape3d` (the user's personal rigid-landmark model from sfm.calibrate) all
     three angles come from a 13-point PnP against the user's own geometry; without it, yaw/roll
     come from the generic 6-point PnP and pitch from the chin-free nose-ratio proxy."""
@@ -219,13 +267,12 @@ def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int, shape3d: np.nd
         elif pitch < -90:
             pitch += 180
         return Pose(yaw, -pitch, roll)
-    # generic path: no PnP at all — every angle from chin-free landmark geometry
+    # generic path: no PnP at all — every angle from chin-free landmark geometry, in ratio space
     roll = roll_from_eyes(landmarks68)
-    yaw = yaw_from_ratio(landmarks68, roll)
-    pitch = pitch_from_ratio(landmarks68, roll)
-    if yaw is None or pitch is None:
+    p = angles_from_ratios(ratios(landmarks68, roll), neutral)
+    if p is None:
         return None
-    return Pose(yaw, pitch, roll)
+    return Pose(p.yaw, p.pitch, roll)
 
 
 def smooth(prev: Pose | None, new: Pose, alpha: float = 0.7) -> Pose:
