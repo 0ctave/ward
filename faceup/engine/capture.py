@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from . import brightness
+
 CAPTURE_WIDTH = 640   # RGB cameras are asked for this size; IR streams are usually already small
 TARGET_FPS = 30       # ask every camera for its fastest common mode (IR modules default to 15)
 SYNC_TOLERANCE_MS = 40
@@ -107,6 +109,8 @@ class Capture:
             if not cap.isOpened():
                 raise CaptureError(f"cannot open {spectrum} camera {path} (busy?)")
             if spectrum == "rgb":
+                # MJPG keeps 30 fps at any size; raw YUYV drops to 5–10 fps above VGA on USB 2
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_WIDTH)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_WIDTH * 9 // 16)
             # NOTE: never set CAP_PROP_BUFFERSIZE=1 here — on UVC IR modules it halves the
@@ -115,7 +119,9 @@ class Capture:
             self.caps[spectrum] = cap
         if not self.caps:
             raise CaptureError("no camera configured")
+        self.exposure: dict[str, brightness.Exposure] = {}
         for spectrum, cap in self.caps.items():
+            self.exposure[spectrum] = brightness.Exposure(cap, spectrum)
             r = _Reader(spectrum, cap)
             r.start()
             self.readers[spectrum] = r
@@ -159,6 +165,14 @@ class Capture:
         self._seen[spectrum] = seq
         return fr
 
+    def meter(self, spectrum: str, gray: np.ndarray, box) -> brightness.FaceLight:
+        """Meter the face and, if this camera accepts manual exposure, steer it toward the target."""
+        light = brightness.meter(gray, box)
+        ctl = self.exposure.get(spectrum)
+        if ctl is not None:
+            ctl.steer(light)
+        return light
+
     def warm_up(self, n: int = 3) -> None:
         """Wait until every camera has delivered n frames."""
         for spectrum, r in self.readers.items():
@@ -171,6 +185,8 @@ class Capture:
             r.stop = True
         for r in self.readers.values():
             r.join(timeout=1.0)
+        for ctl in self.exposure.values():
+            ctl.restore()                      # leave the camera as we found it
         for cap in self.caps.values():
             cap.release()
         self.caps.clear(); self.readers.clear()

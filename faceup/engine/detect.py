@@ -59,11 +59,12 @@ def yunet_available() -> bool:
 class Models:
     """detector: "yunet" (default: fast AND pose-robust), "hog" (frontal only), "cnn" (slow)."""
 
-    def __init__(self, detector: str = "yunet", max_height: int = 320):
+    def __init__(self, detector: str = "yunet", max_height: int = 320, accel: str = "cpu"):
         if detector == "yunet" and not yunet_available():
             detector = "hog"
         self.detector_kind = detector
         self.max_height = max_height
+        self.accel = accel
         self._hog = dlib.get_frontal_face_detector()
         self._yunet = None
         self._yunet_size = None
@@ -103,7 +104,9 @@ class Models:
         s = min(1.0, YUNET_WIDTH / W)
         size = (int(round(W * s)), int(round(H * s)))
         if self._yunet is None:
-            self._yunet = cv2.FaceDetectorYN_create(str(YUNET_MODEL), "", size, YUNET_SCORE, 0.3, 500)
+            from .. import hw
+            backend, target = hw.dnn_target(self.accel)
+            self._yunet = cv2.FaceDetectorYN_create(str(YUNET_MODEL), "", size, YUNET_SCORE, 0.3, 500, backend, target)
             self._yunet_size = size
         elif size != self._yunet_size:
             self._yunet.setInputSize(size); self._yunet_size = size

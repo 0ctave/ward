@@ -47,9 +47,46 @@ Detected at setup and at every attempt (cheap V4L2 ioctls). The engine adapts; n
 
 IR detection rule: a capture node whose format set is a subset of `{GREY, Y8, Y10, Y12, Y16}`. Emitter presence is not detectable a priori; §7.3 measures it.
 
-**Identification.** `/dev/videoN` numbers are assigned in enumeration order and change whenever the module re-enumerates (observed: RGB 0 → 1, IR 2 → 4 after a reconnect). The config therefore stores a **stable identity** — `usb:<vendor>:<product>:<interface>` read from sysfs (one physical module exposes its RGB and IR sensors as different USB interfaces, here `00` and `02`) — and every command resolves it to today's path at start (`cameras.resolve`). The pixel format is the role check: an id that resolves to a colour stream is refused as the IR camera. Legacy `/dev` specs are honoured while they exist and self-heal to the same-role camera with a warning; `auto` picks by role. Non-USB cameras fall back to `name:<driver name>`.
+**Identification.** `/dev/videoN` numbers are assigned in enumeration order and change whenever the module re-enumerates (observed: RGB 0 → 1, IR 2 → 4 after a reconnect). The config therefore stores a **stable identity** — `usb:<vendor>:<product>:<interface>` read from sysfs (one physical module exposes its RGB and IR sensors as different USB interfaces, here `00` and `02`) — and every command resolves it to today's path at start (`cameras.resolve`). The pixel format is the role check: an id that resolves to a colour stream is refused as the IR camera. Legacy `/dev` specs are honoured while they exist and self-heal to the same-role camera with a warning; `auto` picks by role.
+
+Generality rules (`cameras.py`, all unit-tested on synthetic device lists):
+- **USB:** `usb:<vid>:<pid>:<iface>`, plus `:<serial>` when the device reports a real one (identical webcams are told apart by serial; devices with generic serials such as `01.00.00` by `@<port>`, which setup appends only when a twin is connected).
+- **PCI / platform sensors** (MIPI cameras): `pci:<address>:<node name>` / `platform:<name>:<node name>` from sysfs.
+- **IR role:** greyscale-only formats (GREY/Y8/Y10/Y12/Y16), or a greyscale format without MJPG, or a device name containing IR/infrared/depth. Modules that stream IR as YUYV: `cameras.force_roles = true` trusts the configured assignment.
+- **Pair selection:** the RGB sensor on the *same physical module* as the IR sensor beats an external webcam of higher resolution.
+- **Unusable nodes** are reported, not hidden: no permission (`video` group), and PCI/platform sensors that expose no V4L2 capture format (IPU6/rkisp behind a media controller — need libcamera/PipeWire, unsupported for now). Metadata nodes are filtered silently.
+- **Capture:** MJPG is requested on colour cameras (YUYV falls to 5–10 fps above VGA on USB 2); any resolution and aspect ratio is accepted downstream.
 
 Cross-spectrum calibration (profile A): the two lenses are a fixed few millimetres apart. During enrollment the engine records the mean offset and scale between the IR and RGB face boxes (`calib.dx, dy, s`). At auth time boxes must agree within a tolerance after applying the calibration (§7.1).
+
+### 3a. Hardware profile and brightness management
+
+**Profile** (`faceup/hw.py`, shown by `doctor`): CPU model, threads, AVX2; OpenCV version and
+whether an OpenCL runtime is present (then `recognition.accel = "opencl"` runs the DNN models
+on the GPU — opt-in, because for a 4 ms model the dispatch cost usually exceeds the gain);
+dlib build flags; power profile (power-saver is reported: everything runs ~1.5–2× slower);
+per-camera exposure capabilities. The engine sets OpenCV's thread count from it.
+
+**Brightness** (`engine/brightness.py`), camera-agnostic, in three layers:
+
+1. *Meter the face, not the frame.* Once a face is detected, its inner region is measured
+   (mean, p5, p95) and classified `dark / dim / ok / bright / blown` per spectrum. Room
+   light, windows and dark desks no longer decide whether a frame is usable; the frame-level
+   gate only remains for frames with no face at all.
+2. *Steer exposure when the camera allows it.* On open, each camera is probed for manual
+   exposure (V4L2 via OpenCV: `AUTO_EXPOSURE`, `EXPOSURE`, `GAIN`) and put back on auto.
+   When the face leaves the target band and auto-exposure cannot fix it, faceup takes over
+   with bounded proportional steps (≤ 1.6× per step, ≤ 4 steps/s) and restores the original
+   settings on close. Cameras that run auto-exposure in firmware and expose no controls (the
+   reference IR module) are left alone. Reference laptop: IR = firmware auto only, RGB =
+   manual control available.
+3. *Normalise in software* what is still dim or blown out: CLAHE, plus a gamma lift for dark
+   frames, applied to luminance only and deterministically from the frame's own mean — so
+   enrollment and authentication apply the same transform. Identity for frames in range.
+
+**Adaptive spectrum.** IR is preferred, but when its face is dark/unusable for three
+consecutive sets (emitter off, out of LED range) while the RGB face is in range, RGB carries
+that attempt; cross-spectrum abstains rather than fails when the other camera is dark.
 
 ## 4. Architecture
 

@@ -18,10 +18,10 @@ LOG_PATH = Path(os.environ.get("FACEUP_LOG", "/var/log/faceup.log"))
 ANTISPOOF_MODEL = ETC / "antispoof.onnx"
 
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "cameras": {"ir": "", "rgb": "", "ir_dark_threshold": 25, "rgb_dark_threshold": 40},
+    "cameras": {"ir": "", "rgb": "", "ir_dark_threshold": 25, "rgb_dark_threshold": 40, "force_roles": False},
     "recognition": {
         "certainty": 0.40, "rgb_certainty": 0.38, "fusion_frames": 4,
-        "require_rgb_match": False, "detector": "yunet", "max_height": 320,
+        "require_rgb_match": False, "detector": "yunet", "max_height": 320, "accel": "cpu",
     },
     "liveness": {
         "required_votes": 2, "cross_spectrum": True, "antispoof_cnn": True,
@@ -111,7 +111,7 @@ def camera_paths(cfg: dict) -> tuple[dict[str, str], list[str]]:
     cams = cameras.list_cameras()
     out, notes = {}, []
     for role in ("ir", "rgb"):
-        path, note = cameras.resolve(cfg["cameras"][role], role, cams)
+        path, note = cameras.resolve(cfg["cameras"][role], role, cams, force=bool(cfg["cameras"].get("force_roles")))
         if path:
             out[role] = path
         if note:

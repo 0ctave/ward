@@ -52,11 +52,15 @@ def cmd_doctor(args) -> int:
     user = real_user(args)
 
     ui.section("Cameras")
-    cams = cameras.list_cameras()
-    if not cams:
-        ui.fail("no capture-capable /dev/video* device"); problems += 1
+    cams, unusable = cameras.list_cameras(include_unusable=True)
+    if not cams and not unusable:
+        ui.fail("no /dev/video* device at all — no camera driver bound (check `lsusb` / `dmesg | grep -i video`)"); problems += 1
+    elif not cams:
+        ui.fail("no usable camera"); problems += 1
     for c in cams:
-        (ui.ok if c.is_ir else ui.info)(f"{c.describe()}   id {c.identity}")
+        (ui.ok if c.is_ir else ui.info)(f"{c.describe()}   id {c.identity}  [{c.driver or c.kind}]")
+    for u in unusable:
+        ui.warn(f"{u.path}  {u.name}: {u.reason}"); problems += 1
     ir = [c for c in cams if c.is_ir]
     paths, notes = cfgmod.camera_paths(cfg)
     if cfgmod.CONFIG_PATH.exists():
@@ -96,6 +100,22 @@ def cmd_doctor(args) -> int:
                 ui.info("configuration state unknown (run as root to check)")
             else:
                 ui.ok("a device is configured")
+
+    ui.section("Hardware")
+    from . import hw
+    hp = hw.profile()
+    ui.info(f"{hp.cpu} · {hp.cores} threads · AVX2 {'yes' if hp.avx2 else 'no'} · OpenCV {hp.opencv} · OpenCL {('yes: ' + hp.opencl_device) if hp.opencl else 'no'}")
+    for c in cams:
+        try:
+            import cv2
+            capx = cv2.VideoCapture(int(c.path.replace('/dev/video', '')), cv2.CAP_V4L2)
+            from .engine.brightness import Exposure
+            e = Exposure(capx, c.role); desc = e.describe(); e.restore(); capx.release()
+            ui.info(f"{c.path} ({c.role}): {desc}")
+        except Exception as ex:
+            ui.info(f"{c.path}: exposure controls unknown ({ex})")
+    for n in hp.notes:
+        ui.warn(n)
 
     ui.section("Engine")
     py, dlib_ok = probe.python_shadowed()
@@ -417,12 +437,13 @@ def cmd_setup(args) -> int:
 
     ui.section("1/6 Cameras")
     for c in cams: ui.info(c.describe())
-    ir = [c for c in cams if c.is_ir]
-    rgb = [c for c in cams if not c.is_ir]
-    cfg["cameras"]["ir"] = ir[0].identity if ir else ""
-    if rgb:
-        best = max(rgb, key=lambda c: c.max_size[0] * c.max_size[1])
-        cfg["cameras"]["rgb"] = best.identity
+    ir_cam, rgb_cam = cameras.pick_pair(cams)
+    ir = [ir_cam] if ir_cam else []
+    rgb = [rgb_cam] if rgb_cam else []
+    cfg["cameras"]["ir"] = cameras.spec_for(ir_cam, cams) if ir_cam else ""
+    cfg["cameras"]["rgb"] = cameras.spec_for(rgb_cam, cams) if rgb_cam else ""
+    if not ir_cam:
+        ui.info("No IR camera detected. If this laptop has one that streams as YUYV, set cameras.ir to its id and cameras.force_roles = true.")
     profile = "A (IR + RGB)" if ir and rgb else "B (IR only)" if ir else "C (RGB only)"
     ui.ok(f"profile {profile}: ir={cfg['cameras']['ir'] or '-'} rgb={cfg['cameras']['rgb'] or '-'}  (stable USB ids; /dev numbers may change)")
     if ir and rgb and not ui.confirm("Use both cameras? (recommended: IR for recognition, RGB for liveness)", default=True):
