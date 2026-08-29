@@ -49,6 +49,7 @@ def user_wayland_env() -> dict[str, str]:
 # ------------------------------------------------------------------ GTK ----
 class GtkDisplay:
     name = "gtk4-wayland"
+    snapshot = False          # consumes pre-drawn canvases
 
     def __init__(self, title: str, width: int, height: int):
         for k, v in user_wayland_env().items():
@@ -143,6 +144,7 @@ class GtkDisplay:
 # --------------------------------------------------------------- OpenCV ----
 class Cv2Display:
     name = "opencv-qt"
+    snapshot = False
 
     def __init__(self, title: str, width: int, height: int):
         import cv2
@@ -180,13 +182,25 @@ class Cv2Display:
             cv2.destroyAllWindows(); cv2.waitKey(1)
 
 
-def open_display(title: str, width: int, height: int, prefer: str = "gtk"):
-    """Native GTK4/Wayland first, OpenCV HighGUI second. Raises DisplayUnavailable if neither works."""
+def open_display(title: str, width: int, height: int, prefer: str = "gtk", kind: str = "raw", canvas=None, **kw):
+    """Open a window. kind="enroll" / "emitter": the libadwaita application windows (faceup.ui),
+    which consume snapshot dicts (`screen.snapshot` is True); kind="raw" or any fallback: a
+    canvas display (GTK4 picture, then OpenCV HighGUI). Raises DisplayUnavailable if nothing works."""
     errors = []
+    if kind in ("enroll", "emitter") and prefer == "gtk":
+        try:
+            from . import ui
+            cls = ui.EnrollWindow if kind == "enroll" else ui.EmitterWindow
+            return cls(title, width, height, **kw)
+        except DisplayUnavailable as e:
+            errors.append(f"adwaita: {e}")
+        except Exception as e:                       # PyGObject/Adw missing, CSS error…: fall back
+            errors.append(f"adwaita: {type(e).__name__}: {e}")
+    cw, ch = canvas or (width, height)          # fallback displays show the painted canvas
     order = [GtkDisplay, Cv2Display] if prefer == "gtk" else [Cv2Display, GtkDisplay]
     for cls in order:
         try:
-            return cls(title, width, height)
+            return cls(title, cw, ch)
         except DisplayUnavailable as e:
             errors.append(f"{cls.name}: {e}")
     raise DisplayUnavailable("; ".join(errors))

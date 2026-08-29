@@ -225,6 +225,27 @@ def _coverage_panel(width: int, cov, current, target, sgn: float = 1.0) -> np.nd
     return panel
 
 
+def _render_enroll(snap: dict, sgn: float) -> np.ndarray:
+    """Fallback rendering (OpenCV HighGUI / plain GTK picture): the snapshot painted onto a canvas."""
+    img = snap["frame"].copy()
+    h, w = img.shape[:2]
+    if snap["box"] is not None:
+        x, y, bw, bh = snap["box"]
+        cv2.rectangle(img, (x, y), (x + bw, y + bh), COL_OK if snap.get("sampled") else COL_CUR, 2)
+    if snap["phase"] == "calibrating":
+        _text(img, f"Look at the MIDDLE of the screen (not the camera)... calibrating {snap['calib_progress'] * 100:.0f}%", (10, 24), 0.62, COL_CUR)
+    else:
+        _text(img, snap["hint"], (10, 24), 0.62, (255, 120, 90) if snap["light"] == "dark" else COL_TXT)
+    status = (f"coverage {snap['fraction'] * 100:3.0f}%  {snap['n_models']} poses  {snap['spectrum'].upper()} {snap['ir_mean']:.0f}"
+              f"{(' face ' + snap['light']) if snap['light'] else ''}  {snap['fps']:.0f} fps  {snap['gate']}")
+    if snap["pose"]:
+        status += f"  yaw {snap['pose'][0]:+.0f} pitch {snap['pose'][1]:+.0f} roll {snap['pose'][2]:+.0f}"
+    _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
+    _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
+    cur = posemod.Pose(*snap["pose"]) if snap["pose"] else None
+    return np.vstack([img, _coverage_panel(w, snap["coverage"], cur, snap["target"], sgn)])
+
+
 def _hint(current, target, box=None, calibrating=False) -> str:
     if target is None:
         return "Coverage complete - press Enter to finish"
@@ -284,7 +305,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     probe = cap.read_one(primary, flush=0)
     ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
     try:
-        screen = disp.open_display(WIN, pw, ph + PANEL_H)
+        screen = disp.open_display(WIN, pw, ph, kind="enroll", sgn=sgn, canvas=(pw, ph + PANEL_H))
     except disp.DisplayUnavailable as e:
         sampler.close()
         raise GuiUnavailable(str(e))
@@ -418,30 +439,33 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         img = _canvas_of(fr)
         if mirror:
             img = cv2.flip(img, 1)
-        if box is not None:
-            bx = (w - box.x - box.w) if mirror else box.x
-            cv2.rectangle(img, (bx, box.y), (bx + box.w, box.y + box.h), COL_OK if sampled else COL_CUR, 2)
-        if light_state == "dark":
-            _text(img, "Face too dark - is the IR emitter on? (turn on a light to continue)", (10, 24), 0.62, (255, 120, 90))
-        elif calibrating:
-            n = len(state["neutral_samples"])
-            _text(img, f"Look at the MIDDLE of the screen (not the camera)... calibrating {min(n, NEUTRAL_SAMPLES)}/{NEUTRAL_SAMPLES}", (10, 24), 0.62, COL_CUR)
-        else:
-            _text(img, _hint(disp_current, disp_target, box), (10, 24), 0.62)
         n_models = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
-        gate = state.get("gate", "")
-        status = (f"coverage {frac * 100:3.0f}% | {n_models} poses | {primary.upper()} {q.mean:.0f}{(' face ' + light_state) if light_state else ''}"
-                  f" | {state['fps']:.0f} fps" + (f" | {gate}" if gate else " | sampling"))
-        if current is not None:
-            status += f" | yaw {sgn * current.yaw:+.0f} pitch {current.pitch:+.0f} roll {sgn * current.roll:+.0f}"
-        _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
-        _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
-        canvas = np.vstack([img, _coverage_panel(w, cov, disp_current, disp_target, sgn)])
+        n_cal = len(state["neutral_samples"])
+        snap = {
+            "frame": img,
+            "box": ((w - box.x - box.w) if mirror else box.x, box.y, box.w, box.h) if box is not None else None,
+            "pose": (disp_current.yaw, disp_current.pitch, disp_current.roll) if disp_current else None,
+            "target": disp_target,
+            "coverage": cov,
+            "fraction": frac,
+            "hint": ("Face too dark - is the IR emitter on? (turn on a light to continue)" if light_state == "dark"
+                     else _hint(disp_current, disp_target, box)),
+            "phase": "done" if state["t_complete"] else ("calibrating" if calibrating else "enrolling"),
+            "calib_progress": min(1.0, n_cal / NEUTRAL_SAMPLES),
+            "light": light_state,
+            "fps": state["fps"],
+            "n_models": n_models,
+            "gate": state.get("gate", "") or "sampling",
+            "ir_mean": q.mean,
+            "sampled": sampled,
+            "spectrum": primary,
+        }
+        out = snap if screen.snapshot else _render_enroll(snap, sgn)
         prof.lap("draw")
         prof.frame()
         if state["t_complete"] and time.monotonic() - state["t_complete"] > 3:
             state["finished"] = True
-        return canvas
+        return out
 
     try:
         screen.run(step)
@@ -493,13 +517,31 @@ def emitter_verdict(ir_mean: float, ir_face: bool, rgb_mean: float | None) -> tu
     return "dead", "EMITTER NOT FIRING: room dark and IR is dark too (%.0f)" % ir_mean
 
 
+def _render_emitter(snap: dict) -> np.ndarray:
+    left = snap["ir"].copy()
+    if snap["box"] is not None:
+        x, y, w, h = snap["box"]
+        cv2.rectangle(left, (x, y), (x + w, y + h), COL_OK, 2)
+    _text(left, "IR  mean %.0f" % snap["ir_mean"], (10, 24))
+    panels = [left]
+    if snap["rgb"] is not None:
+        right = cv2.resize(snap["rgb"], (left.shape[1], left.shape[0]))
+        _text(right, "RGB  mean %.0f" % snap["rgb_mean"], (10, 24))
+        panels.append(right)
+    canvas = np.hstack(panels)
+    col = {"ok": COL_OK, "dead": (230, 60, 60), "inconclusive": COL_REQ}.get(snap["state"], COL_TXT)
+    _text(canvas, snap["msg"], (10, canvas.shape[0] - 14), 0.55, col)
+    _text(canvas, "q = quit", (canvas.shape[1] - 80, 24), 0.45, (180, 180, 180))
+    return canvas
+
+
 def emitter_check(cap: Capture, models: Models, gui: bool = True, seconds: float = 0) -> tuple[str, str]:
     result = {"state": "unknown", "msg": ""}
     t_end = time.monotonic() + seconds if seconds else None
     screen = None
     if gui:
         try:
-            screen = disp.open_display(WIN, 1280, 360)
+            screen = disp.open_display(WIN, 640, 360, kind="emitter", canvas=(1280, 360))
         except disp.DisplayUnavailable:
             screen = None
 
@@ -519,20 +561,11 @@ def emitter_check(cap: Capture, models: Models, gui: bool = True, seconds: float
         if ev is None:
             return np.zeros((360, 1280, 3), np.uint8)
         ir, rgb, box = ev
-        left = _canvas_of(ir)
-        if box is not None:
-            cv2.rectangle(left, (box.x, box.y), (box.x + box.w, box.y + box.h), COL_OK, 2)
-        _text(left, "IR  mean %.0f" % ir.gray.mean(), (10, 24))
-        panels = [left]
-        if rgb is not None:
-            right = cv2.resize(_canvas_of(rgb), (left.shape[1], left.shape[0]))
-            _text(right, "RGB  mean %.0f" % rgb.gray.mean(), (10, 24))
-            panels.append(right)
-        canvas = np.hstack(panels)
-        col = {"ok": COL_OK, "dead": (230, 60, 60), "inconclusive": COL_REQ}.get(result["state"], COL_TXT)
-        _text(canvas, result["msg"], (10, canvas.shape[0] - 14), 0.55, col)
-        _text(canvas, "q = quit", (canvas.shape[1] - 80, 24), 0.45, (180, 180, 180))
-        return canvas
+        snap = {"ir": _canvas_of(ir), "rgb": _canvas_of(rgb) if rgb is not None else None,
+                "box": (box.x, box.y, box.w, box.h) if box is not None else None,
+                "ir_mean": float(ir.gray.mean()), "rgb_mean": float(rgb.gray.mean()) if rgb is not None else None,
+                "state": result["state"], "msg": result["msg"]}
+        return snap if screen.snapshot else _render_emitter(snap)
 
     if screen is not None:
         screen.run(step)
