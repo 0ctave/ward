@@ -337,13 +337,19 @@ over the 13 rigid landmarks (eye corners, nose bridge/base, mouth corners — no
 lids, lips or brows) recovers the user's own 3D geometry and the true rotation of every
 frame: Tomasi–Kanade factorization under scaled orthography → metric upgrade (least-squares
 on the rotation-row constraints) → similarity Procrustes alignment to the generic model's
-frame on the shared landmarks (reflection allowed; orthography cannot tell a face from its
-mirror image). `engine/sfm.py`; needs ≥ 40 frames.
+frame on the shared landmarks. Orthography cannot tell a face from its mirror image, and a
+mirrored model makes PnP return yaw with the wrong sign (observed on the reference user:
+"rms 36°" against the fast estimator), so after a first alignment that may include a
+reflection the chirality is checked on anatomy — left eye corner x < right, nose tip nearer
+the camera than the eye corners — flipped if needed, and the model re-aligned with a proper
+rotation. `engine/sfm.py`; needs ≥ 40 frames.
 
 The model (13 × 3 mm) is stored as `calib.shape3d` and from then on the live estimator runs a
 13-point PnP against the user's own face — all three angles, ~1 ms. A report compares the
-fast generic estimator to the personal model over the recorded frames (bias and rms per
-angle) and is printed after enrollment; `faceup calibrate` re-runs the solve from the saved
+fast generic estimator to the personal model over the recorded frames — as centred series,
+since the fast estimator is relative to the user's neutral and PnP is absolute: the slope
+(gain, 1.0 = same scale) and the residual after a linear fit, per angle — printed after
+enrollment; `faceup calibrate` re-runs the solve from the saved
 tracks (`<user>.tracks.npz`). Synthetic check (face with individual proportions, random poses ±35° yaw / −22…+18° pitch,
 1 px landmark noise, 150 frames): fit residual 1.9 px, recovered poses within 2.8° rms for
 both yaw and pitch, pitch bias −1.1°.
