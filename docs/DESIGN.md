@@ -47,6 +47,8 @@ Detected at setup and at every attempt (cheap V4L2 ioctls). The engine adapts; n
 
 IR detection rule: a capture node whose format set is a subset of `{GREY, Y8, Y10, Y12, Y16}`. Emitter presence is not detectable a priori; §7.3 measures it.
 
+**Identification.** `/dev/videoN` numbers are assigned in enumeration order and change whenever the module re-enumerates (observed: RGB 0 → 1, IR 2 → 4 after a reconnect). The config therefore stores a **stable identity** — `usb:<vendor>:<product>:<interface>` read from sysfs (one physical module exposes its RGB and IR sensors as different USB interfaces, here `00` and `02`) — and every command resolves it to today's path at start (`cameras.resolve`). The pixel format is the role check: an id that resolves to a colour stream is refused as the IR camera. Legacy `/dev` specs are honoured while they exist and self-heal to the same-role camera with a warning; `auto` picks by role. Non-USB cameras fall back to `name:<driver name>`.
+
 Cross-spectrum calibration (profile A): the two lenses are a fixed few millimetres apart. During enrollment the engine records the mean offset and scale between the IR and RGB face boxes (`calib.dx, dy, s`). At auth time boxes must agree within a tolerance after applying the calibration (§7.1).
 
 ## 4. Architecture
@@ -90,8 +92,8 @@ The v0.1 CLI (`doctor`, `enroll`, `tune`, `bench`, `emitter`) is kept and extend
 
 ```toml
 [cameras]
-ir  = "/dev/video2"        # "" = none
-rgb = "/dev/video0"
+ir  = "usb:30c9:0057:02"   # stable USB id (vendor:product:interface); "auto"; or a /dev path; "" = none
+rgb = "usb:30c9:0057:00"
 ir_dark_threshold  = 25    # mean brightness below → frame "dark"
 rgb_dark_threshold = 40
 

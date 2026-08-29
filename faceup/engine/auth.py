@@ -85,9 +85,12 @@ class Engine:
         if not st.models:
             return Outcome(False, "no-models", user)
 
-        devices = {s: cams[s] for s in ("ir", "rgb") if cams.get(s) and s in st.spectra()}
+        paths, notes = config.camera_paths(self.cfg)
+        for n in notes:
+            self.say(n)
+        devices = {s: paths[s] for s in ("ir", "rgb") if paths.get(s) and s in st.spectra()}
         if not devices:
-            return Outcome(False, "no-models", user, detail="no camera matches the enrolled spectra")
+            return Outcome(False, "camera", user, detail="; ".join(notes) or "no camera matches the enrolled spectra")
         primary = "ir" if "ir" in devices else "rgb"
         # load the dlib models before the camera opens so their cost overlaps nothing user-visible
         self.models.sp5; self.models.rec

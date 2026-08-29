@@ -33,7 +33,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 _COMMENTS = {
-    "cameras": "Device paths; empty string = no camera of that kind.",
+    "cameras": "Stable ids usb:<vid>:<pid>:<iface> (setup writes them), 'auto', or a /dev path; '' = none.",
     "recognition": "certainty = max embedding distance (dlib scale: 0.6 is 'same person', 0.40 is strict).",
     "liveness": "Voters return PASS/FAIL/ABSTAIN; `required_votes` PASSes and zero FAILs are needed.",
     "timing": "Milliseconds. settle_ms > 0 waits for auto-exposure before the window (not needed with YuNet).",
@@ -103,3 +103,17 @@ def set_key(cfg: dict, dotted: str, raw: str) -> Any:
         val = raw
     cfg[section][key] = val
     return val
+
+
+def camera_paths(cfg: dict) -> tuple[dict[str, str], list[str]]:
+    """Resolve the configured cameras to today's /dev paths. Returns ({role: path}, notes)."""
+    from .. import cameras
+    cams = cameras.list_cameras()
+    out, notes = {}, []
+    for role in ("ir", "rgb"):
+        path, note = cameras.resolve(cfg["cameras"][role], role, cams)
+        if path:
+            out[role] = path
+        if note:
+            notes.append(note)
+    return out, notes

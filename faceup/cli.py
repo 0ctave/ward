@@ -56,16 +56,21 @@ def cmd_doctor(args) -> int:
     if not cams:
         ui.fail("no capture-capable /dev/video* device"); problems += 1
     for c in cams:
-        (ui.ok if c.is_ir else ui.info)(c.describe())
+        (ui.ok if c.is_ir else ui.info)(f"{c.describe()}   id {c.identity}")
     ir = [c for c in cams if c.is_ir]
+    paths, notes = cfgmod.camera_paths(cfg)
     if cfgmod.CONFIG_PATH.exists():
-        ui.ok(f"config: ir = {cfg['cameras']['ir'] or '(none)'}, rgb = {cfg['cameras']['rgb'] or '(none)'}   ({cfgmod.CONFIG_PATH})")
+        ui.ok(f"config: ir = {cfg['cameras']['ir'] or '(none)'} → {paths.get('ir', '-')}, rgb = {cfg['cameras']['rgb'] or '(none)'} → {paths.get('rgb', '-')}")
+        for n in notes:
+            ui.warn(n); problems += 1
         if ir and not cfg["cameras"]["ir"]:
             ui.warn(f"an IR camera exists ({ir[0].path}) but is not configured"); problems += 1
+        if any(str(cfg["cameras"][r]).startswith("/dev/") for r in ("ir", "rgb")):
+            ui.warn("config stores /dev paths, which change when cameras re-enumerate — `sudo faceup setup` stores stable USB ids"); problems += 1
     else:
         ui.warn(f"no config yet ({cfgmod.CONFIG_PATH}) — run `sudo faceup setup`"); problems += 1
     for s in ("ir", "rgb"):
-        dev = cfg["cameras"][s]
+        dev = paths.get(s, "")
         if dev and os.path.exists(dev):
             L = probe.lighting(dev)
             line = f"{s} lighting now: mean {L.mean:.0f}/255 → {L.verdict}"
@@ -156,7 +161,8 @@ def cmd_doctor(args) -> int:
 # ------------------------------------------------------------------ bench ----
 def cmd_bench(args) -> int:
     cfg = cfgmod.load()
-    dev = args.device or cfg["cameras"]["ir"] or cfg["cameras"]["rgb"]
+    paths, _ = cfgmod.camera_paths(cfg)
+    dev = args.device or paths.get("ir") or paths.get("rgb")
     if not dev:
         d = cameras.pick_default(cameras.list_cameras()); dev = d.path if d else ""
     if not dev or not os.path.exists(dev):
@@ -208,9 +214,11 @@ def cmd_enroll(args) -> int:
     cfg = cfgmod.load()
     cams = cfg["cameras"]
     user = real_user(args)
-    devices = {s: cams[s] for s in ("ir", "rgb") if cams[s]}
+    devices, notes = cfgmod.camera_paths(cfg)
+    for n in notes:
+        ui.warn(n)
     if not devices:
-        ui.fail("no cameras configured — run `sudo faceup setup` first"); return 1
+        ui.fail("no configured camera is connected — run `sudo faceup setup`"); return 1
     ui.banner("pose-guided enrollment", f"for {user} on {' + '.join(devices)} — one model per pose and spectrum")
     st = storemod.load(user)
     if st.models:
@@ -411,12 +419,12 @@ def cmd_setup(args) -> int:
     for c in cams: ui.info(c.describe())
     ir = [c for c in cams if c.is_ir]
     rgb = [c for c in cams if not c.is_ir]
-    cfg["cameras"]["ir"] = ir[0].path if ir else ""
+    cfg["cameras"]["ir"] = ir[0].identity if ir else ""
     if rgb:
         best = max(rgb, key=lambda c: c.max_size[0] * c.max_size[1])
-        cfg["cameras"]["rgb"] = best.path
+        cfg["cameras"]["rgb"] = best.identity
     profile = "A (IR + RGB)" if ir and rgb else "B (IR only)" if ir else "C (RGB only)"
-    ui.ok(f"profile {profile}: ir={cfg['cameras']['ir'] or '-'} rgb={cfg['cameras']['rgb'] or '-'}")
+    ui.ok(f"profile {profile}: ir={cfg['cameras']['ir'] or '-'} rgb={cfg['cameras']['rgb'] or '-'}  (stable USB ids; /dev numbers may change)")
     if ir and rgb and not ui.confirm("Use both cameras? (recommended: IR for recognition, RGB for liveness)", default=True):
         cfg["cameras"]["rgb"] = ""
 
@@ -437,6 +445,7 @@ def cmd_setup(args) -> int:
         ui.info("no IR camera — skipped")
 
     ui.section("3/6 Detector")
+    paths, _ = cfgmod.camera_paths(cfg)
     from .engine.detect import yunet_available
     if yunet_available():
         cfg["recognition"]["detector"], cfg["recognition"]["max_height"] = "yunet", 320
@@ -508,7 +517,8 @@ def cmd_emitter(args) -> int:
         from .engine.detect import Models
         cfg = cfgmod.load()
         devices = {"ir": cam.path}
-        rgb = cfg["cameras"]["rgb"] or next((c.path for c in cameras.list_cameras() if not c.is_ir), "")
+        paths, _ = cfgmod.camera_paths(cfg)
+        rgb = paths.get("rgb") or next((c.path for c in cameras.list_cameras() if not c.is_ir), "")
         if rgb:
             devices["rgb"] = rgb
         ui.info("Turn the room lights OFF. If the colour camera sees darkness while the IR camera still sees your face, the emitter works.")
