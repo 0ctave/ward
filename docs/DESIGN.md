@@ -259,36 +259,43 @@ Over the window, take the 68-point landmarks of the first and last good frames (
 
 A camera window tracks the head and the user simply moves it around, as with Face ID:
 
-1. **Head pose per frame.** dlib's 68 landmarks → `cv2.solvePnP` against a generic 3D face
-   (nose tip, chin, eye corners, mouth corners) → **yaw / roll**. Verified on synthetic
-   projections to ±4°. **Pitch does not come from PnP**: that solution is dominated by the chin
-   landmark, dlib's least accurate one. Instead pitch is read from where the nose tip sits
-   between the eye line and the mouth line — the nose protrudes ~135 mm, so pitch shifts its
-   projection by ~0.75 % of the eye–mouth span per degree — inverted in closed form against the
-   same 3D model, using 12 eye + 4 mouth landmarks averaged. Independent of distance, position
-   in the frame and yaw (synthetic check: identical at yaw 0/±20°). Angles pass through a **One Euro filter** (min_cutoff 0.6 Hz, β 0.05):
+1. **Head pose per frame — no PnP in the generic path.** A 6-point PnP against a generic head
+   is dominated by the chin landmark, dlib's least accurate one, and couples position with
+   rotation. Instead every angle comes from chin-free landmark geometry, closed-form against the
+   generic 3D proportions: **pitch** from where the nose tip sits between the eye line and the
+   mouth line (the nose protrudes ~135 mm, so pitch shifts its projection by ~0.75 % of the
+   eye–mouth span per degree); **yaw** from where the nose tip sits horizontally between the
+   eyes and between the mouth corners (two references averaged, ×1.2 gain for the orthographic
+   formula's compression under perspective); **roll** from the eye line. All use averaged eye
+   sets (12 points) and mouth points. Synthetic sweep over ±35° yaw × −20…+12° pitch: yaw
+   1.6° rms (max 4°), pitch within 4°. Once the personal 3D model exists (8.1.2) a 13-point
+   PnP against the user's own geometry replaces this. Angles pass through a **One Euro filter** (min_cutoff 0.6 Hz, β 0.05):
    ±1.5° landmark noise becomes ≤1.3° peak-to-peak when still, while a 30° turn is followed
    within 0.5 s — no wiggle, no lag.
 1b. **Neutral calibration.** The first ~30 face frames (user looking at the screen naturally)
    define the neutral pose; the grid is relative to it. Laptop cameras sit above the eyes, so
    "looking at the screen" reads as pitch +10…+20° in camera terms — without this offset the
    "down" cells are unreachable. The offset is stored as `calib.pose_offset` for reference.
-2. **Pose grid.** 5 yaw cells (far-left … far-right, edges ±9/±24/±45°) × 3 pitch cells
-   (down / level / up, edges −13/+9°). The seven cells on the centre cross are **required**
-   (that is where a face sits at a laptop, including "looking at the keyboard"); the eight
-   corners are optional.
+2. **Continuous coverage, not cells.** Every sample paints a Gaussian footprint (σ = 7°) on a
+   2°-resolution (yaw, pitch) map. The **required region is an ellipse** around the neutral
+   pose (semi-axes 34° yaw × 19° pitch, centred 4° below level because laptop use is
+   keyboard-biased): far-left+up style corners are not required — physically awkward and
+   covered by interpolation. Sampling happens wherever local coverage is below 1.0, so
+   there are no hard cell boundaries to hit.
 3. **Sampling.** When the pose is stable (< 4° change between frames), the frame passes the
-   quality gate and the face is ≥ 80 px, an embedding is computed for every camera and
-   pushed into the current cell (best 3 per cell per spectrum by quality). A cell counts
-   as filled after 2 samples of the primary spectrum.
-4. **Guidance.** The window shows the mirrored camera image, the grid with filled / required
-   / optional cells, a dot for the current pose, the next target cell, and a text hint
-   ("turn a little left, look a little down"). Because guidance is *visual* — move the dot
-   into the cell — it does not depend on getting the angle sign conventions right for a
-   given camera mounting.
-5. **Finish.** Automatically when all 15 cells are filled, 12 s after the required ones are,
-   or on Enter. Per cell and spectrum the samples are fused into one model with its mean
-   pose; cells are labelled `C/level`, `L1/down`, …
+   quality gate and the face is ≥ 60 px, an embedding is computed for every camera.
+   Storage bins remain discrete — 7 yaw × 3 pitch cells (12° yaw bins, 18° centre; pitch
+   down < −10°, level, up > +6°) — one fused model per bin and spectrum (best 3 samples by
+   quality), labelled `C/level`, `L2/down`, …
+4. **Guidance.** The window shows the mirrored camera image; below it the coverage heatmap
+   (green = covered, orange = required and not yet, dimmed = optional) with the required
+   ellipse outlined, a dot for the current pose with a tick showing roll, and a ring on the
+   least-covered required direction nearest the current pose; the hint says "slowly turn
+   left and look down toward the ring". Guidance is visual, so it does not depend on angle
+   sign conventions for a given camera mounting.
+5. **Finish.** Automatically 3 s after the required ellipse is ≥ 97 % covered, or on Enter.
+   Roll is displayed and used for de-rotation in the pitch measure but is not an enrollment
+   axis: dlib aligns the face chip by the eyes, so embeddings are roll-invariant already.
 
 ### 8.1.1 Keeping the preview at camera rate
 
