@@ -104,8 +104,8 @@ class Engine:
         n_sets = 0
         ir_means: list[float] = []
         try:
-            settle_ms = self._settle(cap, primary, timing["settle_ms"])
-            self.say(f"exposure settled in {settle_ms} ms")
+            if timing["settle_ms"] > 0:
+                self.say(f"exposure settled in {self._settle(cap, primary, timing['settle_ms'])} ms")
             deadline = min(hard, time.monotonic() + timing["window_ms"] / 1000)   # window starts now
             while time.monotonic() < deadline:
                 fs = cap.read_set()
