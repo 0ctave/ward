@@ -52,6 +52,8 @@ detector and ResNet face embedding, OpenCV, V4L2 — with what Howdy lacks:
     file — not bundled yet, the voter is disabled until it's present)
   - *emitter-modulation shadow test* — metric implemented, enabled once the LED toggle is
     proven fast enough on the hardware (`shadow_test = "auto"`)
+- **Stable camera identification.** Cameras are stored as USB ids (vendor:product:interface),
+  not `/dev/videoN` numbers, which change when the module re-enumerates.
 - **YuNet face detection.** OpenCV's detector (bundled, Apache-2.0): 4 ms per frame on a laptop
   CPU and robust to turned/tilted heads — dlib's HOG is frontal-only, its CNN 700 ms.
 - **Fail open.** Every failure — dark camera, busy camera, spoof suspected, timeout —
