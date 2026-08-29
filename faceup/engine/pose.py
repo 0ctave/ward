@@ -63,6 +63,13 @@ def _bin(v: float, edges: list[float]) -> int | None:
     return None
 
 
+def nearest_cell(yaw: float, pitch: float) -> tuple[int, int]:
+    """Storage bin for a pose outside the grid: clip to the edge bins."""
+    y = min(max(yaw, YAW_EDGES[0]), YAW_EDGES[-1] - 1e-3)
+    p = min(max(pitch, PITCH_EDGES[0]), PITCH_EDGES[-1] - 1e-3)
+    return (_bin(y, YAW_EDGES), _bin(p, PITCH_EDGES))
+
+
 def cell_name(cell: tuple[int, int]) -> str:
     return f"{YAW_NAMES[cell[0]]}/{PITCH_NAMES[cell[1]]}"
 
@@ -301,7 +308,7 @@ class Stability:
     """Pose is 'stable' when the last N filtered poses stay within `deg` in yaw and pitch —
     a windowed criterion instead of frame-to-frame, which flicker never satisfies."""
 
-    def __init__(self, n: int = 6, deg: float = 5.0):
+    def __init__(self, n: int = 6, deg: float = 7.0):
         self.n, self.deg = n, deg
         self.hist: list[tuple[float, float]] = []
 

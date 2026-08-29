@@ -60,6 +60,18 @@ class PoseTests(unittest.TestCase):
             self.assertAlmostEqual(p.pitch, pitch, delta=4, msg=f"pitch for {(yaw, pitch)} → {p}")
         self.assertAlmostEqual(pose.estimate(synth_landmarks(0, 0), 640, 360).roll, 0.0, delta=1)
 
+    def test_nearest_cell_clips(self):
+        self.assertEqual(pose.nearest_cell(60, 0), (pose.NY - 1, 1))
+        self.assertEqual(pose.nearest_cell(-60, -50), (0, 0))
+        self.assertEqual(pose.nearest_cell(0, 0), pose.Pose(0, 0, 0).cell())
+
+    def test_gui_uses_only_existing_pose_api(self):
+        import re
+        from faceup import gui
+        src = open(gui.__file__).read()
+        for name in set(re.findall(r"posemod\.([A-Za-z_]+)", src)):
+            self.assertTrue(hasattr(pose, name), f"gui.py references pose.{name} which does not exist")
+
     def test_coverage_map(self):
         c = pose.Coverage()
         self.assertLess(c.fraction(), 0.05)
