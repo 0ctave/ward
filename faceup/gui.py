@@ -32,10 +32,46 @@ class GuiUnavailable(Exception):
     pass
 
 
-def _open_window() -> None:
+class _Profile:
+    """Per-stage timing printed once a second when enrollment runs with --profile."""
+
+    def __init__(self, enabled: bool, cap: Capture):
+        self.enabled, self.cap = enabled, cap
+        self.t = {}
+        self.n = 0
+        self.t0 = time.monotonic()
+        self.seq0 = {sp: r.seq for sp, r in cap.readers.items()}
+        self._mark = None
+        if enabled:
+            import os, subprocess
+            prof = subprocess.run(["powerprofilesctl", "get"], capture_output=True, text=True).stdout.strip() or "?"
+            print(f"[profile] QT_QPA_PLATFORM={os.environ.get('QT_QPA_PLATFORM', '(unset)')} DISPLAY={os.environ.get('DISPLAY', '')} "
+                  f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')} power-profile={prof} euid={os.geteuid()}", flush=True)
+
+    def start(self) -> None:
+        self._mark = time.perf_counter()
+
+    def lap(self, name: str) -> None:
+        now = time.perf_counter()
+        self.t[name] = self.t.get(name, 0.0) + (now - self._mark) * 1000
+        self._mark = now
+
+    def frame(self) -> None:
+        self.n += 1
+        dt = time.monotonic() - self.t0
+        if self.enabled and dt >= 1.0:
+            cam = " ".join(f"{sp}:{(r.seq - self.seq0[sp]) / dt:.0f}fps" for sp, r in self.cap.readers.items())
+            stages = " ".join(f"{k}={v / self.n:.1f}" for k, v in self.t.items())
+            print(f"[profile] ui {self.n / dt:.1f} fps | camera {cam} | ms/frame: {stages}", flush=True)
+            self.t, self.n, self.t0 = {}, 0, time.monotonic()
+            self.seq0 = {sp: r.seq for sp, r in self.cap.readers.items()}
+
+
+def _open_window(width: int = 640, height: int = 470) -> None:
     try:
-        cv2.namedWindow(WIN, cv2.WINDOW_AUTOSIZE)
-        cv2.imshow(WIN, np.zeros((10, 10, 3), np.uint8))
+        cv2.namedWindow(WIN, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
+        cv2.resizeWindow(WIN, width, height)
+        cv2.imshow(WIN, np.zeros((height, width, 3), np.uint8))
         cv2.waitKey(1)
     except cv2.error as e:   # pragma: no cover
         raise GuiUnavailable(str(e))
@@ -200,7 +236,7 @@ def _hint(current, target) -> str:
     return "Move the dot into the highlighted cell: " + ", ".join(parts) if parts else "Almost - hold still"
 
 
-def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror: bool = True) -> int:
+def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror: bool = True, profile: bool = False) -> int:
     """Track the head, fill the pose grid, fuse per cell and per spectrum. Returns models added.
 
     Per-frame cost is kept to: one camera read + ROI face detection (~5 ms) + 68 landmarks
@@ -228,15 +264,19 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     finished = False
     t_all_required = None
     fps_t, fps_n, fps = time.monotonic(), 0, 0.0
+    prof = _Profile(profile, cap)
     try:
         while True:
+            prof.start()
             fr = cap.read_one(primary, flush=0)
+            prof.lap("wait")
             if fr is None:
                 continue
             h, w = fr.gray.shape[:2]
             q = measure(fr.gray, models.max_height)
             box = None if q.reason(cams[f"{primary}_dark_threshold"]) else models.detect(fr.gray, prev_box)
             prev_box = box
+            prof.lap("detect")
             current = None
             sampled = False
             if box is not None and box.w >= MIN_ENROLL_FACE_PX:
@@ -267,6 +307,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                                 sampled = True
             else:
                 prev_pose = None
+            prof.lap("pose+sample")
             absorb(sampler.drain())
             if not sampler.alive and restarts < 2:
                 restarts += 1
@@ -295,8 +336,13 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                 status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f}"
             _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
             _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
-            cv2.imshow(WIN, np.vstack([img, _grid_panel(w, cells, current, target)]))
+            canvas = np.vstack([img, _grid_panel(w, cells, current, target)])
+            prof.lap("draw")
+            cv2.imshow(WIN, canvas)
+            prof.lap("imshow")
             k = cv2.waitKey(1) & 0xFF
+            prof.lap("waitKey")
+            prof.frame()
             if k in (13, 10):
                 finished = True
             elif k == 27:
