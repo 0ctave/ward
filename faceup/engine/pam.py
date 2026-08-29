@@ -9,7 +9,10 @@ from pathlib import Path
 COMMON_AUTH = Path(os.environ.get("FACEUP_PAM_FILE", "/etc/pam.d/common-auth"))
 BACKUP = COMMON_AUTH.with_name(COMMON_AUTH.name + ".faceup-bak")
 ENGINE = "/usr/local/bin/faceup-auth"
-LINE = f"auth\tsufficient\t\t\tpam_exec.so quiet {ENGINE}\t# faceup\n"
+# seteuid: pam_exec runs the helper with the REAL uid of the PAM application by default — for
+# sudo that is the invoking user, who cannot read the root-only model store (observed: exit 1 in
+# milliseconds, no log line). With seteuid it runs with the effective uid, i.e. root.
+LINE = f"auth\tsufficient\t\t\tpam_exec.so quiet seteuid {ENGINE}\t# faceup\n"
 
 
 def status() -> dict:
@@ -24,7 +27,8 @@ def status() -> dict:
 
 def render_enabled(text: str) -> str:
     if "faceup-auth" in text:
-        return text
+        # upgrade an older line (without seteuid) in place
+        return "".join(LINE if ("faceup-auth" in ln and "seteuid" not in ln) else ln for ln in text.splitlines(keepends=True))
     lines = text.splitlines(keepends=True)
     # insert before the first auth line that is a real module (pam_unix or pam_howdy)
     for i, ln in enumerate(lines):

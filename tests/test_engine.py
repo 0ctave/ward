@@ -156,7 +156,12 @@ class PamTests(unittest.TestCase):
         self.assertIn("faceup-auth", lines[1])
         self.assertTrue(lines[2].endswith("pam_howdy.so"))
         self.assertEqual(pam.render_enabled(out), out)         # idempotent
+        self.assertIn("seteuid", lines[1])                         # runs as root, not as the sudo caller
         self.assertEqual(pam.render_disabled(out), self.SAMPLE)
+        old = self.SAMPLE.replace("auth\t[success=3", "auth\tsufficient\t\t\tpam_exec.so quiet /usr/local/bin/faceup-auth\t# faceup\nauth\t[success=3", 1)
+        upgraded = pam.render_enabled(old)
+        self.assertEqual(upgraded.count("faceup-auth"), 1)
+        self.assertIn("seteuid", upgraded)
 
 
 if __name__ == "__main__":
