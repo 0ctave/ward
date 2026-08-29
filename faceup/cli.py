@@ -228,6 +228,9 @@ def cmd_tune(args) -> int:
 # ----------------------------------------------------------------- enroll ----
 def cmd_enroll(args) -> int:
     need_root("enroll")
+    for k in ("fresh", "all", "selfcheck", "guided", "profile"):
+        if not hasattr(args, k):
+            setattr(args, k, False)
     from .engine.capture import Capture, CaptureError
     from .engine.detect import Models
     from .engine import enroll as en
@@ -487,7 +490,8 @@ def cmd_setup(args) -> int:
 
     ui.section("5/6 Enroll")
     if ui.confirm("Run pose-guided enrollment now?", default=True):
-        args.fresh, args.all, args.selfcheck = False, False, False
+        for k, v in (("fresh", False), ("all", False), ("selfcheck", False), ("guided", False), ("profile", False)):
+            setattr(args, k, getattr(args, k, v))
         cmd_enroll(args)
 
     ui.section("6/6 PAM")
