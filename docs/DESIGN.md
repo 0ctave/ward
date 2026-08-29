@@ -255,6 +255,11 @@ module offers 15 or 30, nothing above):
   samples are being embedded concurrently.
 - Face detection tracks a region around the previous box without upsampling; the
   expensive 2× full-frame search runs only on every fourth miss.
+- The window is **native Wayland**: GTK 4 (`faceup/display.py`), frames uploaded as
+  `Gdk.MemoryTexture` and composited by the GPU, 0.4 ms per frame measured. The engine runs as
+  root (models are root-owned), so the window connects to the *invoking user's* Wayland
+  socket (`/run/user/<SUDO_UID>/wayland-0`), which sudo otherwise strips. OpenCV's Qt/X11
+  HighGUI remains as a fallback when PyGObject or a session is unavailable.
 
 ### 8.2 Interpolation between poses
 

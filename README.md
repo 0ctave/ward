@@ -38,7 +38,7 @@ detector and ResNet face embedding, OpenCV, V4L2 — with what Howdy lacks:
   the reference laptop).
 - **Multi-frame fusion.** Embeddings of the best frames are averaged before matching,
   which removes the per-frame noise behind random rejects.
-- **Free-move enrollment.** A camera window tracks your head angle (yaw/pitch from facial
+- **Free-move enrollment.** A native Wayland (GTK 4) camera window tracks your head angle (yaw/pitch from facial
   landmarks) and fills a 5×3 pose grid as you move — no scripted poses. Adjacent cells are
   interpolated at match time so the angles in between are covered too.
 - **Liveness voters** with PASS / FAIL / ABSTAIN semantics — two PASSes and zero FAILs
