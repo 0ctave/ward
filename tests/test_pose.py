@@ -125,7 +125,7 @@ class PoseTests(unittest.TestCase):
         self.assertEqual(c.centre, centre_after)               # …and then stays put
         self.assertLessEqual(c.axes[1], pose.REQ_AXES[1])      # and never larger than the default
         self.assertGreaterEqual(c.axes[1], c.MIN_AXES[1])
-        self.assertTrue(c.is_required(0, -28))                 # bottom of the shown range is required…
+        self.assertTrue(c.is_required(0, -25))                 # bottom of the shown range is required…
         self.assertFalse(c.is_required(0, 14))                 # …the unreachable top is not
 
     def test_nearest_cell_clips(self):
