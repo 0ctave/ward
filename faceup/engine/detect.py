@@ -85,15 +85,31 @@ class Models:
         return self._rec
 
     # -- operations -------------------------------------------------------------
-    def detect(self, gray: np.ndarray) -> Box | None:
-        """Largest face in the frame, in full-frame coordinates."""
-        h = gray.shape[0]
-        s = min(1.0, self.max_height / h)
-        img = gray if s == 1.0 else cv2.resize(gray, (int(gray.shape[1] * s), int(h * s)))
+    def detect(self, gray: np.ndarray, near: Box | None = None) -> Box | None:
+        """Largest face in the frame, in full-frame coordinates.
+
+        `near`: the face box from the previous frame. Detection then runs only on a region
+        around it without upsampling (~5 ms instead of ~60 ms); if that misses, it falls back
+        to the full frame. HOG needs ~80 px faces, so the full-frame pass first tries without
+        upsampling (fast, fine for a laptop user) and only then with 2x (small/far faces).
+        """
+        H, W = gray.shape[:2]
+        if near is not None and self.detector_kind != "cnn":
+            mx, my = int(near.w * 0.4), int(near.h * 0.4)
+            x0, y0 = max(0, near.x - mx), max(0, near.y - my)
+            x1, y1 = min(W, near.x + near.w + mx), min(H, near.y + near.h + my)
+            roi = gray[y0:y1, x0:x1]
+            if roi.size:
+                dets = list(self._hog(roi, 0))
+                if dets:
+                    r = max(dets, key=lambda d: d.width() * d.height())
+                    return Box(r.left() + x0, r.top() + y0, r.width(), r.height())
+        s = min(1.0, self.max_height / H)
+        img = gray if s == 1.0 else cv2.resize(gray, (int(W * s), int(H * s)))
         if self.detector_kind == "cnn":
             dets = [d.rect for d in self.cnn(img, 0)]
         else:
-            dets = list(self._hog(img, 1))
+            dets = list(self._hog(img, 0)) or list(self._hog(img, 1))
         if not dets:
             return None
         r = max(dets, key=lambda d: d.width() * d.height())

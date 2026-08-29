@@ -22,6 +22,7 @@ WIN = "faceup"
 SAMPLES_PER_CELL = 3
 CELL_DONE = 2                 # samples of the primary spectrum that mark a cell as filled
 STABLE_DEG = 4.0              # pose must move less than this between frames to be sampled
+SAMPLE_EVERY_MS = 120         # embeddings are computed at most this often
 COL_OK = (90, 190, 90); COL_REQ = (60, 140, 255); COL_OPT = (110, 110, 110); COL_CUR = (255, 220, 60)
 COL_TXT = (235, 235, 235)
 
@@ -53,9 +54,14 @@ def _text(img, s, xy, scale=0.6, color=COL_TXT, thick=1):
 class Cell:
     samples: dict[str, list[tuple[float, np.ndarray]]] = field(default_factory=dict)   # spectrum -> [(quality, emb)]
     poses: list[tuple[float, float]] = field(default_factory=list)
+    n_primary: int = 0          # samples taken of the primary spectrum (drives "filled")
 
     def count(self, spectrum: str) -> int:
-        return len(self.samples.get(spectrum, []))
+        return self.n_primary if spectrum == "primary" else len(self.samples.get(spectrum, []))
+
+    @property
+    def full(self) -> bool:
+        return self.n_primary >= SAMPLES_PER_CELL
 
     def push(self, spectrum: str, q: float, emb: np.ndarray) -> None:
         lst = self.samples.setdefault(spectrum, [])
@@ -114,46 +120,64 @@ def _hint(current, target) -> str:
 
 
 def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror: bool = True) -> int:
-    """Track the head, fill the pose grid, fuse per cell and per spectrum. Returns models added."""
+    """Track the head, fill the pose grid, fuse per cell and per spectrum. Returns models added.
+
+    Per-frame cost is kept to: one camera read + ROI face detection (~5 ms) + 68 landmarks
+    (~5 ms) + drawing. Embeddings (the expensive part) are computed only when the current
+    cell still needs samples, at most every SAMPLE_EVERY_MS, and the second camera is read
+    only at those moments.
+    """
     _open_window()
+    models.sp68; models.sp5; models.rec                     # preload: no stall on the first face
     primary = "ir" if "ir" in cap.spectra else "rgb"
+    others = [sp for sp in cap.spectra if sp != primary]
     cells: dict[tuple[int, int], Cell] = {}
     prev_pose = None
+    prev_box: Box | None = None
+    last_sample_t = 0.0
     finished = False
     t_all_required = None
+    fps_t, fps_n, fps = time.monotonic(), 0, 0.0
     try:
         while True:
-            fs = cap.read_set()
-            if primary not in fs:
+            fr = cap.read_one(primary, flush=0)
+            if fr is None:
                 continue
-            fr = fs[primary]
             h, w = fr.gray.shape[:2]
             q = measure(fr.gray, models.max_height)
-            box = None if q.reason(cams[f"{primary}_dark_threshold"]) else models.detect(fr.gray)
+            box = None if q.reason(cams[f"{primary}_dark_threshold"]) else models.detect(fr.gray, prev_box)
+            prev_box = box
             current = None
             sampled = False
             if box is not None and box.w >= MIN_ENROLL_FACE_PX:
-                lm = models.landmarks68(fr.gray, box)
-                p = posemod.estimate(lm, w, h)
+                p = posemod.estimate(models.landmarks68(fr.gray, box), w, h)
                 if p is not None:
                     current = posemod.smooth(prev_pose, p)
-                    stable = prev_pose is not None and abs(current.yaw - prev_pose.yaw) < STABLE_DEG and abs(current.pitch - prev_pose.pitch) < STABLE_DEG
+                    stable = prev_pose is not None and abs(current.yaw - prev_pose.yaw) < STABLE_DEG \
+                        and abs(current.pitch - prev_pose.pitch) < STABLE_DEG
                     prev_pose = current
                     cell = current.cell()
-                    if cell is not None and stable:
+                    now = time.monotonic()
+                    if cell is not None and stable and (now - last_sample_t) * 1000 >= SAMPLE_EVERY_MS:
                         c = cells.setdefault(cell, Cell())
-                        if c.count("primary") < SAMPLES_PER_CELL or True:
-                            for s, f2 in fs.items():
-                                b2 = box if s == primary else models.detect(f2.gray)
-                                if b2 is None or b2.w < MIN_ENROLL_FACE_PX:
+                        if not c.full:
+                            c.push(primary, q.score(), models.embed(fr.rgb, box))
+                            c.n_primary += 1
+                            for sp in others:
+                                f2 = cap.read_one(sp, flush=1)
+                                if f2 is None:
                                     continue
                                 q2 = measure(f2.gray, models.max_height)
-                                if q2.reason(cams[f"{s}_dark_threshold"]):
+                                if q2.reason(cams[f"{sp}_dark_threshold"]):
                                     continue
-                                c.push(s, q2.score(), models.embed(f2.rgb, b2))
-                                if s == primary:
-                                    c.push("primary", q2.score(), np.zeros(1))
+                                # same module, same field of view: the primary box is a good ROI hint
+                                sx, sy = f2.gray.shape[1] / w, f2.gray.shape[0] / h
+                                hint = Box(int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy))
+                                b2 = models.detect(f2.gray, hint)
+                                if b2 is not None and b2.w >= MIN_ENROLL_FACE_PX:
+                                    c.push(sp, q2.score(), models.embed(f2.rgb, b2))
                             c.poses.append((current.yaw, current.pitch))
+                            last_sample_t = now
                             sampled = True
             else:
                 prev_pose = None
@@ -164,6 +188,9 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                 t_all_required = time.monotonic()
 
             # ---- draw
+            fps_n += 1
+            if time.monotonic() - fps_t >= 1.0:
+                fps, fps_n, fps_t = fps_n / (time.monotonic() - fps_t), 0, time.monotonic()
             img = _bgr(fr)
             if mirror:
                 img = cv2.flip(img, 1)
@@ -173,13 +200,12 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             _text(img, _hint(current, target), (10, 24), 0.62)
             filled = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
             req = sum(1 for c in posemod.REQUIRED if cells.get(c) and cells[c].count("primary") >= CELL_DONE)
-            status = f"{req}/{len(posemod.REQUIRED)} required  |  {filled}/15 cells  |  {primary.upper()} {q.mean:.0f}"
+            status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f} | {fps:.0f} fps"
             if current is not None:
-                status += f"  |  yaw {current.yaw:+.0f}  pitch {current.pitch:+.0f}"
+                status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f}"
             _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
             _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
-            canvas = np.vstack([img, _grid_panel(w, cells, current, target)])
-            cv2.imshow(WIN, canvas)
+            cv2.imshow(WIN, np.vstack([img, _grid_panel(w, cells, current, target)]))
             k = cv2.waitKey(1) & 0xFF
             if k in (13, 10):
                 finished = True
@@ -200,10 +226,10 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         label = posemod.cell_name(cell)
         st.remove_label(label)
         mean_pose = (float(np.mean([p[0] for p in c.poses])), float(np.mean([p[1] for p in c.poses])))
-        for s, lst in c.samples.items():
-            if s == "primary" or not lst:
+        for sp, lst in c.samples.items():
+            if not lst:
                 continue
-            st.add(label, s, fuse([e for _, e in lst]), float(np.mean([q for q, _ in lst])), mean_pose)
+            st.add(label, sp, fuse([e for _, e in lst]), float(np.mean([qq for qq, _ in lst])), mean_pose)
             added += 1
     if added:
         st.save()

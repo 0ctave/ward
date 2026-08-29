@@ -99,6 +99,24 @@ class Capture:
                 del out[older]
         return out
 
+    def read_one(self, spectrum: str, flush: int = 1) -> Frame | None:
+        """A fresh frame from one camera. With BUFFERSIZE=1 the first read returns the frame
+        queued since the last read (possibly old); `flush` extra reads skip it."""
+        cap = self.caps.get(spectrum)
+        if cap is None:
+            return None
+        for _ in range(flush):
+            cap.grab()
+        ok, img = cap.read()
+        if not ok or img is None:
+            return None
+        gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if spectrum == "ir":
+            rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+        else:
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        return Frame(spectrum, time.monotonic(), gray, rgb)
+
     def warm_up(self, n: int = 3) -> None:
         for _ in range(n):
             for cap in self.caps.values():
