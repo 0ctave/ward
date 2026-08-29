@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from . import display as disp
 from .engine import pose as posemod
 from .engine.capture import Capture
 from .engine.detect import Box, Models, fuse
@@ -24,12 +25,11 @@ SAMPLES_PER_CELL = 3
 CELL_DONE = 2                 # samples of the primary spectrum that mark a cell as filled
 STABLE_DEG = 4.0              # pose must move less than this between frames to be sampled
 SAMPLE_EVERY_MS = 120         # embeddings are computed at most this often
-COL_OK = (90, 190, 90); COL_REQ = (60, 140, 255); COL_OPT = (110, 110, 110); COL_CUR = (255, 220, 60)
+COL_OK = (90, 190, 90); COL_REQ = (255, 140, 60); COL_OPT = (110, 110, 110); COL_CUR = (60, 220, 255)
 COL_TXT = (235, 235, 235)
 
 
-class GuiUnavailable(Exception):
-    pass
+GuiUnavailable = disp.DisplayUnavailable
 
 
 class _Profile:
@@ -67,18 +67,8 @@ class _Profile:
             self.seq0 = {sp: r.seq for sp, r in self.cap.readers.items()}
 
 
-def _open_window(width: int = 640, height: int = 470) -> None:
-    try:
-        cv2.namedWindow(WIN, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
-        cv2.resizeWindow(WIN, width, height)
-        cv2.imshow(WIN, np.zeros((height, width, 3), np.uint8))
-        cv2.waitKey(1)
-    except cv2.error as e:   # pragma: no cover
-        raise GuiUnavailable(str(e))
-
-
-def _bgr(frame) -> np.ndarray:
-    return cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
+def _canvas_of(frame) -> np.ndarray:
+    return frame.rgb.copy()
 
 
 def _text(img, s, xy, scale=0.6, color=COL_TXT, thick=1):
@@ -244,7 +234,6 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     cell still needs samples, at most every SAMPLE_EVERY_MS, and the second camera is read
     only at those moments.
     """
-    _open_window()
     models.sp68; models.sp5; models.rec                     # preload: no stall on the first face
     primary = "ir" if "ir" in cap.spectra else "rgb"
     cells: dict[tuple[int, int], Cell] = {}
@@ -265,94 +254,109 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     t_all_required = None
     fps_t, fps_n, fps = time.monotonic(), 0, 0.0
     prof = _Profile(profile, cap)
+    state = {"finished": False, "cancel": False, "fps_t": fps_t, "fps_n": 0, "fps": 0.0,
+             "prev_pose": None, "prev_box": None, "last_sample_t": 0.0, "t_all_required": None,
+             "sampler": sampler, "restarts": 0}
+    probe = cap.read_one(primary, flush=0)
+    ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
     try:
-        while True:
-            prof.start()
-            fr = cap.read_one(primary, flush=0)
-            prof.lap("wait")
-            if fr is None:
-                continue
-            h, w = fr.gray.shape[:2]
-            q = measure(fr.gray, models.max_height)
-            box = None if q.reason(cams[f"{primary}_dark_threshold"]) else models.detect(fr.gray, prev_box)
-            prev_box = box
-            prof.lap("detect")
-            current = None
-            sampled = False
-            if box is not None and box.w >= MIN_ENROLL_FACE_PX:
-                p = posemod.estimate(models.landmarks68(fr.gray, box), w, h)
-                if p is not None:
-                    current = posemod.smooth(prev_pose, p)
-                    stable = prev_pose is not None and abs(current.yaw - prev_pose.yaw) < STABLE_DEG \
-                        and abs(current.pitch - prev_pose.pitch) < STABLE_DEG
-                    prev_pose = current
-                    cell = current.cell()
-                    now = time.monotonic()
-                    if cell is not None and stable and (now - last_sample_t) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy:
-                        c = cells.setdefault(cell, Cell())
-                        if not c.full:
-                            items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True)]
-                            for sp in others:
-                                f2 = cap.read_one(sp, flush=0)
-                                if f2 is None:
-                                    continue
-                                q2 = measure(f2.gray, models.max_height)
-                                if q2.reason(cams[f"{sp}_dark_threshold"]):
-                                    continue
-                                sx, sy = f2.gray.shape[1] / w, f2.gray.shape[0] / h
-                                items.append((sp, f2.rgb, (int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy)), q2.score(), False))
-                            if sampler.submit(cell, (current.yaw, current.pitch), items):
-                                c.n_primary += 1          # reserved now; embeddings arrive from the worker
-                                last_sample_t = now
-                                sampled = True
-            else:
-                prev_pose = None
-            prof.lap("pose+sample")
-            absorb(sampler.drain())
-            if not sampler.alive and restarts < 2:
-                restarts += 1
-                sampler = _Sampler(models)
+        screen = disp.open_display(WIN, pw, ph + 34 * 3 + 8)
+    except disp.DisplayUnavailable as e:
+        sampler.close()
+        raise GuiUnavailable(str(e))
+    if profile:
+        print(f"[profile] display backend: {screen.name} ({screen.backend})", flush=True)
 
-            target = _pick_target(cells, current)
-            required_done = all(cells.get(c) and cells[c].count("primary") >= CELL_DONE for c in posemod.REQUIRED)
-            if required_done and t_all_required is None:
-                t_all_required = time.monotonic()
+    def step():
+        sampler = state["sampler"]
+        for k in screen.keys():
+            if k == disp.KEY_ENTER:
+                state["finished"] = True
+            elif k == disp.KEY_ESC:
+                state["cancel"] = True
+        if state["finished"] or state["cancel"]:
+            return None
+        prof.start()
+        fr = cap.read_one(primary, flush=0)
+        prof.lap("wait")
+        if fr is None:
+            return np.zeros((ph, pw, 3), np.uint8)
+        h, w = fr.gray.shape[:2]
+        q = measure(fr.gray, models.max_height)
+        box = None if q.reason(cams[f"{primary}_dark_threshold"]) else models.detect(fr.gray, state["prev_box"])
+        state["prev_box"] = box
+        prof.lap("detect")
+        current = None
+        sampled = False
+        prev_pose = state["prev_pose"]
+        if box is not None and box.w >= MIN_ENROLL_FACE_PX:
+            p = posemod.estimate(models.landmarks68(fr.gray, box), w, h)
+            if p is not None:
+                current = posemod.smooth(prev_pose, p)
+                stable = prev_pose is not None and abs(current.yaw - prev_pose.yaw) < STABLE_DEG \
+                    and abs(current.pitch - prev_pose.pitch) < STABLE_DEG
+                state["prev_pose"] = current
+                cell = current.cell()
+                now = time.monotonic()
+                if cell is not None and stable and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy:
+                    c = cells.setdefault(cell, Cell())
+                    if not c.full:
+                        items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True)]
+                        for sp in others:
+                            f2 = cap.read_one(sp, flush=0)
+                            if f2 is None:
+                                continue
+                            q2 = measure(f2.gray, models.max_height)
+                            if q2.reason(cams[f"{sp}_dark_threshold"]):
+                                continue
+                            sx, sy = f2.gray.shape[1] / w, f2.gray.shape[0] / h
+                            items.append((sp, f2.rgb, (int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy)), q2.score(), False))
+                        if sampler.submit(cell, (current.yaw, current.pitch), items):
+                            c.n_primary += 1
+                            state["last_sample_t"] = now
+                            sampled = True
+        else:
+            state["prev_pose"] = None
+        prof.lap("pose+sample")
+        absorb(sampler.drain())
+        if not sampler.alive and state["restarts"] < 2:
+            state["restarts"] += 1
+            state["sampler"] = _Sampler(models)
 
-            # ---- draw
-            fps_n += 1
-            if time.monotonic() - fps_t >= 1.0:
-                fps, fps_n, fps_t = fps_n / (time.monotonic() - fps_t), 0, time.monotonic()
-            img = _bgr(fr)
-            if mirror:
-                img = cv2.flip(img, 1)
-            if box is not None:
-                bx = (w - box.x - box.w) if mirror else box.x
-                cv2.rectangle(img, (bx, box.y), (bx + box.w, box.y + box.h), COL_OK if sampled else COL_CUR, 2)
-            _text(img, _hint(current, target), (10, 24), 0.62)
-            filled = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
-            req = sum(1 for c in posemod.REQUIRED if cells.get(c) and cells[c].count("primary") >= CELL_DONE)
-            status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f} | {fps:.0f} fps"
-            if current is not None:
-                status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f}"
-            _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
-            _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
-            canvas = np.vstack([img, _grid_panel(w, cells, current, target)])
-            prof.lap("draw")
-            cv2.imshow(WIN, canvas)
-            prof.lap("imshow")
-            k = cv2.waitKey(1) & 0xFF
-            prof.lap("waitKey")
-            prof.frame()
-            if k in (13, 10):
-                finished = True
-            elif k == 27:
-                break
-            if finished or (required_done and filled >= 15) or (t_all_required and time.monotonic() - t_all_required > 12):
-                finished = True
-                break
+        target = _pick_target(cells, current)
+        required_done = all(cells.get(c) and cells[c].count("primary") >= CELL_DONE for c in posemod.REQUIRED)
+        if required_done and state["t_all_required"] is None:
+            state["t_all_required"] = time.monotonic()
+
+        state["fps_n"] += 1
+        if time.monotonic() - state["fps_t"] >= 1.0:
+            state["fps"] = state["fps_n"] / (time.monotonic() - state["fps_t"]); state["fps_n"] = 0; state["fps_t"] = time.monotonic()
+        img = _canvas_of(fr)
+        if mirror:
+            img = cv2.flip(img, 1)
+        if box is not None:
+            bx = (w - box.x - box.w) if mirror else box.x
+            cv2.rectangle(img, (bx, box.y), (bx + box.w, box.y + box.h), COL_OK if sampled else COL_CUR, 2)
+        _text(img, _hint(current, target), (10, 24), 0.62)
+        filled = sum(1 for c in cells.values() if c.count("primary") >= CELL_DONE)
+        req = sum(1 for c in posemod.REQUIRED if cells.get(c) and cells[c].count("primary") >= CELL_DONE)
+        status = f"{req}/{len(posemod.REQUIRED)} required | {filled}/15 cells | {primary.upper()} {q.mean:.0f} | {state['fps']:.0f} fps"
+        if current is not None:
+            status += f" | yaw {current.yaw:+.0f} pitch {current.pitch:+.0f}"
+        _text(img, status, (10, h - 12), 0.5, (200, 200, 200))
+        _text(img, "Enter = finish   Esc = cancel", (w - 235, 24), 0.45, (180, 180, 180))
+        canvas = np.vstack([img, _grid_panel(w, cells, current, target)])
+        prof.lap("draw")
+        prof.frame()
+        if (required_done and filled >= 15) or (state["t_all_required"] and time.monotonic() - state["t_all_required"] > 12):
+            state["finished"] = True
+        return canvas
+
+    try:
+        screen.run(step)
     finally:
-        cv2.destroyAllWindows(); cv2.waitKey(1)
-        absorb(sampler.close())
+        absorb(state["sampler"].close())
+    finished = state["finished"]
 
     if not finished and not cells:
         return 0
@@ -386,42 +390,51 @@ def emitter_verdict(ir_mean: float, ir_face: bool, rgb_mean: float | None) -> tu
 
 
 def emitter_check(cap: Capture, models: Models, gui: bool = True, seconds: float = 0) -> tuple[str, str]:
-    state, msg = "unknown", ""
+    result = {"state": "unknown", "msg": ""}
     t_end = time.monotonic() + seconds if seconds else None
+    screen = None
     if gui:
         try:
-            _open_window()
-        except GuiUnavailable:
-            gui = False
-    try:
+            screen = disp.open_display(WIN, 1280, 360)
+        except disp.DisplayUnavailable:
+            screen = None
+
+    def evaluate():
+        fs = cap.read_set()
+        if "ir" not in fs:
+            return None
+        ir = fs["ir"]; rgb = fs.get("rgb")
+        box = models.detect(ir.gray)
+        result["state"], result["msg"] = emitter_verdict(float(ir.gray.mean()), box is not None, float(rgb.gray.mean()) if rgb else None)
+        return ir, rgb, box
+
+    def step():
+        if any(k in (disp.KEY_Q, disp.KEY_ESC) for k in screen.keys()):
+            return None
+        ev = evaluate()
+        if ev is None:
+            return np.zeros((360, 1280, 3), np.uint8)
+        ir, rgb, box = ev
+        left = _canvas_of(ir)
+        if box is not None:
+            cv2.rectangle(left, (box.x, box.y), (box.x + box.w, box.y + box.h), COL_OK, 2)
+        _text(left, "IR  mean %.0f" % ir.gray.mean(), (10, 24))
+        panels = [left]
+        if rgb is not None:
+            right = cv2.resize(_canvas_of(rgb), (left.shape[1], left.shape[0]))
+            _text(right, "RGB  mean %.0f" % rgb.gray.mean(), (10, 24))
+            panels.append(right)
+        canvas = np.hstack(panels)
+        col = {"ok": COL_OK, "dead": (230, 60, 60), "inconclusive": COL_REQ}.get(result["state"], COL_TXT)
+        _text(canvas, result["msg"], (10, canvas.shape[0] - 14), 0.55, col)
+        _text(canvas, "q = quit", (canvas.shape[1] - 80, 24), 0.45, (180, 180, 180))
+        return canvas
+
+    if screen is not None:
+        screen.run(step)
+    else:
         while True:
-            fs = cap.read_set()
-            if "ir" not in fs:
-                continue
-            ir = fs["ir"]; rgb = fs.get("rgb")
-            box = models.detect(ir.gray)
-            state, msg = emitter_verdict(float(ir.gray.mean()), box is not None, float(rgb.gray.mean()) if rgb else None)
-            if not gui:
-                if t_end is None or time.monotonic() > t_end:
-                    break
-                continue
-            left = _bgr(ir)
-            if box is not None:
-                cv2.rectangle(left, (box.x, box.y), (box.x + box.w, box.y + box.h), COL_OK, 2)
-            _text(left, "IR  mean %.0f" % ir.gray.mean(), (10, 24))
-            panels = [left]
-            if rgb is not None:
-                right = cv2.resize(_bgr(rgb), (left.shape[1], left.shape[0]))
-                _text(right, "RGB  mean %.0f" % rgb.gray.mean(), (10, 24))
-                panels.append(right)
-            canvas = np.hstack(panels)
-            col = {"ok": COL_OK, "dead": (60, 60, 230), "inconclusive": COL_REQ}.get(state, COL_TXT)
-            _text(canvas, msg, (10, canvas.shape[0] - 14), 0.55, col)
-            _text(canvas, "q = quit", (canvas.shape[1] - 80, 24), 0.45, (180, 180, 180))
-            cv2.imshow(WIN, canvas)
-            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            evaluate()
+            if t_end is None or time.monotonic() > t_end:
                 break
-    finally:
-        if gui:
-            cv2.destroyAllWindows(); cv2.waitKey(1)
-    return state, msg
+    return result["state"], result["msg"]
