@@ -269,7 +269,7 @@ def cmd_enroll(args) -> int:
         if not args.guided:
             from . import gui
             ui.info("A camera window opens. First look at the middle of the screen for a second (calibration),")
-            ui.info("then move your head slowly toward the ring until the pose map is covered. Enter finishes, Esc cancels.")
+            ui.info("then move your head slowly toward the blinking dot until the pose map is covered. Enter finishes, Esc cancels.")
             try:
                 # The live preview always tracks with HOG (~5 ms); the CNN (~700 ms/frame) is an
                 # auth-engine option and would make the window unusable.

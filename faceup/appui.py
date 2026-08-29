@@ -162,7 +162,7 @@ class CoverageView(Gtk.DrawingArea):
     """2-D pose map. The coverage field (a 2° Gaussian grid) is upsampled to pixel resolution
     with bicubic interpolation and drawn as a soft luminous accent field with one faint
     iso-contour at the "covered" threshold; a hairline marks the required ellipse; the
-    current pose is an eased dot with a roll tick; the target a slowly pulsing ring.
+    current pose is an eased white dot with a roll tick; the target a blinking accent dot with a breathing shadow.
     Everything handed in is display space already — no sign handling here."""
     PULSE_PERIOD = 1.2       # s
     FADE = 0.25              # s, cross-fade when the field changes
@@ -277,14 +277,19 @@ class CoverageView(Gtk.DrawingArea):
         for text, (tx, ty) in (("left", (8, H / 2 + 3)), ("right", (W - 30, H / 2 + 3)), ("up", (W / 2 - 6, 13)), ("down", (W / 2 - 13, H - 6))):
             cr.move_to(tx, ty); cr.show_text(text)
         r, g, b = self.accent
-        # target ring: slow pulse
+        # target: a blinking accent dot with a breathing soft shadow ("look here")
         if self.target is not None:
             tx, ty = self._to_px(self.target[0], self.target[1], W, H, pad)
-            pulse = 0.5 + 0.5 * math.sin((t - self._t0) / self.PULSE_PERIOD * 2 * math.pi)
-            cr.new_path(); cr.set_source_rgba(r, g, b, 0.18 + 0.22 * pulse); cr.set_line_width(5)
-            cr.arc(tx, ty, 10 + 2.5 * pulse, 0, 2 * math.pi); cr.stroke()
-            cr.new_path(); cr.set_source_rgba(r, g, b, 0.85); cr.set_line_width(1.2)
-            cr.arc(tx, ty, 9, 0, 2 * math.pi); cr.stroke()
+            pulse = 0.5 + 0.5 * math.sin((t - self._t0) / self.PULSE_PERIOD * 2 * math.pi)   # 0..1
+            halo = 14 + 8 * pulse
+            grad = cairo.RadialGradient(tx, ty, 2, tx, ty, halo)
+            grad.add_color_stop_rgba(0.0, r, g, b, 0.45 * pulse + 0.10)
+            grad.add_color_stop_rgba(1.0, r, g, b, 0.0)
+            cr.new_path(); cr.set_source(grad); cr.arc(tx, ty, halo, 0, 2 * math.pi); cr.fill()
+            cr.new_path(); cr.set_source_rgba(r, g, b, 0.35 + 0.65 * pulse)                # the blink
+            cr.arc(tx, ty, 5.5, 0, 2 * math.pi); cr.fill()
+            cr.new_path(); cr.set_source_rgba(1, 1, 1, 0.55 * pulse); cr.set_line_width(1.0)
+            cr.arc(tx, ty, 5.5, 0, 2 * math.pi); cr.stroke()
         # pose dot with roll tick
         if self.shown is not None:
             y, p, roll = self.shown

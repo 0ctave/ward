@@ -269,7 +269,7 @@ def _hint(current, target, box=None, calibrating=False) -> str:
         parts.append("turn " + ("left" if ty < current.yaw else "right"))
     if abs(tp - current.pitch) > 5:
         parts.append("look " + ("down" if tp < current.pitch else "up"))
-    return ("Slowly " + " and ".join(parts) + " toward the ring") if parts else "Hold still..."
+    return ("Slowly " + " and ".join(parts) + " toward the blinking dot") if parts else "Hold still..."
 
 
 def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror: bool = True, profile: bool = False) -> int:
