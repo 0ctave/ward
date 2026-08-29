@@ -76,18 +76,53 @@ def cell_name(cell: tuple[int, int]) -> str:
 
 class Coverage:
     """Continuous coverage of the (yaw, pitch) plane: each sample paints a Gaussian footprint
-    (σ = SIGMA degrees). Replaces "cell full/empty" for guidance: the user is sent toward the
-    least-covered required direction, and sampling happens wherever coverage is still low."""
+    (σ = SIGMA degrees). Guidance sends the user toward the least-covered required direction and
+    sampling happens wherever coverage is still low.
+
+    The required ellipse is ADAPTIVE: it starts at REQ_CENTRE/REQ_AXES and, once the user has
+    shown a range (≥ MIN_OBS frames), re-centres on the middle of the poses actually reached and
+    scales its axes to that span (never below MIN_AXES). A requirement is thus always reachable:
+    a neutral captured while glancing at the camera, or an estimator that compresses "up", can
+    no longer leave part of the ellipse out of reach."""
     STEP = 2.0
     SIGMA = 7.0
     FULL = 1.0            # local value at which a spot counts as covered
+    MIN_OBS = 90          # frames with a face before the requirement starts to adapt
+    MIN_AXES = (22.0, 12.0)
+    SPAN_FACTOR = 0.55    # semi-axis = SPAN_FACTOR × observed (p3..p97) span
 
     def __init__(self):
         self.yaws = np.arange(YAW_EDGES[0], YAW_EDGES[-1] + 0.1, self.STEP)
         self.pitches = np.arange(PITCH_EDGES[0], PITCH_EDGES[-1] + 0.1, self.STEP)
         self.map = np.zeros((len(self.pitches), len(self.yaws)))
-        yy, pp = np.meshgrid(self.yaws, self.pitches)
-        self.required = np.vectorize(required)(yy, pp)
+        self.yy, self.pp = np.meshgrid(self.yaws, self.pitches)
+        self.centre = tuple(REQ_CENTRE)
+        self.axes = tuple(REQ_AXES)
+        self.obs: list[tuple[float, float]] = []
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        cy, cp = self.centre; ay, ap = self.axes
+        self.required = ((self.yy - cy) / ay) ** 2 + ((self.pp - cp) / ap) ** 2 <= 1.0
+
+    def is_required(self, yaw: float, pitch: float) -> bool:
+        cy, cp = self.centre; ay, ap = self.axes
+        return ((yaw - cy) / ay) ** 2 + ((pitch - cp) / ap) ** 2 <= 1.0
+
+    def observe(self, yaw: float, pitch: float) -> None:
+        """Every frame with a face (after calibration): learn the user's reachable range."""
+        self.obs.append((yaw, pitch))
+        if len(self.obs) >= self.MIN_OBS and len(self.obs) % 15 == 0:
+            ys = np.array([o[0] for o in self.obs]); ps = np.array([o[1] for o in self.obs])
+            y_lo, y_hi = np.percentile(ys, [3, 97]); p_lo, p_hi = np.percentile(ps, [3, 97])
+            centre = ((y_lo + y_hi) / 2, (p_lo + p_hi) / 2)
+            axes = (min(REQ_AXES[0], max(self.MIN_AXES[0], self.SPAN_FACTOR * (y_hi - y_lo))),
+                    min(REQ_AXES[1], max(self.MIN_AXES[1], self.SPAN_FACTOR * (p_hi - p_lo))))
+            centre = (float(np.clip(centre[0], YAW_EDGES[0] + axes[0], YAW_EDGES[-1] - axes[0])),
+                      float(np.clip(centre[1], PITCH_EDGES[0] + axes[1], PITCH_EDGES[-1] - axes[1])))
+            self.centre = (0.5 * self.centre[0] + 0.5 * centre[0], 0.5 * self.centre[1] + 0.5 * centre[1])
+            self.axes = (0.5 * self.axes[0] + 0.5 * axes[0], 0.5 * self.axes[1] + 0.5 * axes[1])
+            self._rebuild()
 
     def add(self, yaw: float, pitch: float, weight: float = 0.5) -> None:
         dy = (self.yaws[None, :] - yaw) / self.SIGMA
@@ -112,8 +147,7 @@ class Coverage:
         if yaw is None or pitch is None:
             i, j = np.unravel_index(np.argmin(cov), cov.shape)
             return float(self.yaws[j]), float(self.pitches[i])
-        yy, pp = np.meshgrid(self.yaws, self.pitches)
-        dist = np.sqrt(((yy - yaw) / REQ_AXES[0]) ** 2 + ((pp - pitch) / REQ_AXES[1]) ** 2)
+        dist = np.sqrt(((self.yy - yaw) / self.axes[0]) ** 2 + ((self.pp - pitch) / self.axes[1]) ** 2)
         score = np.where(self.required & (self.map < self.FULL), self.map + 0.6 * dist, np.inf)
         i, j = np.unravel_index(np.argmin(score), score.shape)
         return float(self.yaws[j]), float(self.pitches[i])
