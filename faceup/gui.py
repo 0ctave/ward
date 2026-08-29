@@ -47,6 +47,8 @@ class _Profile:
             prof = subprocess.run(["powerprofilesctl", "get"], capture_output=True, text=True).stdout.strip() or "?"
             print(f"[profile] QT_QPA_PLATFORM={os.environ.get('QT_QPA_PLATFORM', '(unset)')} DISPLAY={os.environ.get('DISPLAY', '')} "
                   f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')} power-profile={prof} euid={os.geteuid()}", flush=True)
+            if prof == "power-saver":
+                print("[profile] WARNING: power-saver profile — CPU throttled; plug in or `powerprofilesctl set performance` for a fair measurement", flush=True)
 
     def start(self) -> None:
         self._mark = time.perf_counter()
@@ -101,7 +103,7 @@ def _sampler_main(req, res, detector_kind: str, max_height: int) -> None:
     """Worker PROCESS: dlib's Python bindings hold the GIL during detection and embedding, so a
     thread would freeze the preview (measured: 30 → 14 fps). A separate process keeps the UI
     at camera rate; frames travel over a pipe (~0.7 MB per sample, a few times per second)."""
-    models = Models(detector_kind, max_height)
+    models = Models("hog", max_height)          # always HOG here: this must keep up with the preview
     models.sp5; models.rec
     while True:
         job = req.get()
