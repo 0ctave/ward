@@ -221,8 +221,13 @@ Over the window, take the 68-point landmarks of the first and last good frames (
 A camera window tracks the head and the user simply moves it around, as with Face ID:
 
 1. **Head pose per frame.** dlib's 68 landmarks → `cv2.solvePnP` against a generic 3D face
-   (nose tip, chin, eye corners, mouth corners) → yaw / pitch / roll. Verified on synthetic
-   projections to ±4°. Angles pass through a **One Euro filter** (min_cutoff 0.6 Hz, β 0.05):
+   (nose tip, chin, eye corners, mouth corners) → **yaw / roll**. Verified on synthetic
+   projections to ±4°. **Pitch does not come from PnP**: that solution is dominated by the chin
+   landmark, dlib's least accurate one. Instead pitch is read from where the nose tip sits
+   between the eye line and the mouth line — the nose protrudes ~135 mm, so pitch shifts its
+   projection by ~0.75 % of the eye–mouth span per degree — inverted in closed form against the
+   same 3D model, using 12 eye + 4 mouth landmarks averaged. Independent of distance, position
+   in the frame and yaw (synthetic check: identical at yaw 0/±20°). Angles pass through a **One Euro filter** (min_cutoff 0.6 Hz, β 0.05):
    ±1.5° landmark noise becomes ≤1.3° peak-to-peak when still, while a 30° turn is followed
    within 0.5 s — no wiggle, no lag.
 1b. **Neutral calibration.** The first ~30 face frames (user looking at the screen naturally)
