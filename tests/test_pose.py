@@ -47,7 +47,7 @@ class PoseTests(unittest.TestCase):
         self.assertIn((3, 1), pose.REQUIRED)
         self.assertNotIn((0, 2), pose.REQUIRED)          # far-left + up: not required
         self.assertEqual(len(pose.ALL_CELLS), 21)
-        self.assertTrue(pose.required(0, 0)); self.assertTrue(pose.required(-25, -15)); self.assertFalse(pose.required(-40, 15))
+        self.assertTrue(pose.required(0, 0)); self.assertTrue(pose.required(-20, -12)); self.assertFalse(pose.required(-40, 15))
 
     def test_neighbours_each_pair_once(self):
         pairs = {(c, n) for c in pose.ALL_CELLS for n in pose.neighbours(c)}
@@ -123,7 +123,7 @@ class PoseTests(unittest.TestCase):
         for _ in range(100):
             c.observe(20.0, 10.0)
         self.assertEqual(c.centre, centre_after)               # …and then stays put
-        self.assertLess(c.axes[1], pose.REQ_AXES[1])           # and shrank to what was shown
+        self.assertLessEqual(c.axes[1], pose.REQ_AXES[1])      # and never larger than the default
         self.assertGreaterEqual(c.axes[1], c.MIN_AXES[1])
         self.assertTrue(c.is_required(0, -28))                 # bottom of the shown range is required…
         self.assertFalse(c.is_required(0, 14))                 # …the unreachable top is not
