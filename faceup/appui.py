@@ -203,7 +203,8 @@ class CoverageView(Gtk.DrawingArea):
     def _to_px(self, yaw, pitch, W, H, pad):
         y0, y1 = posemod.YAW_EDGES[0], posemod.YAW_EDGES[-1]
         p0, p1 = posemod.PITCH_EDGES[0], posemod.PITCH_EDGES[-1]
-        x = pad + (self.sgn * yaw - y0) / (y1 - y0) * (W - 2 * pad) if self.sgn < 0 else pad + (yaw - y0) / (y1 - y0) * (W - 2 * pad)
+        # everything handed to this view is already in display space (gui.to_display): no sign here
+        x = pad + (yaw - y0) / (y1 - y0) * (W - 2 * pad)
         y = pad + (p1 - pitch) / (p1 - p0) * (H - 2 * pad)
         return x, y
 
@@ -212,12 +213,8 @@ class CoverageView(Gtk.DrawingArea):
         key = (float(m.sum()), m.shape)
         if self._surface is not None and self._surface_key == key:
             return self._surface
-        m = m[::-1]                                    # pitch "up" at the top
-        if self.sgn < 0:
-            m = m[:, ::-1]                             # mirror: user's left on the left
+        m = m[::-1]                                    # pitch "up" at the top (map is display space already)
         req = cov.required[::-1]
-        if self.sgn < 0:
-            req = req[:, ::-1]
         a = np.where(req, 0.12 + 0.75 * m, 0.30 * m)   # alpha: soft, stronger inside the ellipse
         h, w = a.shape
         r, g, b = self.accent

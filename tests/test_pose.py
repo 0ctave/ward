@@ -95,9 +95,24 @@ class PoseTests(unittest.TestCase):
         p0 = pose.estimate(lm_at(0, 0), W, H)
         self.assertGreater(abs(p0.pitch) + abs(p0.yaw), 4)
 
+    def test_display_space_is_applied_exactly_once(self):
+        from faceup import gui
+        cam = pose.Pose(-20.0, -5.0, 3.0)                    # user turned to THEIR right (nose camera-left)
+        d = gui.to_display(cam, -1.0)
+        self.assertEqual((d.yaw, d.pitch, d.roll), (20.0, -5.0, -3.0))   # → right of centre on the panel
+        self.assertEqual(gui.to_display(cam, 1.0).yaw, -20.0)            # unmirrored preview: unchanged
+        src = open(gui.__file__).read()
+        self.assertIn('kind="enroll", sgn=1.0', src)                     # the view must not flip again
+        self.assertIn("_render_enroll(snap, 1.0)", src)
+
     def test_coverage_requirement_follows_the_user(self):
         c = pose.Coverage()
+        c.ADAPTIVE = True
         self.assertEqual(c.centre, tuple(pose.REQ_CENTRE))
+        fixed = pose.Coverage()
+        for _ in range(200):
+            fixed.observe(10.0, -25.0)
+        self.assertEqual(fixed.centre, tuple(pose.REQ_CENTRE))          # default: the ellipse never moves
         # a user whose readings are biased down: reaches −30…+4 pitch, −25…+25 yaw
         rng = np.random.default_rng(0)
         for _ in range(200):

@@ -184,6 +184,16 @@ class _Sampler:
 PANEL_H = 110
 
 
+def to_display(pose, sgn: float):
+    """Camera-convention pose → what the user sees. The preview is mirrored, so the user's left is
+    the image's left; camera yaw is negative when the nose moves camera-left, i.e. when the user
+    turns to THEIR right — hence display yaw = −camera yaw when mirrored. Applied exactly once,
+    here; the coverage map, the target, the hints and the coverage view all live in display space."""
+    if pose is None:
+        return None
+    return posemod.Pose(sgn * pose.yaw, pose.pitch, sgn * pose.roll)
+
+
 def _coverage_panel(width: int, cov, current, target, sgn: float = 1.0) -> np.ndarray:
     """Heatmap of (yaw, pitch) coverage: the required ellipse outlined, covered areas green,
     uncovered required areas orange, the current pose as a dot, the next target as a ring."""
@@ -305,7 +315,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     probe = cap.read_one(primary, flush=0)
     ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
     try:
-        screen = disp.open_display(WIN, pw, ph, kind="enroll", sgn=sgn, canvas=(pw, ph + PANEL_H))
+        screen = disp.open_display(WIN, pw, ph, kind="enroll", sgn=1.0, canvas=(pw, ph + PANEL_H))   # snapshot is already display space
     except disp.DisplayUnavailable as e:
         sampler.close()
         raise GuiUnavailable(str(e))
@@ -372,10 +382,12 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                 stable = state["stability"].push(current)
                 state["prev_pose"] = current
                 if not calibrating:
-                    state["coverage"].observe(current.yaw, current.pitch)
+                    d = to_display(current, sgn)
+                    state["coverage"].observe(d.yaw, d.pitch)
                 cell = current.cell() or posemod.nearest_cell(current.yaw, current.pitch)
                 cov = state["coverage"]
-                covered = cov.at(current.yaw, current.pitch) >= cov.FULL
+                dcur = to_display(current, sgn)                       # coverage lives in display space
+                covered = cov.at(dcur.yaw, dcur.pitch) >= cov.FULL
                 worker_ok = sampler.alive
                 busy = sampler.busy if worker_ok else False
                 gate = ("calibrating" if calibrating else "moving" if not stable else "covered here" if covered
@@ -411,7 +423,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                             ok = True
                         if ok:
                             c.n_primary += 1
-                            cov.add(current.yaw, current.pitch)       # THE line that was missing: coverage never grew
+                            cov.add(dcur.yaw, dcur.pitch)
                             state["last_sample_t"] = now
                             sampled = True
         else:
@@ -426,10 +438,10 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             state["sampler"] = _Sampler(models)
 
         cov = state["coverage"]
-        target = None if calibrating else cov.target(current.yaw if current else None, current.pitch if current else None)
+        disp_current = to_display(current, sgn)
+        target = None if calibrating else cov.target(disp_current.yaw if disp_current else None, disp_current.pitch if disp_current else None)
         frac = cov.fraction()
-        disp_current = posemod.Pose(sgn * current.yaw, current.pitch, sgn * current.roll) if current else None
-        disp_target = (sgn * target[0], target[1]) if target else None
+        disp_target = target                                            # already display space
         if frac >= 0.97 and state["t_complete"] is None:
             state["t_complete"] = time.monotonic()
 
@@ -460,7 +472,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
             "sampled": sampled,
             "spectrum": primary,
         }
-        out = snap if screen.snapshot else _render_enroll(snap, sgn)
+        out = snap if screen.snapshot else _render_enroll(snap, 1.0)   # everything in snap is display space
         prof.lap("draw")
         prof.frame()
         if state["t_complete"] and time.monotonic() - state["t_complete"] > 3:

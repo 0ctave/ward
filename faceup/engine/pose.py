@@ -32,7 +32,7 @@ CENTRE = (NY // 2, 1)
 # neutral pose. Corners such as far-left + up are not required — physically awkward at a
 # laptop and covered by interpolation anyway.
 REQ_CENTRE = (0.0, -4.0)        # degrees; slightly below level: laptop use is keyboard-biased
-REQ_AXES = (34.0, 19.0)         # semi-axes yaw, pitch
+REQ_AXES = (30.0, 14.0)         # semi-axes yaw, pitch — modest on purpose: reachable at a laptop
 
 
 def required(yaw: float, pitch: float) -> bool:
@@ -87,7 +87,8 @@ class Coverage:
     STEP = 2.0
     SIGMA = 7.0
     FULL = 1.0            # local value at which a spot counts as covered
-    MIN_OBS = 90          # frames with a face before the requirement starts to adapt
+    MIN_OBS = 90          # frames with a face before the requirement may adapt
+    ADAPTIVE = False      # a target that moves is disorienting; keep the ellipse fixed unless enabled
     MIN_AXES = (22.0, 12.0)
     SPAN_FACTOR = 0.55    # semi-axis = SPAN_FACTOR × observed (p3..p97) span
 
@@ -115,7 +116,7 @@ class Coverage:
         The ellipse adapts ONCE (at MIN_OBS frames) and then stays fixed — a target that keeps
         moving is disorienting; `adapted` tells the UI when it happened."""
         self.obs.append((yaw, pitch))
-        if len(self.obs) == self.MIN_OBS and not self.adapted:
+        if self.ADAPTIVE and len(self.obs) == self.MIN_OBS and not self.adapted:
             self.adapted = True
             ys = np.array([o[0] for o in self.obs]); ps = np.array([o[1] for o in self.obs])
             y_lo, y_hi = np.percentile(ys, [3, 97]); p_lo, p_hi = np.percentile(ps, [3, 97])
