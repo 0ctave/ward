@@ -105,6 +105,13 @@ def cmd_doctor(args) -> int:
         ui.info("anti-spoof CNN model not installed — that voter is disabled (`sudo faceup setup` can fetch it)")
     rec, live = cfg["recognition"], cfg["liveness"]
     ui.info(f"recognition: certainty={rec['certainty']} rgb_certainty={rec['rgb_certainty']} fusion_frames={rec['fusion_frames']} detector={rec['detector']}@{rec['max_height']}")
+    if rec["detector"] == "cnn":
+        ui.warn("detector = cnn costs ~0.5–0.9 s per frame on a laptop CPU: only 2–3 frame sets fit in the auth window")
+        ui.tip("sudo faceup tune recognition.detector hog   (multi-pose enrollment covers angles better than the CNN does)")
+        problems += 1
+    prof = subprocess.run(["powerprofilesctl", "get"], capture_output=True, text=True).stdout.strip()
+    if prof == "power-saver":
+        ui.warn("power profile is power-saver: the CPU is throttled, every stage runs 1.5–2× slower")
     ui.info(f"liveness: required_votes={live['required_votes']} cross={live['cross_spectrum']} cnn={live['antispoof_cnn']} shadow={live['shadow_test']} motion={live['motion']}")
     try:
         st = storemod.load(user)
@@ -229,7 +236,10 @@ def cmd_enroll(args) -> int:
             ui.info("A camera window opens. Move your head slowly so the dot visits every highlighted cell;")
             ui.info("green cells are captured. Enter finishes, Esc cancels.")
             try:
-                done = gui.free_move_enroll(st, cap, models, cams, profile=args.profile)
+                # The live preview always tracks with HOG (~5 ms); the CNN (~700 ms/frame) is an
+                # auth-engine option and would make the window unusable.
+                ui_models = models if cfg["recognition"]["detector"] == "hog" else Models("hog", 320)
+                done = gui.free_move_enroll(st, cap, ui_models, cams, profile=args.profile)
             except gui.GuiUnavailable as e:
                 ui.warn(f"no camera window available ({e}); falling back to the guided text flow")
                 args.guided = True

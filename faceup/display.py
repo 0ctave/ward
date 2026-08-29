@@ -42,6 +42,9 @@ def user_wayland_env() -> dict[str, str]:
             env["WAYLAND_DISPLAY"] = sock
             env.setdefault("GDK_BACKEND", "wayland,x11")
             break
+    bus = f"/run/user/{uid}/bus"
+    if os.path.exists(bus) and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"     # GTK settings; avoids the dbus-launch warning
     return env
 
 
