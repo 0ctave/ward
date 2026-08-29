@@ -68,6 +68,36 @@ def neighbours(cell: tuple[int, int]) -> list[tuple[int, int]]:
     return out
 
 
+# Vertical geometry of the generic model used by the pitch proxy (mm): eye line y=+170 z=-135,
+# nose tip y=0 z=0, mouth line y=-150 z=-125.
+_EYE_Y, _EYE_Z, _MOUTH_Y, _MOUTH_Z = 170.0, -135.0, -150.0, -125.0
+
+
+def pitch_from_ratio(landmarks68: np.ndarray, roll_deg: float) -> float | None:
+    """Pitch from where the nose tip sits between the eye line and the mouth line.
+
+    The nose protrudes ~135 mm in front of the eye/mouth plane, so head pitch moves its projected
+    tip up/down relative to eyes and mouth: r = (eyes_y − nose_y) / (eyes_y − mouth_y). Unlike PnP
+    this ignores the chin (dlib's noisiest landmark), is independent of distance and of where the
+    face sits in the frame, and averages 12 eye + 4 mouth points. Inverted in closed form:
+        r·(ΔY·c + ΔZ·s) = EYE_Y·c − EYE_Z·s   with c=cos θ, s=sin θ  →  tan θ = (EYE_Y − r·ΔY)/(r·ΔZ − EYE_Z)
+    """
+    lm = landmarks68
+    eyes = np.vstack([lm[36:42], lm[42:48]]).mean(axis=0)
+    mouth = lm[[48, 54, 51, 57]].mean(axis=0)
+    nose = lm[30]
+    # remove roll so "vertical" is the face's own vertical
+    th = np.deg2rad(-roll_deg)
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    e, m, n = (R @ (v - eyes) for v in (eyes, mouth, nose))
+    span = m[1] - e[1]
+    if abs(span) < 1e-3:
+        return None
+    r = (n[1] - e[1]) / span
+    dy, dz = _EYE_Y - _MOUTH_Y, _EYE_Z - _MOUTH_Z
+    return float(np.degrees(np.arctan2(_EYE_Y - r * dy, r * dz - _EYE_Z)))
+
+
 def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int) -> Pose | None:
     pts = landmarks68[_LM_IDX].astype(np.float64)
     f = float(frame_w)
@@ -85,6 +115,9 @@ def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int) -> Pose | None
     elif pitch < -90:
         pitch += 180
     pitch = -pitch          # make "looking down" negative
+    ratio_pitch = pitch_from_ratio(landmarks68, roll)
+    if ratio_pitch is not None:
+        pitch = ratio_pitch   # PnP pitch is chin-dominated and unreliable; keep PnP yaw/roll
     return Pose(yaw, pitch, roll)
 
 

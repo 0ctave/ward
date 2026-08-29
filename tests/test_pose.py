@@ -29,6 +29,9 @@ def synth_landmarks(yaw_deg: float, pitch_deg: float, w=640, h=360) -> np.ndarra
     lm = np.zeros((68, 2))
     for i, idx in enumerate(pose._LM_IDX):
         lm[idx] = pts[i, 0]
+    # eye sets = their outer corners, mouth top/bottom = mouth centre (all on the model's eye/mouth lines)
+    lm[36:42] = lm[36]; lm[42:48] = lm[45]
+    lm[51] = lm[57] = (lm[48] + lm[54]) / 2
     return lm
 
 
