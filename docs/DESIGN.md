@@ -74,7 +74,7 @@ Components (one Python module each, `faceup/engine/`):
 
 - `capture.py` — opens the selected devices with OpenCV/V4L2, produces time-stamped frames; pairs frames whose timestamps differ by < 40 ms.
 - `quality.py` — brightness (mean, p5/p95), sharpness (variance of Laplacian), face size; drops frames below thresholds *before* spending CPU on detection.
-- `detect.py` — dlib HOG by default; dlib CNN (`mmod_human_face_detector.dat`) when `detector = "cnn"`; 5-point landmarks for alignment, 68-point landmarks for motion analysis (loaded lazily).
+- `detect.py` — **YuNet** (OpenCV DNN, bundled `face_detection_yunet_2022mar.onnx`, Apache-2.0) by default: ~4 ms per frame at 480 px and trained on turned/tilted faces; dlib HOG (`"hog"`, frontal only) and dlib CNN (`"cnn"`, ~700 ms) remain selectable. YuNet boxes are re-squared to HOG-style boxes before dlib's landmark predictors run. 5-point landmarks for alignment, 68-point for pose and motion (loaded lazily).
 - `recognise.py` — dlib ResNet embeddings; fusion; matching against the store.
 - `liveness/` — `cross_spectrum.py`, `antispoof_cnn.py`, `shadow.py`, `motion.py`; a common `Vote` result: `PASS | FAIL | ABSTAIN` + reason + metric.
 - `decide.py` — the decision rule (§6.5), timing budget, log line.
@@ -100,7 +100,7 @@ certainty        = 0.40    # max embedding distance (dlib scale, 0.6 = "same per
 rgb_certainty    = 0.38    # RGB is a weaker signal in poor light → slightly stricter
 fusion_frames    = 4       # embeddings averaged per camera before matching
 require_rgb_match = false  # if true, both spectra must match (profile A, bright rooms only)
-detector         = "hog"   # "hog" | "cnn"
+detector         = "yunet" # "yunet" | "hog" | "cnn"
 max_height       = 320
 
 [liveness]
@@ -155,7 +155,7 @@ Laptop IR cameras run auto-exposure in firmware with no manual control and start
 ### 6.3 Quality gate (≈ 1 ms/frame)
 Drop frames that are dark (below threshold), blown out (p95 > 250), blurred (Laplacian variance < 60 at 320 px), or where the face box would be < 60 px. A window with *only* dark IR frames ends with reason `dark` — this is the emitter-failure signature and `doctor` reports it.
 
-### 6.4 Detect · track · fuse (≈ 60 ms/frame HOG, 700 ms CNN@240)
+### 6.4 Detect · track · fuse (≈ 4 ms/frame YuNet; 60 ms HOG; 700 ms CNN@240)
 - Detect on the best frame first, then track (correlation tracker) — detection is not re-run every frame.
 - Align with 5-point landmarks, compute the 128-d embedding per frame per camera.
 - **Fusion:** keep the top `fusion_frames` by quality, average the embeddings (L2-normalised). Averaging removes per-frame noise — the largest single reducer of false rejects after multi-pose enrollment.
@@ -329,7 +329,7 @@ sudo faceup-auth                   the engine (PAM calls this; also runnable by 
 |---|---|---|
 | Camera open + first frames | 80–150 ms | dominates the fast path; keep devices open for the whole window |
 | Quality gate | 1 ms/frame | |
-| HOG detect | 60 ms (once) then tracking ~5 ms/frame | CNN@240: 700 ms — opt-in |
+| YuNet detect | 4 ms/frame (full frame, no tracking needed) | HOG 60 ms / 5 ms ROI; CNN@240 700 ms — opt-in |
 | Landmarks + embedding | 30 ms/frame/camera | 4 fused frames × 2 cameras ≈ 240 ms spread over the window |
 | Cross-spectrum, motion | < 2 ms | |
 | Anti-spoof CNN | 15 ms | |

@@ -103,7 +103,7 @@ def _sampler_main(req, res, detector_kind: str, max_height: int) -> None:
     """Worker PROCESS: dlib's Python bindings hold the GIL during detection and embedding, so a
     thread would freeze the preview (measured: 30 → 14 fps). A separate process keeps the UI
     at camera rate; frames travel over a pipe (~0.7 MB per sample, a few times per second)."""
-    models = Models("hog", max_height)          # always HOG here: this must keep up with the preview
+    models = Models("yunet", max_height)        # fast detector here: this must keep up with the preview
     models.sp5; models.rec
     while True:
         job = req.get()

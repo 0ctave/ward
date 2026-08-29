@@ -86,5 +86,17 @@ class EmitterVerdictTests(unittest.TestCase):
         self.assertEqual(emitter_verdict(70, True, None)[0], "unknown")       # no RGB to compare
 
 
+
+class YuNetTests(unittest.TestCase):
+    def test_bundled_model_loads_and_is_default(self):
+        from faceup.engine import detect
+        self.assertTrue(detect.YUNET_MODEL.exists(), detect.YUNET_MODEL)
+        self.assertTrue(detect.yunet_available())
+        m = detect.Models()
+        self.assertEqual(m.detector_kind, "yunet")
+        blank = np.full((360, 640), 120, np.uint8)
+        self.assertIsNone(m.detect(blank))            # no face → None, and the net initialises fine
+
+
 if __name__ == "__main__":
     unittest.main()

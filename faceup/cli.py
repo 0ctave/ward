@@ -107,7 +107,11 @@ def cmd_doctor(args) -> int:
     ui.info(f"recognition: certainty={rec['certainty']} rgb_certainty={rec['rgb_certainty']} fusion_frames={rec['fusion_frames']} detector={rec['detector']}@{rec['max_height']}")
     if rec["detector"] == "cnn":
         ui.warn("detector = cnn costs ~0.5–0.9 s per frame on a laptop CPU: only 2–3 frame sets fit in the auth window")
-        ui.tip("sudo faceup tune recognition.detector hog   (multi-pose enrollment covers angles better than the CNN does)")
+        ui.tip("sudo faceup tune recognition.detector yunet   (4 ms per frame and pose-robust)")
+        problems += 1
+    elif rec["detector"] == "hog":
+        ui.warn("detector = hog only finds frontal faces; YuNet is faster and handles turned/tilted heads")
+        ui.tip("sudo faceup tune recognition.detector yunet")
         problems += 1
     prof = subprocess.run(["powerprofilesctl", "get"], capture_output=True, text=True).stdout.strip()
     if prof == "power-saver":
@@ -238,7 +242,7 @@ def cmd_enroll(args) -> int:
             try:
                 # The live preview always tracks with HOG (~5 ms); the CNN (~700 ms/frame) is an
                 # auth-engine option and would make the window unusable.
-                ui_models = models if cfg["recognition"]["detector"] == "hog" else Models("hog", 320)
+                ui_models = models if cfg["recognition"]["detector"] != "cnn" else Models("yunet", 320)
                 done = gui.free_move_enroll(st, cap, ui_models, cams, profile=args.profile)
             except gui.GuiUnavailable as e:
                 ui.warn(f"no camera window available ({e}); falling back to the guided text flow")
@@ -392,15 +396,13 @@ def cmd_setup(args) -> int:
         ui.info("no IR camera — skipped")
 
     ui.section("3/6 Detector")
-    dev = cfg["cameras"]["ir"] or cfg["cameras"]["rgb"]
-    b = probe.benchmark(dev)
-    if b:
-        ui.info(f"HOG {b.hog_ms:.0f} ms · CNN " + ", ".join(f"{h}px={ms:.0f}ms" for h, ms in b.cnn_ms.items()))
-        rec = recommend_cnn(b)
-        if rec and ui.confirm(f"Use the CNN detector at max_height={rec}? (finds tilted faces; ~{b.cnn_ms[rec]/1000:.1f} s per frame — HOG + multi-pose enrollment is usually enough)", default=False):
-            cfg["recognition"]["detector"], cfg["recognition"]["max_height"] = "cnn", rec
-        else:
-            cfg["recognition"]["detector"], cfg["recognition"]["max_height"] = "hog", 320
+    from .engine.detect import yunet_available
+    if yunet_available():
+        cfg["recognition"]["detector"], cfg["recognition"]["max_height"] = "yunet", 320
+        ui.ok("YuNet (OpenCV, ~4 ms per frame, robust to turned/tilted faces)")
+    else:
+        cfg["recognition"]["detector"], cfg["recognition"]["max_height"] = "hog", 320
+        ui.warn("YuNet model missing — falling back to dlib HOG (frontal faces only)")
 
     ui.section("4/6 Anti-spoof model")
     from .engine.liveness import antispoof_cnn
