@@ -38,7 +38,9 @@ detector and ResNet face embedding, OpenCV, V4L2 — with what Howdy lacks:
   the reference laptop).
 - **Multi-frame fusion.** Embeddings of the best frames are averaged before matching,
   which removes the per-frame noise behind random rejects.
-- **Pose-guided dual-spectrum enrollment.** One model per pose *and* per camera.
+- **Free-move enrollment.** A camera window tracks your head angle (yaw/pitch from facial
+  landmarks) and fills a 5×3 pose grid as you move — no scripted poses. Adjacent cells are
+  interpolated at match time so the angles in between are covered too.
 - **Liveness voters** with PASS / FAIL / ABSTAIN semantics — two PASSes and zero FAILs
   needed, and abstaining never counts against you:
   - *cross-spectrum consistency* — the face must appear in both cameras at the same place
@@ -59,14 +61,14 @@ Full rationale and thresholds: [docs/DESIGN.md](docs/DESIGN.md).
 |---|---|---|
 | `faceup doctor` | no | Diagnoses cameras (IR vs RGB via raw V4L2 ioctls), live lighting, emitter state, engine, enrolled models, PAM. Exit 1 if anything needs fixing. |
 | `faceup setup` | yes | Guided: cameras → emitter → detector benchmark → anti-spoof model → enrollment → PAM. |
-| `faceup enroll` | yes | Pose-guided enrollment on every configured camera, with calibration, wrong-person check and a 3-attempt self-check. |
+| `faceup enroll` | yes | Free-move enrollment in a camera window (`--guided` for the scripted text flow), with calibration, wrong-person check and a 3-attempt self-check. |
 | `faceup auth -v` | yes | Runs one authentication and shows every step (what PAM calls without `-v`). |
 | `faceup tune [section.key VALUE]` | yes | Show or change `/etc/faceup/config.toml` with validation. |
 | `faceup pam enable\|disable\|status` | yes | The PAM line, with backup/restore; offers to retire `pam_howdy`. |
 | `faceup models [--remove LABEL]` | yes | List or remove enrolled poses. |
 | `faceup log` | no* | Recent attempts, one line each (*`adm` group). |
 | `faceup bench` | no | Times HOG vs CNN detectors on a live frame. |
-| `faceup emitter install\|configure\|test` | yes | IR emitter via linux-enable-ir-emitter. |
+| `faceup emitter check` | yes | Lights off → IR/RGB side by side → tells you whether the emitter fires. `install`/`configure` via linux-enable-ir-emitter. |
 
 ## Install
 

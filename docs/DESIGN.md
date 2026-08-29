@@ -1,6 +1,6 @@
 # faceup v0.2 — Design
 
-Status: **draft for implementation** · 2026-08-28 · supersedes the Howdy-wrapper scope of v0.1
+Status: **implementing (v0.2.x)** · updated 2026-08-29 · supersedes the Howdy-wrapper scope of v0.1
 
 ## 1. Goal
 
@@ -112,8 +112,9 @@ motion         = true
 motion_challenge = false   # active "turn your head slightly" prompt
 
 [timing]
-window_ms   = 1500         # capture window
-hard_timeout_ms = 2500     # absolute cap incl. model loading
+settle_ms   = 1200         # wait for the camera's auto-exposure to stop drifting (max)
+window_ms   = 2000         # capture window, starts after settle
+hard_timeout_ms = 4000     # absolute cap incl. settle and model loading
 
 [behaviour]
 abort_if_ssh    = true
@@ -148,8 +149,8 @@ Budget on a Ryzen 6600HS (no AVX dlib build): **typical accept in 250–450 ms**
 - Refuse if `abort_if_ssh` and `SSH_CONNECTION` is set; refuse if the user has no models. Exit non-zero → PAM continues to the password. No log spam for these.
 - Open cameras from config; if a device is missing, degrade to the available profile (§3). Refuse devices whose driver is a loopback (`v4l2loopback`, `vivid`).
 
-### 6.2 Capture window (≤ 1500 ms)
-Read both cameras in lock-step (measured: 20 pairs/s on the target hardware). Frames enter the pipeline as they arrive; the window ends early on success.
+### 6.2 Settle, then capture window (≤ 1200 + 2000 ms)
+Laptop IR cameras run auto-exposure in firmware with no manual control and start each session over- or under-exposed; the face is undetectable until it converges (~1–2 s measured). The engine reads frames until the primary camera's brightness is stable for 4 frames (max `settle_ms`), and only then starts the window. dlib models are loaded before the camera opens so that cost overlaps nothing. Both cameras are read in lock-step (20 pairs/s measured); the window ends early on success.
 
 ### 6.3 Quality gate (≈ 1 ms/frame)
 Drop frames that are dark (below threshold), blown out (p95 > 250), blurred (Laplacian variance < 60 at 320 px), or where the face box would be < 60 px. A window with *only* dark IR frames ends with reason `dark` — this is the emitter-failure signature and `doctor` reports it.
@@ -215,13 +216,57 @@ Over the window, take the 68-point landmarks of the first and last good frames (
 
 ## 8. Enrollment
 
-`sudo faceup enroll` (profile-aware):
-1. Calibrate: 10 synchronized pairs looking straight → `calib`.
-2. For each pose (straight, keyboard, tilt-L/R, turn-L/R, lean-back, close; optional glasses, headset, dark): capture ~1 s, keep the best 3 frames per camera, store the **averaged** embedding per spectrum with its quality score. One user action per pose.
-3. Reject a pose if the face is < 80 px, blurred, or if its embedding is > 0.6 from *all* existing models of that user (wrong person in front of the camera).
-4. Self-check at the end: run the full auth pipeline three times; report acceptance and per-voter results so the user sees liveness working before relying on it.
+### 8.1 Free-move enrollment (default)
 
-Re-enrollment is required when the camera assignment changes (IR ↔ RGB); `doctor` detects a store whose spectra don't match the configured cameras.
+A camera window tracks the head and the user simply moves it around, as with Face ID:
+
+1. **Head pose per frame.** dlib's 68 landmarks → `cv2.solvePnP` against a generic 3D face
+   (nose tip, chin, eye corners, mouth corners) → yaw / pitch / roll, exponentially smoothed.
+   Verified on synthetic projections to ±4°.
+2. **Pose grid.** 5 yaw cells (far-left … far-right, edges ±9/±24/±45°) × 3 pitch cells
+   (down / level / up, edges −13/+9°). The seven cells on the centre cross are **required**
+   (that is where a face sits at a laptop, including "looking at the keyboard"); the eight
+   corners are optional.
+3. **Sampling.** When the pose is stable (< 4° change between frames), the frame passes the
+   quality gate and the face is ≥ 80 px, an embedding is computed for every camera and
+   pushed into the current cell (best 3 per cell per spectrum by quality). A cell counts
+   as filled after 2 samples of the primary spectrum.
+4. **Guidance.** The window shows the mirrored camera image, the grid with filled / required
+   / optional cells, a dot for the current pose, the next target cell, and a text hint
+   ("turn a little left, look a little down"). Because guidance is *visual* — move the dot
+   into the cell — it does not depend on getting the angle sign conventions right for a
+   given camera mounting.
+5. **Finish.** Automatically when all 15 cells are filled, 12 s after the required ones are,
+   or on Enter. Per cell and spectrum the samples are fused into one model with its mean
+   pose; cells are labelled `C/level`, `L1/down`, …
+
+### 8.2 Interpolation between poses
+
+The store synthesises a **virtual model** for every pair of grid-adjacent filled cells: the
+normalised mean of their embeddings. dlib's embedding space is close enough to locally
+linear that the midpoint approximates the face at the intermediate angle. Virtual models
+take part in matching but are never persisted. This is what lets a 7-cell enrollment cover
+the angles between cells without the user holding them.
+
+### 8.3 Guided enrollment (`--guided`, fallback)
+
+The scripted eight-pose text flow of v0.2, used when no window can be opened (headless, no
+display for root). Models carry no pose and get no interpolation.
+
+### 8.4 Common to both
+
+- Calibration first (10 synchronized pairs) → `calib`.
+- Wrong-person rejection: an embedding > 0.6 from every existing model of that spectrum.
+- Self-check at the end: three full authentication attempts with per-voter results.
+- Re-enroll when the camera assignment changes.
+
+### 8.5 Emitter check
+
+`faceup emitter check` opens the same window with IR and RGB side by side and infers the
+emitter state without any hardware knowledge: with the room lights **off** the colour camera
+must be dark; if the IR camera still sees a face (or is bright), the emitter is firing;
+if both are dark, it is not. `doctor` runs the same inference silently whenever the RGB
+frame happens to be dark.
 
 ## 9. Security considerations
 
