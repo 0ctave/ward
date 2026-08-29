@@ -36,25 +36,27 @@ from .engine import pose as posemod  # noqa: E402
 KEY_ENTER, KEY_ESC, KEY_Q = "enter", "esc", "q"
 
 CSS = b"""
-.fu-preview { border-radius: 14px; }
-.fu-card { background: alpha(currentColor, 0.045); border-radius: 14px; padding: 16px; }
-.fu-hint { font-size: 17px; font-weight: 600; }
-.fu-dim { opacity: 0.6; }
-.fu-pill { border-radius: 999px; padding: 3px 11px; font-size: 12.5px; font-weight: 600;
+.fu-surface { border-radius: 14px; }
+.fu-card { background: alpha(currentColor, 0.04); border-radius: 14px; padding: 20px; }
+.fu-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; opacity: 0.55; }
+.fu-hint { font-size: 17px; font-weight: 600; line-height: 1.3; }
+.fu-dim { opacity: 0.55; }
+.fu-sep { background: alpha(currentColor, 0.10); min-height: 1px; }
+.fu-pill { border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600;
            background: alpha(currentColor, 0.08); }
 .fu-pill.ok   { background-color: @success_bg_color; color: @success_fg_color; }
 .fu-pill.warn { background-color: @warning_bg_color; color: @warning_fg_color; }
 .fu-pill.bad  { background-color: @error_bg_color; color: @error_fg_color; }
 .fu-pill.accent { background-color: @accent_bg_color; color: @accent_fg_color; }
-.fu-kbd { font-family: monospace; font-size: 11px; border-radius: 6px; padding: 1px 6px;
-          border: 1px solid alpha(currentColor, 0.25); }
+.fu-kbd { font-family: monospace; font-size: 10.5px; border-radius: 5px; padding: 1px 6px;
+          border: 1px solid alpha(currentColor, 0.22); opacity: 0.8; }
 .fu-banner { border-radius: 10px; padding: 10px 14px; font-weight: 600; }
 .fu-banner.ok   { background-color: @success_bg_color; color: @success_fg_color; }
 .fu-banner.bad  { background-color: @error_bg_color; color: @error_fg_color; }
 .fu-banner.warn { background-color: @warning_bg_color; color: @warning_fg_color; }
 .fu-banner.info { background-color: alpha(currentColor, 0.06); }
-.fu-progress trough { min-height: 5px; }
-.fu-progress progress { min-height: 5px; }
+.fu-progress trough { min-height: 4px; }
+.fu-progress progress { min-height: 4px; }
 """
 
 _css_loaded = False
@@ -97,7 +99,7 @@ class Preview(Gtk.Overlay):
         self.picture = Gtk.Picture()
         self.picture.set_content_fit(Gtk.ContentFit.COVER)
         self.picture.set_size_request(width, height)
-        self.picture.add_css_class("fu-preview")
+        self.picture.add_css_class("fu-surface")
         self.picture.set_overflow(Gtk.Overflow.HIDDEN)
         self.set_child(self.picture)
         self.area = Gtk.DrawingArea()
@@ -157,27 +159,33 @@ class Preview(Gtk.Overlay):
 
 
 class CoverageView(Gtk.DrawingArea):
-    """2-D pose map: fixed required ellipse, coverage as soft accent-coloured contours, the
-    current pose as an eased dot with a roll tick, the target as a pulsing ring."""
+    """2-D pose map. The coverage field (a 2° Gaussian grid) is upsampled to pixel resolution
+    with bicubic interpolation and drawn as a soft luminous accent field with one faint
+    iso-contour at the "covered" threshold; a hairline marks the required ellipse; the
+    current pose is an eased dot with a roll tick; the target a slowly pulsing ring.
+    Everything handed in is display space already — no sign handling here."""
+    PULSE_PERIOD = 1.2       # s
+    FADE = 0.25              # s, cross-fade when the field changes
 
     def __init__(self, width: int, height: int):
         super().__init__()
         self.set_size_request(width, height)
         self.set_draw_func(self._draw)
         self.cov = None
-        self.pose = None           # display-space (yaw, pitch, roll)
-        self.shown = None          # eased pose
+        self.pose = None
+        self.shown = None
         self.target = None
-        self.sgn = -1.0
         self.accent = (0.21, 0.52, 0.89)
         self.fg = (0.5, 0.5, 0.5)
-        self._surface = None
-        self._surface_key = None
+        self._surf = None            # current field surface
+        self._surf_key = None
+        self._prev_surf = None       # previous field, for the cross-fade
+        self._fade_t0 = 0.0
         self._anim = None
-        self._phase = 0.0
+        self._t0 = time.monotonic()
 
-    def update(self, cov, pose, target, sgn: float) -> None:
-        self.cov, self.pose, self.target, self.sgn = cov, pose, target, sgn
+    def update(self, cov, pose, target, sgn: float = 1.0) -> None:
+        self.cov, self.pose, self.target = cov, pose, target
         if pose is not None and self.shown is None:
             self.shown = pose
         if self._anim is None:
@@ -185,11 +193,9 @@ class CoverageView(Gtk.DrawingArea):
         self.queue_draw()
 
     def _tick(self) -> bool:
-        self._phase = (self._phase + 0.05) % 1.0
         if self.pose is not None and self.shown is not None:
-            y, p, r = self.shown
-            ty, tp, tr = self.pose
-            self.shown = (y + 0.35 * (ty - y), p + 0.35 * (tp - p), r + 0.35 * (tr - r))
+            y, p, r = self.shown; ty, tp, tr = self.pose
+            self.shown = (y + 0.3 * (ty - y), p + 0.3 * (tp - p), r + 0.3 * (tr - r))
         elif self.pose is None:
             self.shown = None
         self.queue_draw()
@@ -199,86 +205,95 @@ class CoverageView(Gtk.DrawingArea):
         if self._anim is not None:
             GLib.source_remove(self._anim); self._anim = None
 
-    # -- geometry helpers
     def _to_px(self, yaw, pitch, W, H, pad):
         y0, y1 = posemod.YAW_EDGES[0], posemod.YAW_EDGES[-1]
         p0, p1 = posemod.PITCH_EDGES[0], posemod.PITCH_EDGES[-1]
-        # everything handed to this view is already in display space (gui.to_display): no sign here
-        x = pad + (yaw - y0) / (y1 - y0) * (W - 2 * pad)
-        y = pad + (p1 - pitch) / (p1 - p0) * (H - 2 * pad)
-        return x, y
+        return pad + (yaw - y0) / (y1 - y0) * (W - 2 * pad), pad + (p1 - pitch) / (p1 - p0) * (H - 2 * pad)
 
-    def _coverage_surface(self, cov):
-        m = np.minimum(cov.map / cov.FULL, 1.0)
-        key = (float(m.sum()), m.shape)
-        if self._surface is not None and self._surface_key == key:
-            return self._surface
-        m = m[::-1]                                    # pitch "up" at the top (map is display space already)
-        req = cov.required[::-1]
-        a = np.where(req, 0.12 + 0.75 * m, 0.30 * m)   # alpha: soft, stronger inside the ellipse
-        h, w = a.shape
+    def _field(self, cov, iw: int, ih: int):
+        """Pixel-resolution ARGB32 surface of the coverage field; cached on a cheap map hash.
+        The raw (unclipped) Gaussian field is upsampled bicubically, so there is no plateau
+        edge to alias; the ellipse mask is analytic at pixel resolution and feathered."""
+        import cv2
+        raw = (cov.map / cov.FULL)[::-1].astype(np.float32)                 # pitch "up" at the top
+        key = (round(float(raw.sum()), 3), round(float(raw.max()), 3), iw, ih, self.accent)
+        if self._surf is not None and self._surf_key == key:
+            return self._surf
+        big = np.maximum(cv2.resize(raw, (iw, ih), interpolation=cv2.INTER_CUBIC), 0.0)
+        # analytic, feathered ellipse mask in pixel space
+        y0, y1 = posemod.YAW_EDGES[0], posemod.YAW_EDGES[-1]
+        p0, p1 = posemod.PITCH_EDGES[0], posemod.PITCH_EDGES[-1]
+        yaws = y0 + (np.arange(iw) + 0.5) / iw * (y1 - y0)
+        pitches = p1 - (np.arange(ih) + 0.5) / ih * (p1 - p0)
+        cy, cp = cov.centre; ay, ap = cov.axes
+        d = np.sqrt(((yaws[None, :] - cy) / ay) ** 2 + ((pitches[:, None] - cp) / ap) ** 2)
+        inside = np.clip((1.06 - d) / 0.12, 0.0, 1.0)                       # 1 inside, feathered ~1.5° at the rim
+        inside = inside * inside * (3 - 2 * inside)
+        # luminous ramp without plateau: asymptotic in the field value; quieter outside the ellipse
+        lum = 1.0 - np.exp(-1.4 * big)
+        alpha = (0.05 + 0.50 * lum) * inside + (0.20 * lum) * (1.0 - inside)
+        # one faint iso-line where the field crosses "covered" (value 1)
+        contour = np.exp(-((big - 1.0) / 0.06) ** 2) * (big > 0.5)
+        alpha = np.clip(alpha + 0.16 * contour * inside, 0.0, 0.9).astype(np.float32)
         r, g, b = self.accent
-        buf = np.zeros((h, w, 4), np.uint8)
-        buf[..., 0] = (b * 255 * a).astype(np.uint8)   # premultiplied BGRA for cairo ARGB32
-        buf[..., 1] = (g * 255 * a).astype(np.uint8)
-        buf[..., 2] = (r * 255 * a).astype(np.uint8)
-        buf[..., 3] = (255 * a).astype(np.uint8)
-        surf = cairo.ImageSurface.create_for_data(bytearray(buf.tobytes()), cairo.FORMAT_ARGB32, w, h, w * 4)
-        self._surface, self._surface_key = surf, key
+        buf = np.empty((ih, iw, 4), np.uint8)
+        buf[..., 0] = (b * 255 * alpha).astype(np.uint8)                   # premultiplied BGRA
+        buf[..., 1] = (g * 255 * alpha).astype(np.uint8)
+        buf[..., 2] = (r * 255 * alpha).astype(np.uint8)
+        buf[..., 3] = (255 * alpha).astype(np.uint8)
+        surf = cairo.ImageSurface.create_for_data(bytearray(buf.tobytes()), cairo.FORMAT_ARGB32, iw, ih, iw * 4)
+        if self._surf is not None:
+            self._prev_surf, self._fade_t0 = self._surf, time.monotonic()
+        self._surf, self._surf_key = surf, key
         return surf
 
     def _draw(self, area, cr: cairo.Context, W: int, H: int) -> None:
-        pad = 22
+        pad = 20
         fr, fg, fb = self.fg
-        # frame
-        cr.set_source_rgba(fr, fg, fb, 0.06)
-        cr.rectangle(0, 0, W, H); cr.fill()
+        cr.set_source_rgba(fr, fg, fb, 0.04); cr.rectangle(0, 0, W, H); cr.fill()
         if self.cov is None:
             return
         cov = self.cov
-        # coverage field
-        surf = self._coverage_surface(cov)
-        sw, sh = surf.get_width(), surf.get_height()
-        cr.save()
-        cr.rectangle(pad, pad, W - 2 * pad, H - 2 * pad); cr.clip()
-        cr.translate(pad, pad)
-        cr.scale((W - 2 * pad) / sw, (H - 2 * pad) / sh)
-        pat = cairo.SurfacePattern(surf); pat.set_filter(cairo.FILTER_BILINEAR)
-        cr.set_source(pat); cr.paint()
+        iw, ih = W - 2 * pad, H - 2 * pad
+        surf = self._field(cov, iw, ih)
+        t = time.monotonic()
+        k = min(1.0, (t - self._fade_t0) / self.FADE) if self._prev_surf is not None else 1.0
+        cr.save(); cr.rectangle(pad, pad, iw, ih); cr.clip()
+        if self._prev_surf is not None and k < 1.0:
+            cr.set_source_surface(self._prev_surf, pad, pad); cr.paint_with_alpha(1.0 - k)
+        cr.set_source_surface(surf, pad, pad); cr.paint_with_alpha(k)
         cr.restore()
-        # quiet grid: centre lines
-        cx0, cy0 = self._to_px(0, 0, W, H, pad)
-        cr.set_source_rgba(fr, fg, fb, 0.18); cr.set_line_width(1)
-        cr.move_to(cx0, pad); cr.line_to(cx0, H - pad); cr.move_to(pad, cy0); cr.line_to(W - pad, cy0); cr.stroke()
-        # required ellipse (fixed outline)
+        if k >= 1.0:
+            self._prev_surf = None
+        # required ellipse: hairline
         ecx, ecy = self._to_px(cov.centre[0], cov.centre[1], W, H, pad)
-        ax = cov.axes[0] / (posemod.YAW_EDGES[-1] - posemod.YAW_EDGES[0]) * (W - 2 * pad)
-        ay = cov.axes[1] / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * (H - 2 * pad)
-        cr.save(); cr.translate(ecx, ecy); cr.scale(ax, ay); cr.arc(0, 0, 1, 0, 2 * math.pi); cr.restore()
-        cr.set_source_rgba(fr, fg, fb, 0.55); cr.set_line_width(1.5); cr.stroke()
-        # captions
-        cr.set_source_rgba(fr, fg, fb, 0.55)
-        cr.select_font_face("Cantarell", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL); cr.set_font_size(11)
-        for text, (tx, ty) in (("left", (6, H / 2 + 4)), ("right", (W - 30, H / 2 + 4)), ("up", (W / 2 - 8, 14)), ("down", (W / 2 - 14, H - 7))):
+        ax = cov.axes[0] / (posemod.YAW_EDGES[-1] - posemod.YAW_EDGES[0]) * iw
+        ay = cov.axes[1] / (posemod.PITCH_EDGES[-1] - posemod.PITCH_EDGES[0]) * ih
+        cr.new_path(); cr.save(); cr.translate(ecx, ecy); cr.scale(ax, ay); cr.arc(0, 0, 1, 0, 2 * math.pi); cr.restore()
+        cr.set_source_rgba(fr, fg, fb, 0.38); cr.set_line_width(1.0); cr.stroke()
+        # quiet captions
+        cr.set_source_rgba(fr, fg, fb, 0.42)
+        cr.select_font_face("Cantarell", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL); cr.set_font_size(10)
+        for text, (tx, ty) in (("left", (8, H / 2 + 3)), ("right", (W - 30, H / 2 + 3)), ("up", (W / 2 - 6, 13)), ("down", (W / 2 - 13, H - 6))):
             cr.move_to(tx, ty); cr.show_text(text)
-        # target ring (pulsing)
+        r, g, b = self.accent
+        # target ring: slow pulse
         if self.target is not None:
             tx, ty = self._to_px(self.target[0], self.target[1], W, H, pad)
-            pulse = 0.5 + 0.5 * math.sin(self._phase * 2 * math.pi)
-            r, g, b = self.accent
-            cr.set_source_rgba(r, g, b, 0.25 + 0.35 * pulse); cr.set_line_width(2 + 2 * pulse)
-            cr.arc(tx, ty, 11 + 3 * pulse, 0, 2 * math.pi); cr.stroke()
-            cr.set_source_rgba(r, g, b, 0.9); cr.set_line_width(1.5)
-            cr.arc(tx, ty, 10, 0, 2 * math.pi); cr.stroke()
-        # current pose dot with roll tick
+            pulse = 0.5 + 0.5 * math.sin((t - self._t0) / self.PULSE_PERIOD * 2 * math.pi)
+            cr.new_path(); cr.set_source_rgba(r, g, b, 0.18 + 0.22 * pulse); cr.set_line_width(5)
+            cr.arc(tx, ty, 10 + 2.5 * pulse, 0, 2 * math.pi); cr.stroke()
+            cr.new_path(); cr.set_source_rgba(r, g, b, 0.85); cr.set_line_width(1.2)
+            cr.arc(tx, ty, 9, 0, 2 * math.pi); cr.stroke()
+        # pose dot with roll tick
         if self.shown is not None:
             y, p, roll = self.shown
             px, py = self._to_px(y, p, W, H, pad)
-            r, g, b = self.accent
-            cr.set_source_rgba(1, 1, 1, 0.9); cr.arc(px, py, 7.5, 0, 2 * math.pi); cr.fill()
-            cr.set_source_rgba(r, g, b, 1.0); cr.arc(px, py, 5.5, 0, 2 * math.pi); cr.fill()
+            cr.new_path(); cr.set_source_rgba(1, 1, 1, 0.85); cr.arc(px, py, 6.5, 0, 2 * math.pi); cr.fill()
+            cr.new_path(); cr.set_source_rgba(r, g, b, 1.0); cr.arc(px, py, 4.8, 0, 2 * math.pi); cr.fill()
             a = math.radians(roll)
-            cr.set_line_width(2.2); cr.move_to(px, py); cr.line_to(px + 14 * math.cos(a), py + 14 * math.sin(a)); cr.stroke()
+            cr.set_source_rgba(r, g, b, 0.9); cr.set_line_width(1.8)
+            cr.move_to(px + 6 * math.cos(a), py + 6 * math.sin(a)); cr.line_to(px + 13 * math.cos(a), py + 13 * math.sin(a)); cr.stroke()
 
 
 def _pill(text: str = "", cls: str = "") -> Gtk.Label:
@@ -388,72 +403,63 @@ class _Shell:
 
 # --------------------------------------------------------------- enrollment ----
 class EnrollWindow(_Shell):
-    """Enrollment: preview + coverage map on the left, guidance / status / actions on the right."""
+    """Enrollment: preview and pose map on the left (same width and radius), one guidance card
+    on the right with the coverage progress, and the actions at the bottom."""
 
-    def __init__(self, title: str = "faceup", width: int = 640, height: int = 360, sgn: float = -1.0):
-        super().__init__(title, "Enrollment", 960, 620)
-        self.sgn = sgn
-        pw, ph = 620, int(620 * height / width)
-        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
-        body.set_margin_top(14); body.set_margin_bottom(16); body.set_margin_start(18); body.set_margin_end(18)
+    def __init__(self, title: str = "faceup", width: int = 640, height: int = 360, sgn: float = 1.0):
+        super().__init__(title, "Enrollment", 960, 640)
+        pw, ph = 600, int(600 * height / width)
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=24)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(body, f"set_margin_{side}")(24)
+        body.set_margin_top(16)
         self.root.append(body)
 
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         self.preview = Preview(pw, ph)
         left.append(self.preview)
-        self.coverage = CoverageView(pw, 175)
-        self.coverage.add_css_class("fu-preview"); self.coverage.set_overflow(Gtk.Overflow.HIDDEN)
+        self.coverage = CoverageView(pw, 190)
+        self.coverage.add_css_class("fu-surface"); self.coverage.set_overflow(Gtk.Overflow.HIDDEN)
         left.append(self.coverage)
         body.append(left)
 
-        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        right.set_size_request(280, -1)
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        right.set_size_request(264, -1)
         body.append(right)
 
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); card.add_css_class("fu-card")
-        self.phase_lbl = Gtk.Label(xalign=0); self.phase_lbl.add_css_class("fu-dim"); self.phase_lbl.add_css_class("caption")
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12); card.add_css_class("fu-card")
+        self.phase_lbl = Gtk.Label(xalign=0); self.phase_lbl.add_css_class("fu-eyebrow")
         self.hint_lbl = Gtk.Label(xalign=0, wrap=True); self.hint_lbl.add_css_class("fu-hint")
-        self.hint_lbl.set_max_width_chars(24)
+        self.hint_lbl.set_max_width_chars(22)
         self.calib_bar = Gtk.ProgressBar(); self.calib_bar.add_css_class("fu-progress"); self.calib_bar.set_visible(False)
-        card.append(self.phase_lbl); card.append(self.hint_lbl); card.append(self.calib_bar)
+        sep = Gtk.Box(); sep.add_css_class("fu-sep"); sep.set_margin_top(4); sep.set_margin_bottom(4)
+        cov_row = Gtk.Box(spacing=8)
+        cov_lbl = Gtk.Label(xalign=0, label="Coverage"); cov_lbl.add_css_class("fu-dim")
+        self.cov_val = Gtk.Label(xalign=1, label="0 %"); self.cov_val.add_css_class("title-3"); self.cov_val.set_hexpand(True)
+        cov_row.append(cov_lbl); cov_row.append(self.cov_val)
+        self.cov_bar = Gtk.ProgressBar(); self.cov_bar.add_css_class("fu-progress")
+        pill_row = Gtk.Box(spacing=8)
+        self.p_light = _pill("Looking for your face")
+        pill_row.append(self.p_light)
+        self.detail = Gtk.Label(xalign=0); self.detail.add_css_class("caption"); self.detail.add_css_class("fu-dim")
+        for wdg in (self.phase_lbl, self.hint_lbl, self.calib_bar, sep, cov_row, self.cov_bar, pill_row, self.detail):
+            card.append(wdg)
         right.append(card)
 
-        stat = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); stat.add_css_class("fu-card")
-        cov_row = Gtk.Box(spacing=8)
-        self.cov_lbl = Gtk.Label(xalign=0, label="Coverage"); self.cov_lbl.add_css_class("fu-dim")
-        self.cov_val = Gtk.Label(xalign=1, label="0 %"); self.cov_val.add_css_class("title-4"); self.cov_val.set_hexpand(True)
-        cov_row.append(self.cov_lbl); cov_row.append(self.cov_val)
-        self.cov_bar = Gtk.ProgressBar(); self.cov_bar.add_css_class("fu-progress")
-        pills = Gtk.FlowBox(); pills.set_selection_mode(Gtk.SelectionMode.NONE); pills.set_column_spacing(6); pills.set_row_spacing(6)
-        pills.set_max_children_per_line(3); pills.set_homogeneous(False)
-        self.p_models = _pill("0 poses", "accent"); self.p_light = _pill("no face"); self.p_fps = _pill("– fps")
-        self.p_fps.add_css_class("fu-dim")
-        for p in (self.p_models, self.p_light, self.p_fps):
-            pills.append(p)
-        stat.append(cov_row); stat.append(self.cov_bar); stat.append(pills)
-        right.append(stat)
-
-        self.detail = Gtk.Label(xalign=0, wrap=True); self.detail.add_css_class("caption"); self.detail.add_css_class("fu-dim")
-        self.detail.set_max_width_chars(34)
-        right.append(self.detail)
-
         spacer = Gtk.Box(); spacer.set_vexpand(True); right.append(spacer)
-        keys = Gtk.Box(spacing=10)
+        keys = Gtk.Box(spacing=8)
         for k, t in (("Enter", "finish"), ("Esc", "cancel")):
             kb = Gtk.Label(label=k); kb.add_css_class("fu-kbd"); keys.append(kb)
-            tl = Gtk.Label(label=t); tl.add_css_class("fu-dim"); tl.add_css_class("caption"); keys.append(tl)
+            tl = Gtk.Label(label=t); tl.add_css_class("fu-dim"); tl.add_css_class("caption"); tl.set_margin_end(6); keys.append(tl)
         right.append(keys)
         actions = Gtk.Box(spacing=8)
         self.btn_cancel = Gtk.Button(label="Cancel"); self.btn_cancel.connect("clicked", lambda *_: self.push_key(KEY_ESC))
-        self.btn_finish = Gtk.Button(label="Finish"); self.btn_finish.add_css_class("suggested-action")
-        self.btn_finish.connect("clicked", lambda *_: self.push_key(KEY_ENTER))
+        self.btn_finish = Gtk.Button(label="Finish"); self.btn_finish.connect("clicked", lambda *_: self.push_key(KEY_ENTER))
         self.btn_finish.set_hexpand(True); self.btn_cancel.set_hexpand(True)
         actions.append(self.btn_cancel); actions.append(self.btn_finish)
         right.append(actions)
 
-        # read the theme accent once the window is realised
-        probe = Gtk.Label(); probe.add_css_class("accent"); right.append(probe)
-        probe.set_visible(False)
+        probe = Gtk.Label(); probe.add_css_class("accent"); probe.set_visible(False); right.append(probe)
         self._probe = probe
         self.win.connect("realize", lambda *_: self._read_theme())
 
@@ -465,37 +471,38 @@ class EnrollWindow(_Shell):
         try:
             self.preview.set_frame(s["frame"])
             light = s.get("light", "")
-            gate = s.get("gate", "")
             box_state = "dark" if light == "dark" else ("sampled" if s.get("sampled") else ("track" if s.get("box") else "none"))
             self.preview.set_box(s.get("box"), box_state)
-            self.coverage.update(s["coverage"], s.get("pose"), s.get("target"), self.sgn)
+            self.coverage.update(s["coverage"], s.get("pose"), s.get("target"))
             phase = s.get("phase", "enrolling")
-            self.title.set_subtitle({"calibrating": "Calibrating neutral pose", "enrolling": "Enrollment", "done": "Complete"}.get(phase, phase))
+            frac = s.get("fraction", 0.0)
+            self.title.set_subtitle({"calibrating": "Calibrating your neutral pose", "enrolling": "Move your head slowly",
+                                     "done": "Coverage complete"}.get(phase, phase))
             if phase == "calibrating":
-                self.phase_lbl.set_label("STEP 1 · NEUTRAL POSE")
-                self.hint_lbl.set_label("Look at the middle of the screen — not the camera — and hold still.")
+                self.phase_lbl.set_label("STEP 1 OF 2 · NEUTRAL POSE")
+                self.hint_lbl.set_label("Look at the middle of the screen, not the camera, and hold still.")
                 self.calib_bar.set_visible(True); self.calib_bar.set_fraction(s.get("calib_progress", 0.0))
             elif phase == "done":
-                self.phase_lbl.set_label("STEP 3 · DONE")
-                self.hint_lbl.set_label("Coverage complete. Press Finish to save your face models.")
+                self.phase_lbl.set_label("DONE")
+                self.hint_lbl.set_label("Every direction is covered. Finish to save your face models.")
                 self.calib_bar.set_visible(False)
             else:
-                self.phase_lbl.set_label("STEP 2 · MOVE YOUR HEAD")
+                self.phase_lbl.set_label("STEP 2 OF 2 · COVERAGE")
                 self.hint_lbl.set_label(s.get("hint", ""))
                 self.calib_bar.set_visible(False)
-            frac = s.get("fraction", 0.0)
             self.cov_val.set_label(f"{frac * 100:.0f} %"); self.cov_bar.set_fraction(min(1.0, frac))
-            _set_pill(self.p_models, f"{s.get('n_models', 0)} poses", "accent")
+            if frac >= 0.97:
+                self.btn_finish.add_css_class("suggested-action")
+            else:
+                self.btn_finish.remove_css_class("suggested-action")
+            light_txt = {"ok": "Face well lit", "dim": "Face a little dim", "bright": "Face a little bright",
+                         "dark": "Face too dark", "blown": "Face overexposed"}.get(light)
+            gate = s.get("gate", "")
+            if light_txt is None:
+                light_txt = {"no face": "Looking for your face", "too far": "Come a little closer", "moving": "Hold still a moment"}.get(gate, "Looking for your face")
             light_cls = {"ok": "ok", "dim": "warn", "bright": "warn", "dark": "bad", "blown": "bad"}.get(light, "")
-            _set_pill(self.p_light, ("face " + light) if light else (gate or "no face"), light_cls)
-            _set_pill(self.p_fps, f"{s.get('fps', 0):.0f} fps", "")
-            pose = s.get("pose")
-            det = f"IR {s.get('ir_mean', 0):.0f}"
-            if pose:
-                det += f"   ·   yaw {pose[0]:+.0f}°   pitch {pose[1]:+.0f}°   roll {pose[2]:+.0f}°"
-            if gate and gate not in ("", "sampling"):
-                det += f"   ·   {gate}"
-            self.detail.set_label(det)
+            _set_pill(self.p_light, light_txt, light_cls)
+            self.detail.set_label(f"{s.get('n_models', 0)} poses stored  ·  {s.get('spectrum', 'ir').upper()} brightness {s.get('ir_mean', 0):.0f}  ·  {s.get('fps', 0):.0f} fps")
         finally:
             self._pending = False
         return False
