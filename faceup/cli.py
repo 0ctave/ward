@@ -253,6 +253,7 @@ def cmd_enroll(args) -> int:
                 ui.ok(f"{done} model(s) added. Total: {len(st.models)} ({', '.join(f'{s}:{len(st.by_spectrum(s))}' for s in sorted(st.spectra()))})")
                 if st.calib.get("pose_offset"):
                     ui.info(f"neutral pose offset: yaw {st.calib['pose_offset'][0]:+.0f}°, pitch {st.calib['pose_offset'][1]:+.0f}°")
+                report_pose_calibration(st)
                 want_check = args.selfcheck or ui.confirm("Run a self-check now (3 authentication attempts)?", default=True)
                 cap.close()                     # the engine opens the cameras itself
                 if want_check:
@@ -283,6 +284,42 @@ def cmd_enroll(args) -> int:
     ui.ok(f"{done} pose(s) added. Total models: {len(st.models)} ({', '.join(f'{s}:{len(st.by_spectrum(s))}' for s in sorted(st.spectra()))})")
     if args.selfcheck or ui.confirm("Run a self-check now (3 authentication attempts)?", default=True):
         selfcheck(user, cfg)
+    return 0
+
+
+def report_pose_calibration(st) -> None:
+    r = st.calib.get("pose_report")
+    if not r:
+        return
+    if "error" in r:
+        ui.warn(f"personal 3D face model not built: {r['error']}"); return
+    ui.ok(f"personal 3D face model built from {r['frames']} frames (fit residual {r['rms_px']} px)")
+    if "pitch_rms" in r:
+        ui.info(f"fast estimator vs personal model — yaw: bias {r['yaw_bias']:+.1f}°, rms {r['yaw_rms']}°  ·  "
+                f"pitch: bias {r['pitch_bias']:+.1f}°, rms {r['pitch_rms']}°")
+        ui.tip("the personal model is used for live pose from the next enrollment on")
+
+
+def cmd_calibrate(args) -> int:
+    """Rebuild the personal 3D model from the landmark tracks saved by the last enrollment."""
+    need_root("calibrate")
+    from .engine import sfm
+    user = real_user(args)
+    st = storemod.load(user)
+    f = st.path.with_suffix(".tracks.npz")
+    if not f.exists():
+        ui.fail(f"no landmark tracks for {user} ({f}) — run `sudo faceup enroll` first"); return 1
+    import numpy as np
+    d = np.load(str(f))
+    tracks, fast, (w, h) = d["tracks"].astype(np.float64), [tuple(x) for x in d["fast"]], d["size"]
+    try:
+        cal = sfm.calibrate(tracks, int(w), int(h), fast)
+    except sfm.CalibrationError as e:
+        ui.fail(str(e)); return 1
+    st.calib["shape3d"] = [[round(float(v), 2) for v in row] for row in cal.shape3d]
+    st.calib["pose_report"] = cal.report
+    st.save()
+    report_pose_calibration(st)
     return 0
 
 
@@ -526,6 +563,9 @@ def main(argv=None) -> int:
     pm.add_argument("action", choices=["enable", "disable", "status"]); pm.add_argument("--dry-run", action="store_true"); pm.set_defaults(fn=cmd_pam)
 
     lg = sub.add_parser("log", help="recent authentication attempts"); lg.add_argument("-n", type=int, default=20); lg.set_defaults(fn=cmd_log)
+
+    cb = sub.add_parser("calibrate", help="rebuild the personal 3D face model from the last enrollment's landmark tracks (root)")
+    cb.add_argument("-U", "--user"); cb.set_defaults(fn=cmd_calibrate)
 
     m = sub.add_parser("models", help="list or remove enrolled models (root)")
     m.add_argument("-U", "--user"); m.add_argument("--remove", metavar="LABEL"); m.set_defaults(fn=cmd_models)

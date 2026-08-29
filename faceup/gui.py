@@ -25,6 +25,7 @@ SAMPLES_PER_CELL = 3
 CELL_DONE = 2                 # samples of the primary spectrum that mark a cell as filled
 STABLE_DEG = 4.0              # pose must move less than this between frames to be sampled
 SAMPLE_EVERY_MS = 120         # embeddings are computed at most this often
+MAX_TRACKS = 900              # landmark frames kept for the post-calibration (≈30 s)
 COL_OK = (90, 190, 90); COL_REQ = (255, 140, 60); COL_OPT = (110, 110, 110); COL_CUR = (60, 220, 255)
 COL_TXT = (235, 235, 235)
 
@@ -261,7 +262,8 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     state = {"finished": False, "cancel": False, "fps_t": fps_t, "fps_n": 0, "fps": 0.0,
              "prev_pose": None, "prev_box": None, "last_sample_t": 0.0, "t_all_required": None,
              "sampler": sampler, "restarts": 0,
-             "filter": posemod.PoseFilter(), "neutral": None, "neutral_samples": [], "neutral_t0": None}
+             "filter": posemod.PoseFilter(), "neutral": None, "neutral_samples": [], "neutral_t0": None,
+             "tracks": [], "fast_poses": [], "shape3d": (np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None)}
     NEUTRAL_SAMPLES = 30          # ~1 s of face at 30 fps
     probe = cap.read_one(primary, flush=0)
     ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
@@ -297,9 +299,13 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         prev_pose = state["prev_pose"]
         calibrating = state["neutral"] is None
         if box is not None and box.w >= MIN_ENROLL_FACE_PX:
-            raw = posemod.estimate(models.landmarks68(fr.gray, box), w, h)
+            lm68 = models.landmarks68(fr.gray, box)
+            raw = posemod.estimate(lm68, w, h, shape3d=state["shape3d"])
             if raw is not None:
                 now = time.monotonic()
+                if len(state["tracks"]) < MAX_TRACKS:
+                    state["tracks"].append(lm68.astype(np.float32))
+                    state["fast_poses"].append((raw.yaw, raw.pitch))
                 filt = state["filter"](raw, now)
                 if calibrating:
                     # neutral pose: the user looking at the screen naturally. The camera sits above
@@ -381,6 +387,19 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     finally:
         absorb(state["sampler"].close())
     finished = state["finished"]
+
+    # ---- post-calibration: personal 3D model from the recorded landmark tracks (DESIGN §8.6)
+    if finished and len(state["tracks"]) >= 40:
+        from .engine import sfm
+        tracks = np.array(state["tracks"], dtype=np.float64)
+        try:
+            cal = sfm.calibrate(tracks, pw, ph, state["fast_poses"])
+            st.calib["shape3d"] = [[round(float(v), 2) for v in row] for row in cal.shape3d]
+            st.calib["pose_report"] = cal.report
+            np.savez_compressed(str(st.path.with_suffix(".tracks.npz")), tracks=tracks.astype(np.float32),
+                                fast=np.array(state["fast_poses"], dtype=np.float32), size=np.array([pw, ph]))
+        except sfm.CalibrationError as e:
+            st.calib["pose_report"] = {"error": str(e)}
 
     if not finished and not cells:
         return 0
