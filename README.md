@@ -78,6 +78,7 @@ Full rationale and thresholds: [docs/DESIGN.md](docs/DESIGN.md).
 | `faceup auth -v` | yes | Runs one authentication and shows every step (what PAM calls without `-v`). |
 | `faceup tune [section.key VALUE]` | yes | Show or change `/etc/faceup/config.toml` with validation. |
 | `faceup pam enable\|disable\|status` | yes | The PAM line, with backup/restore; offers to retire `pam_howdy`. |
+| `faceup lab` | yes | Live evaluation window: raw and whitened distances, liveness votes and the decision under three unlock policies side by side; record subjects (you, a friend, a phone photo) to CSV and get accept rates per subject and policy. `--text` for the terminal. |
 | `faceup calibrate` | yes | Rebuild the personal 3D face model from the last enrollment's landmark tracks. |
 | `faceup models [--remove LABEL]` | yes | List or remove enrolled poses. |
 | `faceup log` | no* | Recent attempts, one line each (*`adm` group). |

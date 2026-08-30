@@ -465,6 +465,7 @@ faceup bench                       detector / recogniser / voter timings on this
 sudo faceup emitter install|configure|test|toggle-bench
 sudo faceup pam enable|disable     PAM line with backup/restore
 faceup log [-n 20]                 recent attempts, one line each
+sudo faceup lab [--text] [--subject NAME]   live evaluation: policies side by side, subject recording, per-subject accept rates
 sudo faceup-auth                   the engine (PAM calls this; also runnable by hand for debugging)
 ```
 
@@ -480,6 +481,19 @@ sudo faceup-auth                   the engine (PAM calls this; also runnable by 
 | Anti-spoof CNN | 15 ms | |
 | Shadow test | 2 frames ≈ 100 ms | only if toggle is fast |
 | **Typical accept** | **250–450 ms** | |
+
+## 12a. The lab (measurement instrument)
+
+`faceup lab` runs the pipeline continuously and shows every intermediate quantity — raw and
+whitened distance per camera against their gates, nearest stored pose, liveness votes, face
+light, head pose — and the decision under three policies on the same frames: **strict** (raw
+≤ certainty), **whitened** (§6.5a path), **whitened + liveness** (the production rule).
+Threshold sliders re-decide live; "apply to config" persists them. A subject tag and Record
+write every evaluated frame-set to `/var/lib/faceup/lab/<time>-<subject>.csv`; the summary
+gives, per subject and policy, the accept rate and the raw/whitened distance statistics.
+That is how reliability is measured: the owner across poses and lighting should score
+~100 % under all policies with raw distances far under the gate; other people and spoof
+attempts should score 0 % with raw distances above the hard cap or liveness FAILs.
 
 ## 13. Testing
 
