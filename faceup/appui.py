@@ -634,6 +634,17 @@ class LabWindow(_Shell):
         self.preview = Preview(pw, ph)
         left.append(self.preview)
         under = Gtk.Box(spacing=8)
+        # camera switch: which stream the preview shows (the engine always evaluates both)
+        self.view = "ir"
+        sw = Gtk.Box(); sw.add_css_class("linked")
+        self.btn_ir = Gtk.ToggleButton(label="IR"); self.btn_rgb = Gtk.ToggleButton(label="RGB", group=self.btn_ir)
+        self.btn_ir.set_active(True)
+        for b, sp in ((self.btn_ir, "ir"), (self.btn_rgb, "rgb")):
+            b.add_css_class("flat"); b.connect("toggled", lambda w, sp=sp: setattr(self, "view", sp) if w.get_active() else None)
+            sw.append(b)
+        under.append(sw)
+        self.brighten = Gtk.CheckButton(label="Brighten dark frames"); self.brighten.set_active(True)
+        self.brighten.add_css_class("caption"); under.append(self.brighten)
         self.p_light = _pill("Looking for a face"); under.append(self.p_light)
         self.pose_lbl = Gtk.Label(xalign=0); self.pose_lbl.add_css_class("caption"); self.pose_lbl.add_css_class("fu-dim")
         self.pose_lbl.set_hexpand(True); under.append(self.pose_lbl)
@@ -837,14 +848,25 @@ class LabWindow(_Shell):
             s = ev.step()
             if s is None:
                 return {}
-            fr = ev.last_frames.get(ev.primary)
-            frame = fr.rgb[:, ::-1] if fr is not None else None
-            obs = ev.last_obs.get(ev.primary) or []
+            view = self.view if self.view in ev.devices else ev.primary
+            fr = ev.last_frames.get(view)
+            if fr is None:                                   # the other camera's frame was not in this set
+                obs_v = ev.last_obs.get(view) or []
+                fr = obs_v[-1].frame if obs_v else None
+            frame = None
+            if fr is not None:
+                rgb = fr.rgb
+                if self.brighten.get_active() and fr.gray.mean() < 60:
+                    from .engine import brightness
+                    rgb = brightness.normalise_rgb(rgb, fr.gray) if view == "rgb" else \
+                        np.repeat(brightness.normalise(fr.gray, float(fr.gray.mean()))[:, :, None], 3, axis=2)
+                frame = rgb[:, ::-1]
+            obs = ev.last_obs.get(view) or []
             box = obs[-1].box if obs and obs[-1].box is not None else None
             if box is not None and frame is not None:
                 w = frame.shape[1]
                 box = (w - box.x - box.w, box.y, box.w, box.h)
-            return {"sample": s, "frame": frame, "box": box, "fps": ev.fps, "n_rec": len(ev.records)}
+            return {"sample": s, "frame": frame, "box": box, "fps": ev.fps, "n_rec": len(ev.records), "view": view}
 
         super().run(step)
 
@@ -855,7 +877,8 @@ class LabWindow(_Shell):
             s = snap.get("sample")
             if snap.get("frame") is not None:
                 self.preview.set_frame(np.ascontiguousarray(snap["frame"]))
-            light = s.light.get(s.primary, "") if s else ""
+            view = snap.get("view", s.primary if s else "ir")
+            light = s.light.get(view, "") if s else ""
             self.preview.set_box(snap.get("box"), "dark" if light == "dark" else ("track" if snap.get("box") else "none"))
             self._last_sample = s
             self._show_decisions(s)
