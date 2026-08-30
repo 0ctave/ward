@@ -377,6 +377,7 @@ class _Shell:
 
     def run(self, step) -> None:
         self.win.present()
+        self.win.set_focus(None)          # no widget grabs focus on open (a stray keystroke replaced the subject text)
         try:
             self.backend = self.win.get_display().get_name()
         except Exception:
@@ -561,6 +562,344 @@ class EmitterWindow(_Shell):
                 self.banner.remove_css_class(c)
             self.banner.add_css_class(cls)
             self.banner.set_label(s.get("msg", ""))
+        finally:
+            self._pending = False
+        return False
+
+
+# ---------------------------------------------------------------------- lab ----
+class MetricBar(Gtk.DrawingArea):
+    """A thin horizontal bar for one distance: the value as an accent bar, the gate as a mark,
+    optionally a hard cap as a second (dimmer) mark. `ratio=True` draws a 0..2 scale with the
+    threshold at 1 (whitened distance / threshold: < 1 accepts)."""
+
+    def __init__(self, ratio: bool = False):
+        super().__init__()
+        self.set_size_request(-1, 10)
+        self.set_hexpand(True)
+        self.set_draw_func(self._draw)
+        self.ratio = ratio
+        self.value: float | None = None
+        self.gate: float | None = None
+        self.cap: float | None = None
+        self.scale_max = 2.0 if ratio else 0.8
+        self.accent = (0.21, 0.52, 0.89)
+        self.fg = (0.5, 0.5, 0.5)
+
+    def set(self, value, gate=None, cap=None) -> None:
+        self.value, self.gate, self.cap = value, gate, cap
+        self.queue_draw()
+
+    def _x(self, v: float, W: float) -> float:
+        return max(0.0, min(1.0, v / self.scale_max)) * W
+
+    def _draw(self, area, cr: cairo.Context, W: int, H: int) -> None:
+        fr, fg, fb = self.fg
+        y, h = H / 2 - 2, 4
+        cr.set_source_rgba(fr, fg, fb, 0.12)
+        cr.rectangle(0, y, W, h); cr.fill()
+        if self.value is not None:
+            ok = (self.value <= (self.gate if self.gate is not None else 1.0)) if not self.ratio else self.value <= 1.0
+            r, g, b = (0.15, 0.64, 0.41) if ok else (0.88, 0.11, 0.14)
+            cr.set_source_rgba(r, g, b, 0.85)
+            cr.rectangle(0, y, self._x(self.value, W), h); cr.fill()
+        marks = [(1.0, 0.9)] if self.ratio else [(self.gate, 0.9), (self.cap, 0.4)]
+        for v, a in marks:
+            if v is None:
+                continue
+            x = self._x(v, W)
+            cr.set_source_rgba(fr, fg, fb, a)
+            cr.rectangle(x - 0.75, 0, 1.5, H); cr.fill()
+
+
+class LabWindow(_Shell):
+    """Live evaluation instrument: the decision under three unlock policies on the same frames,
+    every distance the engine sees, liveness votes, threshold sliders, and a recorded-session
+    summary per subject (yourself, other people, a photo…)."""
+
+    def __init__(self, title: str = "faceup lab", width: int = 640, height: int = 360, evaluator=None):
+        super().__init__(title, "Live evaluation", 1080, 700)
+        from .engine import lab as labmod
+        self.labmod = labmod
+        self.ev = evaluator
+        pw, ph = 470, int(470 * height / width)
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        for side in ("bottom", "start", "end"):
+            getattr(body, f"set_margin_{side}")(20)
+        body.set_margin_top(12)
+        self.root.append(body)
+
+        # ---- left: preview + pose caption + light pill
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.preview = Preview(pw, ph)
+        left.append(self.preview)
+        under = Gtk.Box(spacing=8)
+        self.p_light = _pill("Looking for a face"); under.append(self.p_light)
+        self.pose_lbl = Gtk.Label(xalign=0); self.pose_lbl.add_css_class("caption"); self.pose_lbl.add_css_class("fu-dim")
+        self.pose_lbl.set_hexpand(True); under.append(self.pose_lbl)
+        self.fps_lbl = Gtk.Label(xalign=1); self.fps_lbl.add_css_class("caption"); self.fps_lbl.add_css_class("fu-dim"); under.append(self.fps_lbl)
+        left.append(under)
+
+        # ---- session card (under the preview: it belongs to the operator, not the measurement)
+        sess = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); sess.add_css_class("fu-card")
+        eyebrow = Gtk.Label(xalign=0, label="SESSION"); eyebrow.add_css_class("fu-eyebrow"); sess.append(eyebrow)
+        row = Gtk.Box(spacing=8)
+        self.subject = Gtk.Entry(); self.subject.set_placeholder_text("Subject (me, a friend, phone photo…)")
+        self.subject.set_text("me"); self.subject.set_hexpand(True); row.append(self.subject)
+        self.btn_rec = Gtk.ToggleButton(label="Record"); self.btn_rec.connect("toggled", self._on_record); row.append(self.btn_rec)
+        sess.append(row)
+        self.rec_lbl = Gtk.Label(xalign=0, wrap=True); self.rec_lbl.add_css_class("caption"); self.rec_lbl.add_css_class("fu-dim")
+        self.rec_lbl.set_label("Not recording. Tag who is in front of the camera, then record a few seconds per pose and lighting.")
+        sess.append(self.rec_lbl)
+        self.summary_grid = Gtk.Grid(column_spacing=14, row_spacing=4)
+        sess.append(self.summary_grid)
+        srow = Gtk.Box(spacing=8)
+        self.btn_copy = Gtk.Button(label="Copy summary"); self.btn_copy.connect("clicked", self._copy_summary); srow.append(self.btn_copy)
+        self.copied = Gtk.Label(xalign=0); self.copied.add_css_class("caption"); self.copied.add_css_class("fu-dim"); srow.append(self.copied)
+        sess.append(srow)
+        left.append(sess)
+        body.append(left)
+
+        # ---- right column
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        right.set_size_request(520, -1)
+        body.append(right)
+
+        # decision strip
+        dec = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); dec.add_css_class("fu-card")
+        eb = Gtk.Label(xalign=0, label="DECISION"); eb.add_css_class("fu-eyebrow"); dec.append(eb)
+        self.dec_rows = {}
+        for key, name in (("strict", "Strict"), ("whitened", "Whitened"), ("whitened+liveness", "Whitened + liveness")):
+            r = Gtk.Box(spacing=12)
+            state = Gtk.Label(label="—", xalign=0); state.add_css_class("title-2"); state.set_size_request(118, -1)
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            nm = Gtk.Label(xalign=0, label=name); nm.add_css_class("heading")
+            cap = Gtk.Label(xalign=0, wrap=True, label=labmod.POLICY_TEXT[key]); cap.add_css_class("caption"); cap.add_css_class("fu-dim")
+            col.append(nm); col.append(cap); col.set_hexpand(True)
+            r.append(state); r.append(col)
+            dec.append(r)
+            self.dec_rows[key] = state
+        self.reason_lbl = Gtk.Label(xalign=0); self.reason_lbl.add_css_class("caption"); self.reason_lbl.add_css_class("fu-dim")
+        dec.append(self.reason_lbl)
+        right.append(dec)
+
+        # metrics
+        met = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); met.add_css_class("fu-card")
+        eb2 = Gtk.Label(xalign=0, label="MEASUREMENTS"); eb2.add_css_class("fu-eyebrow"); met.append(eb2)
+        grid = Gtk.Grid(column_spacing=10, row_spacing=6)
+        for c, text in enumerate(("", "raw distance", "nearest pose", "whitened / threshold")):
+            h = Gtk.Label(xalign=0, label=text); h.add_css_class("caption"); h.add_css_class("fu-dim"); grid.attach(h, c, 0, 1, 1)
+        self.metric_rows = {}
+        for i, sp in enumerate(("ir", "rgb")):
+            name = Gtk.Label(xalign=0, label=sp.upper()); name.add_css_class("heading"); grid.attach(name, 0, 1 + i, 1, 1)
+            rawbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            rawval = Gtk.Label(xalign=0, label="–"); rawval.add_css_class("caption")
+            rawbar = MetricBar(); rawbox.append(rawval); rawbox.append(rawbar); rawbox.set_size_request(150, -1)
+            grid.attach(rawbox, 1, 1 + i, 1, 1)
+            lab = Gtk.Label(xalign=0, label="–"); lab.add_css_class("caption"); lab.set_size_request(86, -1); grid.attach(lab, 2, 1 + i, 1, 1)
+            wbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            wval = Gtk.Label(xalign=0, label="–"); wval.add_css_class("caption")
+            wbar = MetricBar(ratio=True); wbox.append(wval); wbox.append(wbar); wbox.set_size_request(150, -1)
+            grid.attach(wbox, 3, 1 + i, 1, 1)
+            self.metric_rows[sp] = (rawval, rawbar, lab, wval, wbar, name)
+        met.append(grid)
+        vrow = Gtk.Box(spacing=8)
+        vl = Gtk.Label(xalign=0, label="Liveness"); vl.add_css_class("caption"); vl.add_css_class("fu-dim"); vrow.append(vl)
+        self.votes_box = Gtk.Box(spacing=6); vrow.append(self.votes_box)
+        met.append(vrow)
+        self.votes_caption = Gtk.Label(xalign=0, wrap=True); self.votes_caption.add_css_class("caption"); self.votes_caption.add_css_class("fu-dim")
+        met.append(self.votes_caption)
+        sep = Gtk.Box(); sep.add_css_class("fu-sep"); met.append(sep)
+        self.scales = {}
+        for key, text, lo, hi in (("certainty", "Certainty (raw gate)", 0.25, 0.60), ("hard_cap", "Hard cap (whitened path)", 0.40, 0.70)):
+            srow = Gtk.Box(spacing=10)
+            sl = Gtk.Label(xalign=0, label=text); sl.add_css_class("caption"); sl.set_size_request(170, -1); srow.append(sl)
+            sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, 0.01); sc.set_hexpand(True); sc.set_draw_value(False)
+            sc.set_value(float(self.ev.thresholds[key]) if self.ev else (0.4 if key == "certainty" else 0.55))
+            val = Gtk.Label(xalign=1, label=f"{sc.get_value():.2f}"); val.add_css_class("caption"); val.set_size_request(36, -1)
+            sc.connect("value-changed", self._on_scale, key, val)
+            srow.append(sc); srow.append(val); met.append(srow)
+            self.scales[key] = sc
+        arow = Gtk.Box(spacing=8)
+        self.btn_apply = Gtk.Button(label="Apply to config"); self.btn_apply.connect("clicked", self._apply_config); arow.append(self.btn_apply)
+        self.apply_lbl = Gtk.Label(xalign=0); self.apply_lbl.add_css_class("caption"); self.apply_lbl.add_css_class("fu-dim"); arow.append(self.apply_lbl)
+        met.append(arow)
+        right.append(met)
+
+        spacer = Gtk.Box(); spacer.set_vexpand(True); right.append(spacer)
+        foot = Gtk.Box(spacing=10)
+        kb = Gtk.Label(label="Esc"); kb.add_css_class("fu-kbd"); foot.append(kb)
+        fl = Gtk.Label(label="close · summary is printed in the terminal"); fl.add_css_class("fu-dim"); fl.add_css_class("caption"); foot.append(fl)
+        sp = Gtk.Box(); sp.set_hexpand(True); foot.append(sp)
+        btn = Gtk.Button(label="Close"); btn.connect("clicked", lambda *_: self.push_key(KEY_Q)); foot.append(btn)
+        right.append(foot)
+
+        probe = Gtk.Label(); probe.add_css_class("accent"); probe.set_visible(False); right.append(probe)
+        self._probe = probe
+        self.win.connect("realize", lambda *_: self._read_theme())
+        self._last_sample = None
+        self._summary_t = 0.0
+        self._n_rec = 0
+
+    # -- theme / helpers
+    def _read_theme(self) -> None:
+        acc = _rgba(self._probe); fg = _rgba(self.reason_lbl, (0.5, 0.5, 0.5))
+        self.preview.accent = acc
+        for rawval, rawbar, lab, wval, wbar, name in self.metric_rows.values():
+            rawbar.accent = wbar.accent = acc; rawbar.fg = wbar.fg = fg
+
+    def _on_scale(self, scale, key, val_lbl) -> None:
+        v = float(scale.get_value()); val_lbl.set_label(f"{v:.2f}")
+        if self.ev is not None:
+            self.ev.thresholds[key] = v
+            if self._last_sample is not None:
+                self._last_sample.decisions, self._last_sample.reason = self.ev.decide(self._last_sample)
+                self._show_decisions(self._last_sample)
+        self.apply_lbl.set_label("")
+
+    def _apply_config(self, *_):
+        try:
+            from .engine import config as cfgmod
+            cfg = cfgmod.load()
+            cfg["recognition"]["certainty"] = round(float(self.scales["certainty"].get_value()), 3)
+            cfg["recognition"]["hard_cap"] = round(float(self.scales["hard_cap"].get_value()), 3)
+            cfgmod.save(cfg)
+            self.apply_lbl.set_label(f"Saved: certainty {cfg['recognition']['certainty']}, hard cap {cfg['recognition']['hard_cap']}")
+        except Exception as e:
+            self.apply_lbl.set_label(f"Could not save: {e}")
+
+    def _on_record(self, btn) -> None:
+        if self.ev is None:
+            return
+        if btn.get_active():
+            subject = self.subject.get_text().strip() or "me"
+            path = self.ev.start_recording(subject)
+            btn.set_label("Stop"); btn.add_css_class("destructive-action")
+            self.rec_lbl.set_label(f"Recording “{subject}” → {path}")
+        else:
+            self.ev.stop_recording()
+            btn.set_label("Record"); btn.remove_css_class("destructive-action")
+            self.rec_lbl.set_label(f"Stopped. {len(self.ev.records)} samples in this session.")
+
+    def _copy_summary(self, *_):
+        if self.ev is None:
+            return
+        text = self.labmod.format_summary(self.ev.summary())
+        try:
+            self.win.get_clipboard().set(text)
+            self.copied.set_label("Copied")
+        except Exception as e:
+            self.copied.set_label(str(e))
+
+    def _show_decisions(self, s) -> None:
+        no_face = s is None or not any(s.faces.values())
+        for key, lbl in self.dec_rows.items():
+            for c in ("success", "error"):
+                lbl.remove_css_class(c)
+            if no_face or s.raw.get(s.primary) is None and s.raw.get("rgb") is None:
+                lbl.set_label("—")
+            elif s.decisions.get(key):
+                lbl.set_label("ACCEPT"); lbl.add_css_class("success")
+            else:
+                lbl.set_label("REJECT"); lbl.add_css_class("error")
+        self.reason_lbl.set_label("" if s is None else s.reason)
+
+    def _refresh_summary(self) -> None:
+        grid = self.summary_grid
+        child = grid.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling(); grid.remove(child); child = nxt
+        rows = self.ev.summary() if self.ev else []
+        heads = ("subject", "n", "strict", "whitened", "w+live", "raw med", "raw min", "w/thr")
+        for c, h in enumerate(heads):
+            l = Gtk.Label(label=h, xalign=0 if c == 0 else 1); l.add_css_class("caption"); l.add_css_class("fu-dim"); grid.attach(l, c, 0, 1, 1)
+        if not rows:
+            l = Gtk.Label(label="No recorded samples yet.", xalign=0); l.add_css_class("caption"); l.add_css_class("fu-dim"); grid.attach(l, 0, 1, len(heads), 1)
+            return
+        fmt = lambda v, f="{:.2f}": "–" if v is None else f.format(v)
+        for i, r in enumerate(rows, start=1):
+            cells = (r["subject"], str(r["n"]), f"{r['strict']*100:.0f} %", f"{r['whitened']*100:.0f} %", f"{r['whitened+liveness']*100:.0f} %",
+                     fmt(r["raw_median"]), fmt(r["raw_min"]), fmt(r["w_median"]))
+            for c, text in enumerate(cells):
+                l = Gtk.Label(label=text, xalign=0 if c == 0 else 1)
+                l.add_css_class("caption"); l.add_css_class("numeric")
+                grid.attach(l, c, i, 1, 1)
+
+    # -- run: the evaluator IS the step source
+    def run(self, ev) -> None:
+        self.ev = ev
+        lab = self.labmod
+
+        def step():
+            for k in self.keys():
+                if k in (KEY_ESC, KEY_Q):
+                    return None
+            s = ev.step()
+            if s is None:
+                return {}
+            fr = ev.last_frames.get(ev.primary)
+            frame = fr.rgb[:, ::-1] if fr is not None else None
+            obs = ev.last_obs.get(ev.primary) or []
+            box = obs[-1].box if obs and obs[-1].box is not None else None
+            if box is not None and frame is not None:
+                w = frame.shape[1]
+                box = (w - box.x - box.w, box.y, box.w, box.h)
+            return {"sample": s, "frame": frame, "box": box, "fps": ev.fps, "n_rec": len(ev.records)}
+
+        super().run(step)
+
+    def _apply(self, snap: dict) -> bool:
+        try:
+            if not snap:
+                return False
+            s = snap.get("sample")
+            if snap.get("frame") is not None:
+                self.preview.set_frame(np.ascontiguousarray(snap["frame"]))
+            light = s.light.get(s.primary, "") if s else ""
+            self.preview.set_box(snap.get("box"), "dark" if light == "dark" else ("track" if snap.get("box") else "none"))
+            self._last_sample = s
+            self._show_decisions(s)
+            if s is not None:
+                for sp, (rawval, rawbar, lab, wval, wbar, name) in self.metric_rows.items():
+                    present = sp in self.ev.devices
+                    for wdg in (rawval, rawbar, lab, wval, wbar, name):
+                        wdg.set_opacity(1.0 if present else 0.35)
+                    gate = self.ev.thresholds["certainty" if sp == "ir" else "rgb_certainty"]
+                    cap = self.ev.thresholds["hard_cap"]
+                    r = s.raw.get(sp)
+                    rawval.set_label("–" if r is None else f"{r:.2f}  (gate {gate:.2f})")
+                    rawbar.set(r, gate, cap)
+                    lab.set_label(s.label.get(sp) or "–")
+                    w, thr = s.wdist.get(sp), s.wthr.get(sp)
+                    if w is None or not thr:
+                        wval.set_label("–" if w is None else f"{w:.2f}"); wbar.set(None)
+                    else:
+                        wval.set_label(f"{w:.2f} / {thr:.2f}"); wbar.set(w / thr)
+                # votes
+                child = self.votes_box.get_first_child()
+                while child is not None:
+                    nxt = child.get_next_sibling(); self.votes_box.remove(child); child = nxt
+                caps = []
+                for voter, res, reason in s.votes:
+                    cls = {"PASS": "ok", "FAIL": "bad"}.get(res, "")
+                    self.votes_box.append(_pill(f"{voter} {res.lower()}", cls))
+                    if reason:
+                        caps.append(f"{voter}: {reason}")
+                if not s.votes:
+                    self.votes_box.append(_pill("no face"))
+                self.votes_caption.set_label("  ·  ".join(caps))
+                light_txt = {"ok": "Face well lit", "dim": "Face a little dim", "bright": "Face a little bright",
+                             "dark": "Face too dark", "blown": "Face overexposed"}.get(light, "Looking for a face" if not any(s.faces.values()) else "Face found")
+                _set_pill(self.p_light, light_txt, {"ok": "ok", "dim": "warn", "bright": "warn", "dark": "bad", "blown": "bad"}.get(light, ""))
+                self.pose_lbl.set_label("" if s.yaw is None else f"yaw {s.yaw:+.0f}°  pitch {s.pitch:+.0f}°  ·  primary {s.primary.upper()}")
+            self.fps_lbl.set_label(f"{snap.get('fps', 0):.0f} fps")
+            now = time.monotonic()
+            n = snap.get("n_rec", 0)
+            if self.btn_rec.get_active():
+                self.rec_lbl.set_label(f"Recording “{self.ev.subject}” · {n} samples → {getattr(self.ev, 'record_path', '')}")
+            if now - self._summary_t >= 1.0:
+                self._summary_t = now
+                self._refresh_summary()
         finally:
             self._pending = False
         return False
