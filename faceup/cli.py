@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 from . import __version__, cameras, howdy, probe, ui
@@ -440,6 +441,61 @@ def cmd_models(args) -> int:
     return 0
 
 
+# -------------------------------------------------------------------- lab ----
+def cmd_lab(args) -> int:
+    """Live evaluation: compare unlock policies on the same frames, record subjects, summarise."""
+    need_root("lab")
+    from .engine import lab as labmod
+    from .engine.capture import CaptureError
+    user = real_user(args)
+    ev = labmod.LiveEvaluator(user)
+    if not ev.store.models:
+        ui.fail(f"no models for {user} — enroll first"); return 1
+    try:
+        ev.open()
+    except CaptureError as e:
+        ui.fail(str(e)); return 1
+    for n in getattr(ev, "notes", []):
+        ui.warn(n)
+    if not args.text:
+        try:
+            from . import display as disp
+            screen = disp.open_display("faceup lab", 640, 360, kind="lab", evaluator=ev)
+            screen.run(ev)
+            ev.close()
+            print(labmod.format_summary(ev.summary()))
+            return 0
+        except Exception as e:                       # window unavailable → text mode
+            ui.warn(f"no lab window ({e}); text mode")
+    ui.banner("faceup lab · text mode", "Ctrl+C for the summary. Policies: " + " · ".join(f"{p} = {labmod.POLICY_TEXT[p]}" for p in labmod.POLICIES))
+    if args.subject:
+        ui.info(f"recording subject {args.subject!r} → {ev.start_recording(args.subject)}")
+    last_print = 0.0
+    try:
+        while True:
+            s = ev.step()
+            if s is None or time.monotonic() - last_print < 0.5:
+                continue
+            last_print = time.monotonic()
+            parts = []
+            for sp in ("ir", "rgb"):
+                if sp in ev.devices:
+                    if s.raw.get(sp) is None:
+                        parts.append(f"{sp}: {'face' if s.faces.get(sp) else 'no face'}")
+                    else:
+                        w = f" w {s.wdist[sp]:.2f}/{s.wthr[sp]:.2f}" if s.wdist.get(sp) is not None else ""
+                        parts.append(f"{sp}: raw {s.raw[sp]:.2f} ({s.label.get(sp)}){w} {s.light.get(sp, '')}")
+            dec = " ".join(f"{p}={'Y' if s.decisions.get(p) else 'n'}" for p in labmod.POLICIES)
+            votes = ",".join(f"{v}:{r}" for v, r, _ in s.votes)
+            pose = f" yaw {s.yaw:+.0f} pitch {s.pitch:+.0f}" if s.yaw is not None else ""
+            print(f"\r\033[K{' | '.join(parts)} | {votes or 'no votes'} | {dec} | {s.reason}{pose} | {ev.fps:.0f} fps", end="", flush=True)
+    except KeyboardInterrupt:
+        print()
+    ev.close()
+    print(labmod.format_summary(ev.summary()))
+    return 0
+
+
 # ------------------------------------------------------------------ setup ----
 def cmd_setup(args) -> int:
     need_root("setup")
@@ -607,6 +663,11 @@ def main(argv=None) -> int:
 
     pm = sub.add_parser("pam", help="enable | disable | status the PAM integration (root)")
     pm.add_argument("action", choices=["enable", "disable", "status"]); pm.add_argument("--dry-run", action="store_true"); pm.set_defaults(fn=cmd_pam)
+
+    lb = sub.add_parser("lab", help="live evaluation window: compare unlock policies, record subjects, summarise (root)")
+    lb.add_argument("-U", "--user"); lb.add_argument("--text", action="store_true", help="terminal mode instead of the window")
+    lb.add_argument("--subject", help="text mode: record samples under this subject name")
+    lb.set_defaults(fn=cmd_lab)
 
     lg = sub.add_parser("log", help="recent authentication attempts"); lg.add_argument("-n", type=int, default=20); lg.set_defaults(fn=cmd_log)
 
