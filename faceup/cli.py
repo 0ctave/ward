@@ -496,6 +496,8 @@ def cmd_enroll(args) -> int:
                 cap.close()
                 if res is None:
                     ui.warn("cancelled — nothing changed"); return 1
+                if res.get("failed"):
+                    ui.fail(f"{res['failed']} — nothing changed"); return 1
                 if not res.get("added"):
                     # never save a sweep that produced nothing: with --fresh that would erase the old models
                     ui.fail("no pose produced a model (face not found, too dark, or every pass skipped) — nothing changed")

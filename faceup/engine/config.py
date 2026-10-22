@@ -25,7 +25,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "recognition": {
         "certainty": 0.40, "rgb_certainty": 0.38, "fusion_frames": 4,
         "require_rgb_match": False, "detector": "yunet", "max_height": 320, "accel": "cpu", "recogniser": "dlib",
-        "whitened": True, "hard_cap": 0.55, "early_reject": 0.65,
+        "whitened": False, "hard_cap": 0.55, "early_reject": 0.65,
     },
     "liveness": {
         "required_votes": 2, "cross_spectrum": True, "antispoof_cnn": True,
@@ -43,7 +43,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 
 _COMMENTS = {
     "cameras": "Stable ids usb:<vid>:<pid>:<iface> (setup writes them), 'auto', or a /dev path; '' = none.",
-    "recognition": "recogniser = dlib (distro) | arcface (`faceup recogniser install`; tighter identity clusters). certainty = max raw distance (dlib scale for every recogniser; 0.6 is 'same person'). whitened: also accept raw <= hard_cap when the distance whitened by the user's own variation is under its learned threshold. early_reject: end the window as soon as fusion_frames+2 frames all sit above this distance (0 = off).",
+    "recognition": "recogniser = dlib (distro) | arcface (`faceup recogniser install`; tighter identity clusters). certainty = max raw distance (dlib scale for every recogniser; 0.6 is 'same person'). whitened (off by default — measured never to fire: live whitened distances 28–37 vs a threshold ~15, and it rescued no night frame): also accept raw <= hard_cap when the distance whitened by the user's own variation is under its learned threshold. early_reject: end the window as soon as fusion_frames+2 frames all sit above this distance (0 = off).",
     "liveness": "Voters return PASS/FAIL/ABSTAIN; `required_votes` PASSes and zero FAILs are needed. shadow_test = auto runs the emitter shadow test once `faceup emitter toggle-bench` has written shadow_toggle_ms (<= 150).",
     "timing": "Milliseconds. settle_ms > 0 waits for auto-exposure before the window (not needed with YuNet).",
     "security": "policy = convenience | balanced | strict (`faceup tune policy X`); policy_<service> overrides it for sudo / polkit / login / unlock ('' = default, 'off' = disabled there). lockout_failures liveness FAILs within lockout_minutes pause face unlock (password unaffected); 0 = never.",

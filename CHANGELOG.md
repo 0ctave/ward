@@ -4,6 +4,20 @@
 
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
+### Enrolment window, second pass
+- Headless test harness for the whole window (`tests/enroll_harness.py`): virtual clock, scripted
+  user, fake camera/sampler — every pass, key, timeout and failure is a unit test.
+- Honest outcomes: "Done" only when at least half the poses produced a model; a lost camera, a
+  crashed worker or a thin sweep ends with "Nothing saved" and the reason, and nothing is written.
+- Guidance: the arrow points from the current pose to the target (corrects overshoot and drift),
+  "Skip pass" button, current-pose dot, "Look up" label, ring halo, glyphs kept out of the chip,
+  "Come a little closer" / "Camera not responding" pills; the pass clock runs only while a usable
+  face is in view; the glasses sweep waits for Start; up/down no longer accept a level head.
+- Models: 6 frames per pose spread over the pass; no synthetic lighting variants (4× sample
+  rate); a second face leaning in is dropped; worker crashes are survived once.
+- The whitened acceptance path is **off by default** (`recognition.whitened = false`): measured
+  never to fire (live 28–37 vs threshold ~15) and it rescued no night frame. Opt-in remains.
+
 ### Night unlock (root cause found)
 - On a Windows-Hello module (RGB + IR on one USB device), **opening the RGB camera in a dark room
   kills the IR stream**: flat frames, LED off, and closing RGB does not revive it. Every night

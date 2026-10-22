@@ -173,13 +173,18 @@ class Preview(Gtk.Overlay):
             R = max(bw, bh) * sc / 2 * 1.12
         else:
             cx, cy, R = W / 2, H / 2, min(W, H) * 0.26
-        # the frame ring (faint track)
-        cr.set_source_rgba(*col, 0.32); cr.set_line_width(3.0)
+        TOP = 60.0                                   # the word chip lives above this line: glyphs stay below
+        # the frame ring: a dark halo under a brighter track, readable on any frame (review A15)
+        cr.set_source_rgba(0, 0, 0, 0.45); cr.set_line_width(7.0)
+        cr.arc(cx, cy, R, 0, 2 * _m.pi); cr.stroke()
+        cr.set_source_rgba(*col, 0.6); cr.set_line_width(3.0)
         cr.arc(cx, cy, R, 0, 2 * _m.pi); cr.stroke()
 
         def arrow(ang):
             s0 = R + R * 0.16
             reach = R * (0.42 + 0.28 * bob)
+            if _m.sin(ang) < 0:                      # pointing up: keep the arrow out of the word chip
+                s0 = min(s0, max(R * 0.6, (cy - TOP - R * 0.3) / -_m.sin(ang) - reach))
             sx, sy = cx + _m.cos(ang) * s0, cy + _m.sin(ang) * s0
             ex, ey = cx + _m.cos(ang) * (s0 + reach), cy + _m.sin(ang) * (s0 + reach)
             cr.set_source_rgba(*self.accent, 0.96); cr.set_line_width(7.0)
@@ -191,12 +196,14 @@ class Preview(Gtk.Overlay):
             cr.stroke()
 
         if not self.cue_ok:
-            if self.cue in ("left", "right", "up", "down"):
-                arrow({"left": _m.pi, "right": 0.0, "up": -_m.pi / 2, "down": _m.pi / 2}[self.cue])
+            ang = cue_angle(self.cue, self.cue_pose, self.cue_target)
+            if ang is not None:
+                arrow(ang)
             elif self.cue in ("closer", "away"):
                 # a dashed target ring the solid face-ring should grow into (lean in) or shrink to
                 # (lean back) — "make the circle match the dashed one", no ambiguous arrowheads
-                tr = R * 1.6 if self.cue == "closer" else R * 0.6
+                tr = min(R * 1.6, cx - 4, W - cx - 4, cy - TOP, H - cy - 4) if self.cue == "closer" else R * 0.6
+                tr = max(tr, R * 1.15) if self.cue == "closer" else tr
                 cr.save(); cr.set_dash([10, 9]); cr.set_source_rgba(*self.accent, 0.85); cr.set_line_width(3.0)
                 cr.arc(cx, cy, tr, 0, 2 * _m.pi); cr.stroke(); cr.restore()
                 for k in range(4):                          # four small marks showing which way to go
@@ -209,7 +216,10 @@ class Preview(Gtk.Overlay):
                         cr.move_to(*tip); cr.line_to(tip[0] - _m.cos(a + side * 0.6) * R * 0.16 * d, tip[1] - _m.sin(a + side * 0.6) * R * 0.16 * d)
                     cr.stroke()
             elif self.cue == "light":
-                lx, ly, lr = cx, cy - R - R * 0.5, R * 0.34
+                lr = R * 0.34
+                lx, ly = cx, max(cy - R - R * 0.5, TOP + lr * 2.3)
+                if ly + lr * 2.3 > cy - R * 0.2:            # no room above the face: put the sun beside it
+                    lx, ly = min(W - lr * 2.4, cx + R + lr * 2.6), cy - R * 0.5
                 cr.set_source_rgba(*self.accent, 0.85 + 0.15 * pulse); cr.set_line_width(4.0)
                 cr.arc(lx, ly, lr, 0, 2 * _m.pi); cr.stroke()
                 for k in range(8):
@@ -414,8 +424,29 @@ def _pill(text: str = "", cls: str = "") -> Gtk.Label:
     return lbl
 
 
+def cue_angle(cue, pose=None, target=None):
+    """Screen angle (radians, cairo: +x right, +y down) of the arrow that moves the user from
+    `pose` to `target`, both DISPLAY space (golden rule 5: no sign applied here — display yaw < 0
+    is screen-left in the mirrored preview). None inside the target tolerance or for cues that
+    are not about direction. Without a pose, the cue's own direction (review A6: the arrow used
+    to ignore the pose, so an overshoot or a drifting pitch got no correction)."""
+    import math as _m
+    named = {"left": _m.pi, "right": 0.0, "up": -_m.pi / 2, "down": _m.pi / 2}
+    if cue not in named and cue != "centre":
+        return None
+    if pose is None or target is None:
+        return named.get(cue)
+    from .engine.calibration import pose_ok
+    if pose_ok(pose, target):
+        return None
+    dx = target[0] - pose[0]                 # + → move toward screen-right
+    dy = -(target[1] - pose[1])              # pitch up is screen-up (−y)
+    return _m.atan2(dy, dx)
+
+
 def _set_pill(lbl: Gtk.Label, text: str, cls: str) -> None:
     lbl.set_label(text)
+    lbl.set_visible(bool(text))           # a pill hidden by one state must come back in the next (review A7)
     for c in ("ok", "warn", "bad", "accent"):
         lbl.remove_css_class(c)
     if cls:
@@ -1059,7 +1090,7 @@ class CalibrateWindow(_Shell):
     ON it (a big arrow / target / rings, minimal text); a slim strip underneath holds the pass
     dots, a short label, the progress and a status pill. Intro and a done summary bookend it."""
 
-    CUE_WORD = {"centre": "Look at the centre", "down": "Look down", "away": "Lean back",
+    CUE_WORD = {"centre": "Look at the centre", "up": "Look up", "down": "Look down", "away": "Lean back",
                 "closer": "Lean in", "tilt": "Tilt your head", "left": "Turn left",
                 "right": "Turn right", "light": "Change the light"}
 
@@ -1132,6 +1163,7 @@ class CalibrateWindow(_Shell):
             ok = s.get("ok")
             self.preview.set_box(s.get("box"), "dark" if s.get("light") == "dark" else ("sampled" if s.get("counted") else ("track" if s.get("box") else "none")))
             phase = s.get("phase", "measuring")
+            phase = "measuring" if phase == "run" else phase      # guided_setup calls a pass 'run' (review A1)
             self._set_phase(phase)
             n, i = s.get("total", 0), s.get("index", 0)
             self._ensure_dots(n)
@@ -1148,7 +1180,9 @@ class CalibrateWindow(_Shell):
             if phase == "intro":
                 self.preview.set_cue(None, False, 0.0)
                 self.word.set_label(s.get("intro_text") or "Sit comfortably in your usual light")
-                if s.get("light") == "dark":
+                if s.get("manual_start"):
+                    _set_pill(self.pill_over, "Press Start when ready", "")
+                elif s.get("light") == "dark":
                     _set_pill(self.pill_over, "Face too dark", "bad")
                 elif s.get("ready"):
                     cd = s.get("countdown")
@@ -1163,7 +1197,10 @@ class CalibrateWindow(_Shell):
                 self.word.set_label(s.get("headline", "Done"))
                 self.summary.set_label(s.get("summary", ""))
                 left = s.get("closing_in")
-                _set_pill(self.pill_over, f"Saved · closing in {left:.0f}" if left else "Saved", "ok")
+                if s.get("ok", True):
+                    _set_pill(self.pill_over, f"\u2713 Done · closing in {left:.0f}" if left else "\u2713 Done", "ok")
+                else:
+                    _set_pill(self.pill_over, "Nothing saved", "bad")
                 return False
             if s.get("pass_done"):
                 self._pass_done_t = time.monotonic()
@@ -1173,8 +1210,12 @@ class CalibrateWindow(_Shell):
             # the arrow + ring convey the guidance; the pill appears only for a problem, else hides
             if (time.monotonic() - self._pass_done_t) < 0.7:
                 self.pill_over.set_visible(True); _set_pill(self.pill_over, "\u2713", "ok")
+            elif s.get("camera_stalled"):
+                _set_pill(self.pill_over, "Camera not responding\u2026", "bad")
             elif s.get("light") == "dark":
                 self.pill_over.set_visible(True); _set_pill(self.pill_over, "Too dark \u2014 turn a light on", "bad")
+            elif s.get("small"):
+                _set_pill(self.pill_over, "Come a little closer", "warn")
             elif s.get("box") is None:
                 self.pill_over.set_visible(True); _set_pill(self.pill_over, "Looking for you", "")
             else:

@@ -219,8 +219,8 @@ class BuildFromCaptures(unittest.TestCase):
         added, dist_by, extra = cal.build_from_captures(st, caps, poses, 8, fuse)
         self.assertEqual(added, 4)                                     # 2 poses × 2 spectra
         self.assertEqual({m.label for m in st.models}, {"C/level", "L1/level"})
-        # the first 2/3 in time (10) are candidates, the best 8 of them build the model
-        self.assertTrue(all(len(m.samples) == 8 for m in st.models))
+        # the first 2/3 in time (10) are candidates; the worst-quality third is dropped → 7 build the model
+        self.assertTrue(all(len(m.samples) == 7 for m in st.models))
         # the LAST third in time (5) is held out per (pose, spectrum) → 10 per spectrum
         self.assertEqual(len(dist_by["ir"]), 10); self.assertEqual(len(dist_by["rgb"]), 10)
         # held-out frames are close to their own pose's model (fresh-frame, not self-match-zero, not huge)
@@ -257,6 +257,14 @@ class SelectRows(unittest.TestCase):
         model, held = cal.select_rows(rows, (-20.0, 0.0), "left", 8)
         self.assertTrue(all(r[1][0] == 2 for r in model + held))      # the sharp transition frames are gone
 
+    def test_model_frames_are_spread_over_the_pass(self):
+        # quality rises over time (sharpest at the end): the picks must still span the window
+        rows = [self.row(0.5 + 0.02 * i, (0.0, 0.0), tag=i) for i in range(18)]
+        model, held = cal.select_rows(rows, (0.0, 0.0), "centre", 6)
+        tags = [int(r[1][0]) for r in model]
+        self.assertEqual(len(tags), 6)
+        self.assertGreaterEqual(max(tags) - min(tags), 6)                    # ≥ half of the 12 candidates
+
     def test_pose_never_reached_gives_no_model(self):
         rows = [self.row(0.9, (-5.0, 0.0))] * 20
         self.assertIsNone(cal.select_rows(rows, (-20.0, 0.0), "left", 8))
@@ -292,6 +300,24 @@ class ReenrolKeepsSkippedPoses(unittest.TestCase):
         cal.build_from_captures(st, caps, poses, 8, fuse)
         self.assertEqual({m.label for m in st.models}, {"C/level", "L1/level"})
         self.assertTrue(any(m.label == "L1/level" and np.allclose(m.embedding, old) for m in st.models))
+
+
+class OtherFaces(unittest.TestCase):
+    def test_a_second_person_is_not_enrolled(self):
+        from faceup.engine.detect import fuse
+        rng = np.random.default_rng(9)
+        me = rng.normal(size=128); me /= np.linalg.norm(me)
+        other = rng.normal(size=128); other /= np.linalg.norm(other)
+        jit = lambda b: (lambda v: v / np.linalg.norm(v))(b + rng.normal(scale=0.012, size=128))
+        poses = [("C/level", "centre", "", (0.0, 0.0)), ("L1/level", "left", "", (-20.0, 0.0))]
+        caps = {0: {"ir": [(0.9, jit(me), [], "ok", (0.0, 0.0)) for _ in range(12)]},
+                1: {"ir": [(0.9, jit(me), [], "ok", (-20.0, 0.0)) for _ in range(6)]
+                    + [(0.99, jit(other), [], "ok", (-20.0, 0.0)) for _ in range(6)]}}   # someone leans in
+        st = store.Store(user="two", path=store.path_for("two"))
+        cal.build_from_captures(st, caps, poses, 6, fuse)
+        left = next(m for m in st.models if m.label == "L1/level")
+        self.assertLess(float(np.linalg.norm(left.embedding - me)), 0.2)
+        self.assertGreater(float(np.linalg.norm(left.embedding - other)), 0.6)
 
 
 class SetupSummary(unittest.TestCase):
