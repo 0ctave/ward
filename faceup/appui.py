@@ -124,6 +124,8 @@ class Preview(Gtk.Overlay):
         self._anim = None
 
     def set_cue(self, cue, ok: bool, progress: float, pose=None, target=None) -> None:
+        if cue != getattr(self, "cue", None) or target != getattr(self, "cue_target", None):
+            self._arrow_dir = None                          # a new pass starts without a held direction
         self.cue, self.cue_ok, self.cue_progress = cue, ok, progress
         self.cue_pose, self.cue_target = pose, target
         self.area.queue_draw()
@@ -196,9 +198,9 @@ class Preview(Gtk.Overlay):
             cr.stroke()
 
         if not self.cue_ok:
-            ang = cue_angle(self.cue, self.cue_pose, self.cue_target)
-            if ang is not None:
-                arrow(ang)
+            self._arrow_dir = cue_direction(self.cue, self.cue_pose, self.cue_target, getattr(self, "_arrow_dir", None))
+            if self._arrow_dir is not None:
+                arrow(ARROW_ANGLE[self._arrow_dir])
             elif self.cue in ("closer", "away"):
                 # a dashed target ring the solid face-ring should grow into (lean in) or shrink to
                 # (lean back) — "make the circle match the dashed one", no ambiguous arrowheads
@@ -424,24 +426,54 @@ def _pill(text: str = "", cls: str = "") -> Gtk.Label:
     return lbl
 
 
-def cue_angle(cue, pose=None, target=None):
-    """Screen angle (radians, cairo: +x right, +y down) of the arrow that moves the user from
-    `pose` to `target`, both DISPLAY space (golden rule 5: no sign applied here — display yaw < 0
-    is screen-left in the mirrored preview). None inside the target tolerance or for cues that
-    are not about direction. Without a pose, the cue's own direction (review A6: the arrow used
-    to ignore the pose, so an overshoot or a drifting pitch got no correction)."""
-    import math as _m
-    named = {"left": _m.pi, "right": 0.0, "up": -_m.pi / 2, "down": _m.pi / 2}
-    if cue not in named and cue != "centre":
+ARROW_ANGLE = {"left": math.pi, "right": 0.0, "up": -math.pi / 2, "down": math.pi / 2}
+
+
+def cue_direction(cue, pose=None, target=None, prev=None):
+    """Which way the arrow points: 'left' | 'right' | 'up' | 'down' | None. Both poses are DISPLAY
+    space (golden rule 5: no sign here — display yaw < 0 is screen-left in the mirrored preview).
+
+    Kept deliberately coarse so it reads at a glance and never spins: one of four directions,
+    along the axis the pass is about (yaw for left/right, pitch for up/down, the worse one for the
+    centre pass); it reverses only on a clear overshoot; the other axis is corrected only once the
+    main one is satisfied; and `prev` is kept while its own error still points the same way
+    (hysteresis), so pose-estimator jitter near the target cannot flip it. Without a pose, the
+    cue's own direction. (The first pose-driven version pointed along atan2 of the raw error —
+    small errors near the target swung it in every direction.)"""
+    if cue not in ARROW_ANGLE and cue != "centre":
         return None
     if pose is None or target is None:
-        return named.get(cue)
-    from .engine.calibration import pose_ok
-    if pose_ok(pose, target):
-        return None
-    dx = target[0] - pose[0]                 # + → move toward screen-right
-    dy = -(target[1] - pose[1])              # pitch up is screen-up (−y)
-    return _m.atan2(dy, dx)
+        return cue if cue in ARROW_ANGLE else None
+    from .engine.calibration import pose_tolerance
+    ty, tp = pose_tolerance(target)
+    ex, ey = target[0] - pose[0], target[1] - pose[1]          # + → toward screen-right / up
+
+    def along(axis):
+        return ("right" if ex > 0 else "left") if axis == "yaw" else ("up" if ey > 0 else "down")
+
+    def err(axis):
+        return abs(ex) / ty if axis == "yaw" else abs(ey) / tp
+
+    if prev in ARROW_ANGLE:                                    # hysteresis: hold while still clearly needed
+        axis = "yaw" if prev in ("left", "right") else "pitch"
+        if along(axis) == prev and err(axis) > 0.5:
+            return prev
+    main = "yaw" if cue in ("left", "right") else "pitch" if cue in ("up", "down") else \
+        ("yaw" if err("yaw") >= err("pitch") else "pitch")
+    other = "pitch" if main == "yaw" else "yaw"
+    opposite = {"left": "right", "right": "left", "up": "down", "down": "up"}
+    # reversing the pass's own direction (an overshoot) needs clearer evidence than continuing it
+    need = 1.4 if along(main) == opposite.get(cue) else 1.0      # 1.4 × 12° ≈ 4σ of the estimator jitter
+    if err(main) > need:
+        return along(main)
+    if err(other) > 1.3:                                       # stricter: the other axis is a nudge
+        return along(other)
+    return None
+
+
+def cue_angle(cue, pose=None, target=None, prev=None):
+    d = cue_direction(cue, pose, target, prev)
+    return None if d is None else ARROW_ANGLE[d]
 
 
 def _set_pill(lbl: Gtk.Label, text: str, cls: str) -> None:

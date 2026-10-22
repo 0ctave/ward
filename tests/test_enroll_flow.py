@@ -185,18 +185,28 @@ class WindowStates(unittest.TestCase):
         self.assertEqual(self.w.btn_next.get_label(), "Skip pass")
         self.assertIn("fu-dot-now", self.w._dot_widgets[2].get_css_classes())
 
-    def test_arrow_follows_current_to_target_in_display_space(self):
-        import math
-        a = self.appui.cue_angle
+    def test_arrow_is_coarse_and_coherent(self):
+        d = self.appui.cue_direction
+        self.assertEqual(d("left", (0.0, 0.0), (-20.0, 0.0)), "left")                   # go screen-left
+        self.assertEqual(d("left", (-38.0, 0.0), (-20.0, 0.0)), "right")                # clear overshoot: come back
+        self.assertEqual(d("left", (0.0, -9.0), (-20.0, 0.0)), "left")                  # natural tilt: no diagonal
+        self.assertEqual(d("left", (-20.0, 17.0), (-20.0, 0.0)), "down")                # main axis done, pitch far off
+        self.assertIsNone(d("left", (-19.0, 1.0), (-20.0, 0.0)))                         # there: no arrow
+        self.assertEqual(d("up", None, None), "up")                                      # no pose yet: the cue's own way
+        self.assertIsNone(d("closer", (0.0, 0.0), (0.0, 0.0)))
 
-        def way(ang):                                                                   # unit screen vector
-            return (round(math.cos(ang), 6), round(math.sin(ang), 6))
-        self.assertEqual(way(a("left", (0.0, 0.0), (-20.0, 0.0))), (-1.0, 0.0))         # go screen-left
-        self.assertEqual(way(a("left", (-38.0, 0.0), (-20.0, 0.0))), (1.0, 0.0))        # overshot: come back right
-        self.assertEqual(way(a("left", (-20.0, 14.0), (-20.0, 0.0))), (0.0, 1.0))       # head drifted up: look down
-        self.assertIsNone(a("left", (-19.0, 1.0), (-20.0, 0.0)))                         # there: no arrow
-        self.assertEqual(way(a("up", None, None)), (0.0, -1.0))                          # no pose yet: the cue's own way
-        self.assertIsNone(a("closer", (0.0, 0.0), (0.0, 0.0)))
+    def test_arrow_does_not_flip_on_jitter(self):
+        import numpy as np
+        d = self.appui.cue_direction
+        rng = np.random.default_rng(0)
+        prev, seen = None, []
+        for k in range(200):                                  # approaching "left" with ±4° estimator noise
+            yaw = -20.0 * min(1.0, k / 120) + rng.normal(scale=4.0)
+            prev = d("left", (yaw, rng.normal(scale=4.0)), (-20.0, 0.0), prev)
+            seen.append(prev)
+        flips = sum(1 for a, b in zip(seen, seen[1:]) if a and b and a != b)
+        self.assertEqual(flips, 0)                            # never left↔right/up/down while approaching
+        self.assertNotIn("right", seen)
 
     def test_every_cue_has_a_word(self):
         for _l, cue, _t, _tg in cal.SETUP_POSES:
