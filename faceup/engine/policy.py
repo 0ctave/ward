@@ -58,7 +58,7 @@ def effective(cfg: dict, service: str = "") -> dict:
     rgb_gate = min(float(rec["rgb_certainty"]) + p["gate_delta"], p["gate_max"])
     return {"level": lvl, "off": False,
             "certainty": round(gate, 3), "rgb_certainty": round(rgb_gate, 3),
-            "whitened": bool(rec.get("whitened", True)) and p["whitened"],
+            "whitened": bool(rec.get("whitened", False)) and p["whitened"],
             "require_rgb_match": bool(rec.get("require_rgb_match", False)) or p["require_rgb_match"],
             "rgb_when_bright": p["rgb_when_bright"],
             "required_votes": max(int(live.get("required_votes", 2)), p["required_votes"]) if lvl != "convenience" else 1,

@@ -25,6 +25,7 @@ from .engine.store import Store
 
 WIN = "faceup"
 SAMPLES_PER_CELL = 3
+SAMPLES_PER_POSE = 6          # guided window: frames per pose model, spread over the pass (review A9: 3 → p95 0.34, 6 → 0.23)
 CELL_DONE = 2                 # samples of the primary spectrum that mark a cell as filled
 STABLE_DEG = 4.0              # pose must move less than this between frames to be sampled
 SAMPLE_EVERY_MS = 120         # embeddings are computed at most this often
@@ -131,19 +132,22 @@ def _sampler_main(req, res, detector_kind: str, max_height: int, recogniser: str
         cell, pose, items = job
         results = []
         for item in items:
-            sp, rgb, hint, q, exact = item[:5]
-            want_aug = item[5] if len(item) > 5 else True
-            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-            box = Box(*hint)
-            if not exact:
-                box = models.detect(gray, box)
-            if box is None or box.w < MIN_ENROLL_FACE_PX:
+            try:                                          # one bad frame must not kill the worker (review A3)
+                sp, rgb, hint, q, exact = item[:5]
+                want_aug = item[5] if len(item) > 5 else True
+                gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+                box = Box(*hint)
+                if not exact:
+                    box = models.detect(gray, box)
+                if box is None or box.w < MIN_ENROLL_FACE_PX:
+                    continue
+                emb = models.embed(rgb, box)
+                # lighting variants of the same frame: not match targets, but they teach the
+                # whitening which embedding directions are "just lighting" for this user
+                aug = [models.embed(v, box) for v in _light_variants(rgb)] if want_aug else []
+                results.append((sp, q, emb, aug))
+            except Exception:
                 continue
-            emb = models.embed(rgb, box)
-            # lighting variants of the same frame: not match targets, but they teach the
-            # whitening which embedding directions are "just lighting" for this user
-            aug = [models.embed(v, box) for v in _light_variants(rgb)] if want_aug else []
-            results.append((sp, q, emb, aug))
         res.put((cell, pose, results))
 
 
@@ -706,16 +710,15 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
             return face_w is not None and widths and face_w <= float(np.median(widths)) * 0.9
         if pose_disp is None:
             return None
-        y, p = pose_disp[0], pose_disp[1]
-        tgt = poses[st_data["i"]][3]
-        return abs(y - tgt[0]) <= cal.POSE_TOLERANCE_DEG and abs(p - tgt[1]) <= cal.POSE_TOLERANCE_DEG
+        return cal.pose_ok(pose_disp, poses[st_data["i"]][3])
 
     def advance():
         if st_data["i"] == 0 and widths:
             pass
-        st_data["i"] += 1; st_data["hits"] = 0; st_data["started"] = time.monotonic()
+        st_data["i"] += 1; st_data["hits"] = 0; st_data["started"] = time.monotonic(); st_data["active"] = 0.0
 
     def step():
+        nonlocal sampler
         for k in screen.keys():
             if k == KEY_GLASSES and st_data["phase"] == "done" and st_data.get("offer_glasses"):
                 start_condition("glasses"); continue
@@ -725,7 +728,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                 st_data["cancel"] = True
             elif k == disp.KEY_ENTER:
                 if st_data["phase"] == "intro":
-                    st_data["phase"] = "run"; st_data["started"] = time.monotonic()
+                    st_data["phase"] = "run"; st_data["started"] = time.monotonic(); st_data["active"] = 0.0
                 elif st_data["phase"] == "done":
                     return None
                 elif st_data["phase"] == "run":
@@ -735,9 +738,26 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         if st_data["cancel"]:
             return None
         now = time.monotonic()
+        dt = min(0.25, now - st_data.get("last_step_t", now)); st_data["last_step_t"] = now
+        if st_data["phase"] == "done":
+            left = (DONE_AUTOCLOSE_S * (2 if st_data.get("offer_glasses") else 1)) - (now - st_data["done_t"])
+            if st_data["done"].get("ok") and left <= 0:
+                return None                                  # auto-finish: the summary is printed in the terminal too
+            fr = cap.read_one(primary, flush=0)
+            snap = dict(st_data["done"]); snap["closing_in"] = left if st_data["done"].get("ok") else None
+            if fr is not None:
+                snap["frame"] = fr.rgb[:, ::-1].copy() if mirror else fr.rgb
+            return snap
+        if getattr(cap, "lost", ""):                         # the camera is gone: end with an honest card
+            st_data["failed"] = cap.lost; st_data["failed_kind"] = "camera"
+            finish()
+            return dict(st_data["done"])
         fr = cap.read_one(primary, flush=0)
         if fr is None:
-            return {"phase": st_data["phase"], "index": st_data["i"], "total": len(poses)}
+            stalled = now - st_data.get("last_frame_t", now) > 2.0
+            return {"phase": "run" if st_data["phase"] == "run" else st_data["phase"], "index": st_data["i"],
+                    "total": len(poses), "camera_stalled": stalled}
+        st_data["last_frame_t"] = now
         st_data["fps_n"] += 1
         if now - st_data["fps_t"] >= 1.0:
             st_data["fps"] = st_data["fps_n"] / (now - st_data["fps_t"]); st_data["fps_n"], st_data["fps_t"] = 0, now
@@ -765,22 +785,20 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                 if br is not None:
                     from .engine.enroll import pair_offset
                     align_pairs.append(pair_offset(box, br, fr.gray.shape, fo.gray.shape))
-            if ready:
+            if ready and not st_data.get("main"):
                 st_data["ready_since"] = st_data["ready_since"] or now
                 if now - st_data["ready_since"] >= intro_wait:
-                    st_data["phase"] = "run"; st_data["started"] = now
+                    st_data["phase"] = "run"; st_data["started"] = now; st_data["active"] = 0.0
             else:
+                # the glasses sweep never starts by itself: frames without glasses would be
+                # labelled 'glasses' if the user is still putting them on (review A8)
                 st_data["ready_since"] = None
             base.update({"phase": "intro", "index": 0, "total": len(poses), "ready": ready,
                          "intro_text": CONDITION_INTRO.get(condition, "") if st_data.get("main") else "",
+                         "manual_start": bool(st_data.get("main")),
                          "waited": now - st_data["intro_t0"],
                          "countdown": max(0.0, intro_wait - (now - st_data["ready_since"])) if st_data["ready_since"] else None})
             return base
-        if st_data["phase"] == "done":
-            left = (DONE_AUTOCLOSE_S * (2 if st_data.get("offer_glasses") else 1)) - (now - st_data["done_t"])
-            if left <= 0:
-                return None                                  # auto-finish: the summary is printed in the terminal too
-            base.update(st_data["done"]); base["closing_in"] = left; return base
 
         # pose (smoothed) at camera rate
         pose_disp = None; face_w = None
@@ -798,7 +816,9 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                 widths.append(face_w)
             # capture embeddings for this pose in the worker process
             if (now - st_data["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy and sampler.alive:
-                items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True, True)]
+                # no synthetic lighting variants: 3 extra embeddings per sample (~255 ms) quartered the
+                # sample rate and changed no decision (review A11); whitening learns from real samples
+                items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True, False)]
                 lights = {primary: light_state}
                 for sp in others:
                     fo = cap.read_one(sp, flush=0)
@@ -811,6 +831,18 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                 # the pose and light travel WITH the sample: tagged when it was taken, not when it drains
                 if sampler.submit(st_data["i"], (pose_disp, lights), items):
                     st_data["last_sample_t"] = now
+        if not sampler.alive:                                # the worker died (OOM, dlib crash): respawn once
+            if st_data.get("respawns", 0) < 1:
+                st_data["respawns"] = st_data.get("respawns", 0) + 1
+                try:
+                    sampler.close(timeout=0.2)
+                except Exception:
+                    pass
+                sampler = _Sampler(models)
+            else:
+                st_data["failed"] = "the face-processing worker stopped"; st_data["failed_kind"] = "worker"
+                finish()
+                return dict(st_data["done"])
         for pose_i, tag, results in sampler.drain():
             pose_at, lights = tag
             for item in results:
@@ -823,11 +855,17 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
             st_data["started"] = now
         if ok:
             st_data["hits"] += 1; st_data["counted_t"] = now
-        elapsed = now - st_data["started"]
+        # the pass clock runs only while a usable face is in view (review A5): stepping away, a
+        # too-small or dark face never costs a pose; a wall-clock cap still ends a stuck pass
+        if face_w is not None:
+            st_data["active"] = st_data.get("active", 0.0) + dt
+        elapsed = st_data.get("active", 0.0)
+        wall = now - st_data["started"]
+        small = box is not None and box.w < MIN_ENROLL_FACE_PX
         # a pass is done when it has enough USABLE embeddings (pose-true, lit), not camera frames:
         # the sampler yields one every ~0.3–0.7 s, so 20 on-target frames (~0.7 s) left most
         # directional poses with < 3 samples once transition frames stopped counting
-        got = len(cal.usable_rows(caps[st_data["i"]].get(primary, []), target, cue))
+        got = max([len(cal.usable_rows(rows, target, cue)) for rows in caps[st_data["i"]].values()] or [0])
         if cue == "light":                                # time to actually change the light, then samples
             progress = min(1.0, elapsed / cal.LIGHT_PASS_MIN_S, got / NEED_S)
             done = elapsed >= cal.LIGHT_PASS_MIN_S and got >= NEED_S
@@ -837,8 +875,8 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         base.update({"phase": "run", "index": st_data["i"], "total": len(poses), "key": cue, "text": text,
                      "cue": cue, "pose": pose_disp, "target": _target_display(target, sgn), "progress": progress,
                      "ok": ok, "hits": st_data["hits"], "need": NEEDN, "elapsed": elapsed,
-                     "counted": (now - st_data["counted_t"]) < 0.25})
-        if done or elapsed >= TIMEOUT:
+                     "counted": (now - st_data["counted_t"]) < 0.25, "small": small})
+        if done or elapsed >= TIMEOUT or wall >= 3 * TIMEOUT:
             base["pass_done"] = True
             advance()
             if st_data["i"] >= len(poses):
@@ -853,8 +891,12 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         st_data["main"] = {"done": st_data["done"], "result": st_data.get("result"), "added": st_data.get("added", 0)}
         condition, poses = name, list(cal.CONDITION_POSES)
         caps = {i: defaultdict(list) for i in range(len(poses))}
+        try:
+            sampler.close(timeout=0.2)                       # the main sweep's worker (finish() closed it; be sure)
+        except Exception:
+            pass
         sampler = _Sampler(models)
-        st_data.update({"phase": "intro", "i": 0, "hits": 0, "started": None, "ready_since": None,
+        st_data.update({"respawns": 0, "phase": "intro", "i": 0, "hits": 0, "started": None, "ready_since": None,
                         "intro_t0": None, "done": None, "offer_glasses": False, "prev_box": None,
                         "lmfilter": posemod.LandmarkFilter(), "filter": posemod.PoseFilter()})
 
@@ -867,14 +909,24 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         if align_pairs and not st_data.get("main"):
             from .engine.enroll import summarise_pairs
             st.calib.update(summarise_pairs(align_pairs))
-        added, dist_by, _extra = cal.build_from_captures(st, caps, poses, SAMPLES_PER_CELL, fuse,
+        added, dist_by, _extra = cal.build_from_captures(st, caps, poses, SAMPLES_PER_POSE, fuse,
                                                          identity=identity, condition=condition)
+        # a pose counts when ANY camera produced its model: in bright daylight the IR face can meter
+        # dark while RGB carries — that is a good enrolment, not a failed one
         missed = [poses[i][2] for i in range(len(poses))
-                  if cal.select_rows(caps[i].get(primary, []), poses[i][3], poses[i][1], SAMPLES_PER_CELL) is None]
+                  if all(cal.select_rows(rows, poses[i][3], poses[i][1], SAMPLES_PER_POSE) is None
+                         for rows in caps[i].values()) or not caps[i]]
         main = st_data.get("main")
         if main is not None:                                 # the condition sweep: the main result stands
+            stopped = st_data.pop("failed", "")              # a failure here never costs the finished main enrolment
+            st_data["failed_kind"] = ""
+            if stopped:
+                st.models = [m for m in st.models if m.condition != condition or m.label not in {p[0] for p in poses}] \
+                    if added else st.models
+                added = 0
             st_data.update({"result": main["result"], "added": main["added"] + added, "done_t": time.monotonic(), "phase": "done"})
-            extra = f"With {condition}: {added} models" + (f" (no model for: {', '.join(missed)})" if missed else "") + "."
+            extra = (f"{condition.capitalize()} sweep stopped ({stopped}): not added." if stopped else
+                     f"With {condition}: {added} models" + (f" (no model for: {', '.join(missed)})" if missed else "") + ".")
             st_data["done"] = dict(main["done"], summary=main["done"]["summary"] + "\n" + extra, offer_glasses=False,
                                    headline=f"Enrolled {main['added'] + added} models · {condition} included")
             return
@@ -882,11 +934,23 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         st_data["result"] = res
         st_data["added"] = added
         st_data["done_t"] = time.monotonic()
-        st_data["done"] = {"phase": "done", "index": len(poses), "total": len(poses),
-                           "headline": f"Enrolled {added} models · gate set from your real distances" if res.ok() else f"Enrolled {added} models",
-                           "summary": _setup_summary(res, added, missed, ir="ir" in cap.spectra, condition=condition)}
+        failed = st_data.get("failed", "")
+        got_poses = len(poses) - len(missed)
+        # a sweep that produced only a pose or two is not an enrolment: with --fresh, saving it
+        # would replace a good enrolment with a weak one — require at least half the poses
+        ok = added > 0 and not failed and got_poses * 2 >= len(poses)
+        if added > 0 and not ok and not failed:
+            failed = f"only {got_poses} of {len(poses)} poses produced a model"
+            st_data["failed"] = failed; st_data["failed_kind"] = "poses"
+        st_data["done"] = {"phase": "done", "index": len(poses), "total": len(poses), "ok": ok,
+                           "headline": ({"camera": "Camera lost — nothing saved", "worker": "Processing stopped — nothing saved",
+                                         "poses": "Not enough poses — nothing saved"}.get(st_data.get("failed_kind", ""), "Nothing enrolled") if not ok
+                                        else f"Enrolled {added} models · gate set from your real distances" if res.ok() else f"Enrolled {added} models"),
+                           "summary": (f"{failed[:1].upper() + failed[1:]}. Your previous enrolment is unchanged — try again in better light, facing the camera." if failed and not ok else
+                                       "No pose produced a model — your previous enrolment is unchanged." if not ok else
+                                       _setup_summary(res, added, missed, ir="ir" in cap.spectra, condition=condition))}
         st_data["phase"] = "done"
-        st_data["offer_glasses"] = not condition and added > 0
+        st_data["offer_glasses"] = not condition and ok
         st_data["done"]["offer_glasses"] = st_data["offer_glasses"]
 
     try:
@@ -903,8 +967,8 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         if main is None:
             return None
         # cancelled during the optional glasses sweep: the finished main enrolment still stands
-        return {"result": main["result"], "added": main["added"], "extra_saved": True}
-    return {"result": st_data.get("result"), "added": st_data.get("added", 0), "extra_saved": True}
+        return {"result": main["result"], "added": main["added"], "failed": ""}
+    return {"result": st_data.get("result"), "added": st_data.get("added", 0), "failed": st_data.get("failed", "")}
 
 
 def _target_display(target, sgn):
@@ -913,7 +977,7 @@ def _target_display(target, sgn):
 
 DONE_AUTOCLOSE_S = 12.0
 KEY_GLASSES = "glasses"                # the done card's "I wear glasses" button
-CONDITION_INTRO = {"glasses": "Put your glasses on", "headset": "Put your headset on"}
+CONDITION_INTRO = {"glasses": "Put your glasses on, then press Start", "headset": "Put your headset on, then press Start"}
 
 
 def _setup_summary(res, added, missed=(), ir: bool = False, condition: str = ""):

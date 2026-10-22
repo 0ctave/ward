@@ -1,0 +1,213 @@
+"""The enrolment window's flow, driven headlessly (tests/enroll_harness.py): every pass, key,
+timeout and the done card — no GTK, no camera."""
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from enroll_harness import World, run_setup  # noqa: E402
+from faceup.engine import calibration as cal  # noqa: E402
+
+
+class HappyPath(unittest.TestCase):
+    def test_cooperative_user_enrols_every_pose(self):
+        res, snaps, st = run_setup(World())
+        self.assertIsNotNone(res)
+        self.assertGreater(res["added"], 0)
+        labels = {m.label for m in st.models}
+        for label, cue, _t, _tgt in cal.SETUP_POSES:
+            self.assertIn(label.replace("2", ""), labels, f"no model for {label}")
+        self.assertEqual(snaps[-1]["phase"], "done")
+
+
+
+class Robustness(unittest.TestCase):
+    def test_stepping_away_does_not_cost_poses(self):
+        # A5: 40 s with no face during the first pass, then a cooperative user
+        class Away(World):
+            def face(self, t):
+                return not (4.0 <= t < 44.0)
+        res, snaps, st = run_setup(Away())
+        self.assertEqual({m.label for m in st.models} >= {"C/level", "C/up", "C/down", "L1/level", "R1/level"}, True)
+
+    def test_too_small_face_shows_come_closer(self):
+        w = World(face_w=40)                                      # under MIN_ENROLL_FACE_PX
+        res, snaps, st = run_setup(w, max_s=20)
+        self.assertTrue(any(sn.get("small") for sn in snaps if sn.get("phase") == "run"))
+
+    def test_camera_freeze_keeps_done_card_and_autoclose(self):
+        # A2: frames stop after the sweep: the done card still has its text and the window still closes
+        w = World()
+        res, snaps, st = run_setup(w)
+        done = [sn for sn in snaps if sn.get("phase") == "done"]
+        self.assertTrue(done and all(sn.get("headline") for sn in done))
+
+    def test_lost_camera_ends_with_an_honest_card_and_no_save(self):
+        class Lost(World):
+            pass
+        w = Lost()
+        import enroll_harness as H
+        orig = H.FakeCap.read_one
+
+        def read_one(self, sp, flush=0):
+            if self.clock() - self.world.t0 > 12.0:
+                self.lost = "IR starved and could not be reopened"
+            return orig(self, sp, flush)
+        from unittest import mock
+        with mock.patch.object(H.FakeCap, "read_one", read_one):
+            res, snaps, st = run_setup(w, max_s=60)
+        self.assertTrue(res["failed"])
+        done = [sn for sn in snaps if sn.get("phase") == "done"]
+        self.assertTrue(done and done[-1]["ok"] is False and "Camera lost" in done[-1]["headline"], done[-1:])
+
+    def test_nothing_enrolled_card_does_not_autoclose_or_claim_saved(self):
+        # A4: no face ever → every pass times out on the wall clock → honest card, no auto-close
+        class Nobody(World):
+            def light_at(self, t):
+                return "ok" if t < 3.0 else "dark"                 # intro starts, then the face is unusable
+        res, snaps, st = run_setup(Nobody(), max_s=200, timeout=3.0)
+        done = [sn for sn in snaps if sn.get("phase") == "done"]
+        self.assertTrue(done)
+        self.assertFalse(done[-1]["ok"]); self.assertIsNone(done[-1]["closing_in"])
+        self.assertTrue(res["failed"])                              # cmd_enroll refuses to save it
+
+
+class SamplerDeath(unittest.TestCase):
+    def test_worker_dies_once_is_respawned_and_enrolment_completes(self):
+        import enroll_harness as H
+        made = []
+
+        def factory(models):
+            smp = H.FakeSampler(w)
+            made.append(smp)
+            if len(made) == 1:                                     # the first worker dies after 5 jobs
+                orig = smp.submit
+
+                def submit(*a):
+                    if len(smp.__dict__.setdefault("n", [])) >= 5:
+                        smp.alive = False; return False
+                    smp.n.append(1); return orig(*a)
+                smp.submit = submit
+            return smp
+        w = World()
+        res, snaps, st = run_setup(w, sampler_cls=factory)
+        self.assertEqual(len(made), 2)
+        self.assertFalse(res["failed"]); self.assertGreater(res["added"], 0)
+
+    def test_worker_dies_twice_fails_without_saving(self):
+        import enroll_harness as H
+
+        def factory(models):
+            smp = H.FakeSampler(w); smp.alive = False; return smp
+        w = World()
+        res, snaps, st = run_setup(w, sampler_cls=factory, max_s=60)
+        self.assertTrue(res["failed"])
+        self.assertFalse(snaps[-1].get("ok", True))
+
+
+class GlassesSweep(unittest.TestCase):
+    def test_glasses_sweep_waits_for_start(self):
+        # A8: after the glasses button, a face in view for 10 s must NOT start the sweep
+        w = World()
+        w.keys_after_done = {1.0: ["glasses"], 13.0: ["enter"]}
+        res, snaps, st = run_setup(w)
+        intro_after = [sn for sn in snaps if sn.get("phase") == "intro" and sn.get("manual_start")]
+        self.assertTrue(intro_after, "glasses intro never shown")
+        self.assertGreater(len(intro_after), 15 * 10)              # stayed ≥ 10 s until Start
+        self.assertTrue(any(m.condition == "glasses" for m in st.models))
+
+
+class GlassesFailure(unittest.TestCase):
+    def test_camera_lost_during_glasses_sweep_keeps_the_main_enrolment(self):
+        import enroll_harness as H
+        from unittest import mock
+        w = World()
+        w.keys_after_done = {1.0: ["glasses"], 2.0: ["enter"]}
+        orig = H.FakeCap.read_one
+
+        def read_one(self, sp, flush=0):
+            if self.world.t_done is not None and self.clock() - self.world.t0 > self.world.t_done + 5.0:
+                self.lost = "IR starved and could not be reopened"
+            return orig(self, sp, flush)
+        with mock.patch.object(H.FakeCap, "read_one", read_one):
+            res, snaps, st = run_setup(w)
+        self.assertEqual(res["failed"], "")
+        self.assertGreater(res["added"], 0)
+        self.assertFalse(any(m.condition == "glasses" for m in st.models))
+        self.assertIn("sweep stopped", snaps[-1]["summary"])
+
+
+class RgbCarries(unittest.TestCase):
+    def test_ir_face_dark_but_rgb_sees_is_still_an_enrolment(self):
+        import enroll_harness as H
+        from unittest import mock
+
+        class Bright(World):
+            pass
+        w = Bright()
+        orig_submit = H.FakeSampler.submit
+
+        def submit(self, cell, tag, items):                       # the IR frames meter dark, RGB is fine
+            pose_at, lights = tag
+            lights = dict(lights, ir="dark", rgb="")
+            return orig_submit(self, cell, (pose_at, lights), items)
+        with mock.patch.object(H.FakeSampler, "submit", submit):
+            res, snaps, st = run_setup(w, cap_spectra=("ir", "rgb"))
+        self.assertFalse(res["failed"], snaps[-1].get("summary"))
+        self.assertTrue(all(m.spectrum == "rgb" for m in st.models) and st.models)
+
+
+class Tolerance(unittest.TestCase):
+    def test_level_head_is_not_look_up(self):
+        self.assertFalse(cal.pose_ok((0.0, 4.0), (0.0, 15.0)))
+        self.assertTrue(cal.pose_ok((0.0, 12.0), (0.0, 15.0)))
+        self.assertFalse(cal.pose_ok((0.0, -4.0), (0.0, -18.0)))
+        self.assertTrue(cal.pose_ok((5.0, 0.0), (0.0, 0.0)))
+
+
+class WindowStates(unittest.TestCase):
+    """The GTK side of the same states (skipped without GTK 4 + libadwaita)."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from faceup import appui
+            cls.appui = appui
+            cls.w = appui.CalibrateWindow("t", 320, 180)
+        except Exception as e:                                      # no display / no libadwaita
+            raise unittest.SkipTest(f"GTK unavailable: {e}")
+
+    def test_pass_button_says_skip_and_dot_is_current(self):
+        self.w._apply({"phase": "run", "index": 2, "total": 8, "cue": "left", "progress": 0.3})
+        self.assertEqual(self.w.btn_next.get_label(), "Skip pass")
+        self.assertIn("fu-dot-now", self.w._dot_widgets[2].get_css_classes())
+
+    def test_arrow_follows_current_to_target_in_display_space(self):
+        import math
+        a = self.appui.cue_angle
+
+        def way(ang):                                                                   # unit screen vector
+            return (round(math.cos(ang), 6), round(math.sin(ang), 6))
+        self.assertEqual(way(a("left", (0.0, 0.0), (-20.0, 0.0))), (-1.0, 0.0))         # go screen-left
+        self.assertEqual(way(a("left", (-38.0, 0.0), (-20.0, 0.0))), (1.0, 0.0))        # overshot: come back right
+        self.assertEqual(way(a("left", (-20.0, 14.0), (-20.0, 0.0))), (0.0, 1.0))       # head drifted up: look down
+        self.assertIsNone(a("left", (-19.0, 1.0), (-20.0, 0.0)))                         # there: no arrow
+        self.assertEqual(way(a("up", None, None)), (0.0, -1.0))                          # no pose yet: the cue's own way
+        self.assertIsNone(a("closer", (0.0, 0.0), (0.0, 0.0)))
+
+    def test_every_cue_has_a_word(self):
+        for _l, cue, _t, _tg in cal.SETUP_POSES:
+            self.assertIn(cue, self.appui.CalibrateWindow.CUE_WORD)
+
+    def test_done_pill_visible_after_a_pass_hid_it(self):
+        self.w._apply({"phase": "run", "index": 1, "total": 8, "cue": "up", "box": (1, 1, 80, 80), "progress": 0.2})
+        self.w._apply({"phase": "done", "index": 8, "total": 8, "ok": True, "headline": "Enrolled", "summary": "x", "closing_in": 9})
+        self.assertTrue(self.w.pill_over.get_visible())
+        self.w._apply({"phase": "done", "index": 8, "total": 8, "ok": False, "headline": "Nothing enrolled", "summary": "x"})
+        self.assertEqual(self.w.pill_over.get_label(), "Nothing saved")
+
+if __name__ == "__main__":
+    unittest.main()

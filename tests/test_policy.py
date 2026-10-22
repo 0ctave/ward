@@ -27,7 +27,10 @@ class Presets(unittest.TestCase):
         cfg = _cfg(policy="balanced")
         e = policy.effective(cfg, "sudo")
         self.assertEqual(e["level"], "balanced"); self.assertEqual(e["certainty"], 0.40); self.assertTrue(e["rgb_when_bright"])
-        self.assertEqual(e["required_votes"], 2); self.assertTrue(e["learn"]); self.assertTrue(e["whitened"])
+        self.assertEqual(e["required_votes"], 2); self.assertTrue(e["learn"])
+        self.assertFalse(e["whitened"])                                    # off by default (measured never to fire)
+        on = _cfg(policy="balanced"); on["recognition"]["whitened"] = True
+        self.assertTrue(policy.effective(on, "sudo")["whitened"])          # still available as an opt-in
         e = policy.effective(_cfg(policy="strict"), "gdm-password")
         self.assertEqual(e["certainty"], 0.35); self.assertTrue(e["require_rgb_match"]); self.assertFalse(e["whitened"])
         self.assertTrue(e["need_strong_voter"]); self.assertFalse(e["learn"])

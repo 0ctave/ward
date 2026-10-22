@@ -278,7 +278,7 @@ def summarise(measures: list[Measure]) -> Result:
         res.warnings.append("no face during: " + ", ".join(missing))
     for sp, cond in res.conditions.items():
         if "dim" not in cond and "bright" not in cond:
-            res.warnings.append(f"{sp}: only one light condition seen ({', '.join(cond)}); night/bright will rely on the whitened path and learning until they have been seen")
+            res.warnings.append(f"{sp}: only one light condition seen ({', '.join(cond)}); night/bright rely on learning until they have been seen (an IR camera covers the dark on its own)")
     return res
 
 
@@ -367,8 +367,24 @@ POSE_TOLERANCE_DEG = 12.0           # a frame belongs to a pose only once the he
 DIRECTIONAL_CUES = ("centre", "up", "down", "left", "right")
 
 
-NEED_SAMPLES = 9                     # usable (pose-true, lit) embeddings a setup pass collects: 6 model + 3 held out
+NEED_SAMPLES = 12                    # usable (pose-true, lit) embeddings a setup pass collects: ≤6 model + 4 held out
 LIGHT_PASS_MIN_S = 4.0               # the "change the light" pass stays open long enough to actually do it
+
+
+def pose_tolerance(target) -> tuple[float, float]:
+    """Per-axis tolerance around a display-space target: POSE_TOLERANCE_DEG, but never more than
+    60 % of the target's own offset — a 15° "look up" with 12° of slack accepted a level head
+    (pitch 3°). Never below 6°, which is the pose estimator's own noise."""
+    return tuple(max(6.0, min(POSE_TOLERANCE_DEG, 0.6 * abs(v))) if abs(v) > 1e-6 else POSE_TOLERANCE_DEG
+                 for v in target)
+
+
+def pose_ok(pose, target) -> bool:
+    """The one predicate for 'this display pose is at the target' (window progress and model selection)."""
+    if pose is None:
+        return False
+    ty, tp = pose_tolerance(target)
+    return abs(pose[0] - target[0]) <= ty and abs(pose[1] - target[1]) <= tp
 
 
 def usable_rows(rows: list, target, cue: str) -> list:
@@ -377,8 +393,7 @@ def usable_rows(rows: list, target, cue: str) -> list:
     rows = [r for r in rows if not (len(r) > 3 and r[3] == "dark")]   # a camera blind in this light enrols nothing
     posed = [r for r in rows if len(r) > 4 and r[4] is not None]
     if cue in DIRECTIONAL_CUES and posed:
-        ty, tp = target
-        rows = [r for r in posed if abs(r[4][0] - ty) <= POSE_TOLERANCE_DEG and abs(r[4][1] - tp) <= POSE_TOLERANCE_DEG]
+        rows = [r for r in posed if pose_ok(r[4], target)]
     return rows
 
 
@@ -397,8 +412,43 @@ def select_rows(rows: list, target, cue: str, samples_per_cell: int) -> tuple[li
         return None
     n_held = len(rows) // 3 if len(rows) >= 6 else 0
     cand, held = (rows[:-n_held], rows[-n_held:]) if n_held else (rows, [])
-    cand = sorted(cand, key=lambda r: r[0], reverse=True)
-    return cand[:max(3, min(samples_per_cell, len(cand)))], held
+    # quality first, then SPREAD IN TIME: the top-quality frames cluster in one moment, and 3
+    # consecutive frames gave a held-out p95 of 0.34 vs ~0.23 for 6 spread over the pass (review A9)
+    keep = max(3, len(cand) - len(cand) // 3)
+    best = sorted(range(len(cand)), key=lambda i: cand[i][0], reverse=True)[:keep]
+    best.sort()                                              # back to arrival order
+    k = max(3, min(samples_per_cell, len(best)))
+    pick = [best[round(j * (len(best) - 1) / (k - 1))] for j in range(k)] if k > 1 else best[:1]
+    return [cand[i] for i in dict.fromkeys(pick)], held
+
+
+OTHER_FACE_DIST = 0.6        # dlib units: the same person sits ≤ ~0.45 from their own median, others ≥ ~0.6
+
+
+def drop_other_faces(caps: dict, limit: float = OTHER_FACE_DIST, scale: float = 1.0) -> dict:
+    """Remove frames of someone else (YuNet tracks the LARGEST face: a person leaning into view
+    takes over the box). Per camera, frames farther than `limit` from the median embedding of the
+    whole sweep are dropped; the owner dominates a sweep, so the median is theirs (review A14)."""
+    from collections import defaultdict
+    by_sp = defaultdict(list)
+    for i in caps:
+        for sp, rows in caps[i].items():
+            by_sp[sp].extend(r[1] for r in rows)
+    med = {}
+    for sp, v in by_sp.items():
+        if len(v) < 6:
+            continue
+        m = np.median(np.array(v), axis=0)
+        far = sum(float(np.linalg.norm(np.asarray(e) - m)) * scale > limit for e in v)
+        if far <= 0.4 * len(v):              # a clear majority defines the owner; otherwise don't guess
+            med[sp] = m
+    out = {}
+    for i in caps:
+        out[i] = defaultdict(list)
+        for sp, rows in caps[i].items():
+            m = med.get(sp)
+            out[i][sp] = [r for r in rows if m is None or float(np.linalg.norm(np.asarray(r[1]) - m)) * scale <= limit]
+    return out
 
 
 def build_from_captures(st, caps: dict, poses: list, samples_per_cell: int, fuse,
@@ -410,6 +460,7 @@ def build_from_captures(st, caps: dict, poses: list, samples_per_cell: int, fuse
     finished store."""
     from collections import defaultdict
     holdout = defaultdict(list); extra = defaultdict(list); added = 0
+    caps = drop_other_faces(caps, scale=float(getattr(st, "scale", 1.0) or 1.0))   # limit is in dlib units
     splits = {(i, sp): select_rows(rows, poses[i][3], poses[i][1], samples_per_cell)
               for i in caps for sp, rows in caps[i].items()}
     # clear each target label ONCE up front (only THIS person's, THIS condition's) — and only labels
