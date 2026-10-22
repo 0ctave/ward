@@ -17,6 +17,7 @@ class Lighting:
     p5: float
     p95: float
     frames: int
+    face_mean: float | None = None      # brightness of the detected face (None = no face seen)
 
     @property
     def verdict(self) -> str:
@@ -50,7 +51,16 @@ def lighting(device: str, frames: int = 25) -> Lighting:
     if last is None:
         return Lighting(0, 0, 0, 0)
     g = cv2.cvtColor(last, cv2.COLOR_BGR2GRAY) if last.ndim == 3 else last
-    return Lighting(float(g.mean()), float(np.percentile(g, 5)), float(np.percentile(g, 95)), n)
+    L = Lighting(float(g.mean()), float(np.percentile(g, 5)), float(np.percentile(g, 95)), n)
+    try:                                   # the face, if any: an IR emitter lights the face and leaves the room black
+        from .engine.detect import Models
+        from .engine import brightness
+        box = Models("yunet", 320).detect(g)
+        if box is not None:
+            L.face_mean = brightness.meter(g, box).mean
+    except Exception:
+        pass
+    return L
 
 
 def grab_gray(device: str):
@@ -127,9 +137,11 @@ def emitter_status() -> dict:
                                        capture_output=True, text=True).stdout.strip() == "enabled"
     except OSError:
         pass
-    cfg = "/etc/linux-enable-ir-emitter"
-    if os.access(cfg, os.R_OK):
-        st["configured"] = any(not n.startswith(".") for n in os.listdir(cfg))
+    from .engine import emitter
+    state = emitter.tool_state()
+    st["state"] = state                    # working | none (files, but no instruction marked start) | absent
+    if os.access(str(emitter.TOOL_DIR), os.R_OK):
+        st["configured"] = state == "working"
     return st
 
 

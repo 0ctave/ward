@@ -21,7 +21,17 @@ from .auth import Engine, Obs
 from .capture import Capture, CaptureError
 from .liveness import Result, Vote
 
-LAB_DIR = Path(os.environ.get("FACEUP_LAB", "/var/lib/faceup/lab"))
+def _lab_dir() -> Path:
+    """Recordings dir: FACEUP_LAB, else under FACEUP_ETC when that override is set (tests,
+    unprivileged runs), else the system location."""
+    if os.environ.get("FACEUP_LAB"):
+        return Path(os.environ["FACEUP_LAB"])
+    if os.environ.get("FACEUP_ETC"):
+        return Path(os.environ["FACEUP_ETC"]) / "lab"
+    return Path("/var/lib/faceup/lab")
+
+
+LAB_DIR = _lab_dir()
 
 # Unlock policies compared side by side. Each is a pure function of a Sample.
 POLICIES = ("strict", "whitened", "whitened+liveness")
@@ -48,6 +58,8 @@ class Sample:
     pitch: float | None
     decisions: dict = field(default_factory=dict)   # policy -> bool
     reason: str = ""
+    roll: float | None = None
+    face_w: int | None = None                        # primary face box width, px (distance proxy)
 
     def row(self) -> dict:
         r = {"time": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.t)), "subject": self.subject, "primary": self.primary}
@@ -73,9 +85,9 @@ class LiveEvaluator:
     def __init__(self, user: str, cfg: dict | None = None, window: int = 6):
         self.cfg = cfg or config.load()
         self.user = user
-        self.store = storemod.load(user)
         self.engine = Engine(self.cfg)
         self.models = self.engine.models
+        self.store = storemod.load(user, self.models.recogniser_name, self.models.distance_scale)
         self.window = window
         self.obs: dict[str, deque] = {}
         self.cap: Capture | None = None
@@ -90,6 +102,7 @@ class LiveEvaluator:
         self._csv = None
         self._writer = None
         self.records: list[Sample] = []
+        self.recorder = None                       # replay.Recorder when --record-frames is on
         self.fps = 0.0
         self._fps_t, self._fps_n = time.monotonic(), 0
 
@@ -104,10 +117,17 @@ class LiveEvaluator:
         self.cap = Capture(self.devices)
         self.cap.warm_up(5)
         self.obs = {s: deque(maxlen=self.window) for s in self.devices}
-        self.models.sp5; self.models.rec
+        self.models.preload()
+
+    def record_frames(self, directory) -> Path:
+        from .replay import Recorder
+        self.recorder = Recorder(Path(directory))
+        return self.recorder.dir
 
     def close(self) -> None:
         self.stop_recording()
+        if self.recorder is not None:
+            self.recorder.close(); self.recorder = None
         if self.cap:
             self.cap.close(); self.cap = None
 
@@ -146,6 +166,8 @@ class LiveEvaluator:
         fs = self.cap.read_set()
         if not fs:
             return None
+        if self.recorder is not None:
+            self.recorder.write(fs)
         cams, rec, live = self.cfg["cameras"], self.cfg["recognition"], self.cfg["liveness"]
         for s, fr in fs.items():
             prev = next((o.box for o in reversed(self.obs[s]) if o.box is not None), None)
@@ -174,25 +196,31 @@ class LiveEvaluator:
         votes_v = self.engine._liveness(st, obs, self.devices, live) if any(faces.values()) else []
         votes = [(v.voter, v.result.value, v.reason) for v in votes_v]
         # pose of the primary face (display convention not needed here: camera angles)
-        yaw = pitch = None
+        yaw = pitch = roll = None
+        face_w = None
         lst = obs.get(self.primary, [])
         last = lst[-1] if lst else None
         if last is not None and last.box is not None:
+            face_w = int(last.box.w)
             try:
                 lm = self.models.landmarks68(brightness.normalise(last.frame.gray, last.quality.mean), last.box)
                 shape = np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None
-                p = posemod.estimate(lm, last.frame.gray.shape[1], last.frame.gray.shape[0], shape3d=shape)
+                neutral = posemod.Neutral(st.calib["neutral_ratios"]) if st.calib.get("neutral_ratios") else None
+                p = posemod.estimate(lm, last.frame.gray.shape[1], last.frame.gray.shape[0], shape3d=shape, neutral=neutral)
                 if p is not None:
-                    yaw, pitch = p.yaw, p.pitch
+                    yaw, pitch, roll = p.yaw, p.pitch, p.roll
+                    if shape is not None and st.calib.get("pose_offset"):
+                        yaw -= float(st.calib["pose_offset"][0]); pitch -= float(st.calib["pose_offset"][1])
             except Exception:
                 pass
-        sample = Sample(time.time(), self.subject, self.primary, faces, raw, label, wd, wthr, votes, light, yaw, pitch)
+        sample = Sample(time.time(), self.subject, self.primary, faces, raw, label, wd, wthr, votes, light, yaw, pitch, roll=roll, face_w=face_w)
         sample.decisions, sample.reason = self.decide(sample)
         if self.recording and any(faces.values()):
             self._record(sample)
         self.last = sample
         self.last_frames = fs
         self.last_obs = obs
+        self.last_fused = fused
         return sample
 
     def decide(self, s: Sample) -> tuple[dict, str]:

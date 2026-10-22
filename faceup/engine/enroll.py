@@ -25,13 +25,29 @@ class PoseResult:
     problems: list[str] = field(default_factory=list)
 
 
+def pair_offset(bi: Box, br: Box, ir_shape, rgb_shape) -> tuple[float, float, float]:
+    """(scale, dx, dy) mapping the RGB face box onto the IR one, in IR-frame fractions."""
+    ih, iw = ir_shape[:2]
+    rh, rw = rgb_shape[:2]
+    nb = Box(int(br.x * iw / rw), int(br.y * ih / rh), int(br.w * iw / rw), int(br.h * ih / rh))
+    sc = bi.w / nb.w if nb.w else 1.0
+    return sc, (bi.x - nb.x * sc) / iw, (bi.y - nb.y * sc) / ih
+
+
+def summarise_pairs(pairs: list) -> dict | None:
+    if not pairs:
+        return None
+    s, dx, dy = zip(*pairs)
+    return {"dx": round(float(np.median(dx)), 4), "dy": round(float(np.median(dy)), 4), "s": round(float(np.median(s)), 4)}
+
+
 def calibrate(cap: Capture, models: Models, cams: dict, n_pairs: int = 10, timeout: float = 4.0) -> dict | None:
     """Offset/scale between IR and RGB face boxes (only meaningful with both cameras)."""
     if set(cap.spectra) != {"ir", "rgb"}:
         return None
-    dx, dy, s = [], [], []
+    pairs = []
     t_end = time.monotonic() + timeout
-    while len(s) < n_pairs and time.monotonic() < t_end:
+    while len(pairs) < n_pairs and time.monotonic() < t_end:
         fs = cap.read_set()
         if set(fs) != {"ir", "rgb"}:
             continue
@@ -39,16 +55,8 @@ def calibrate(cap: Capture, models: Models, cams: dict, n_pairs: int = 10, timeo
         br = models.detect(fs["rgb"].gray)
         if bi is None or br is None:
             continue
-        ih, iw = fs["ir"].gray.shape[:2]
-        rh, rw = fs["rgb"].gray.shape[:2]
-        nb = Box(int(br.x * iw / rw), int(br.y * ih / rh), int(br.w * iw / rw), int(br.h * ih / rh))
-        sc = bi.w / nb.w if nb.w else 1.0
-        s.append(sc)
-        dx.append((bi.x - nb.x * sc) / iw)
-        dy.append((bi.y - nb.y * sc) / ih)
-    if not s:
-        return None
-    return {"dx": round(float(np.median(dx)), 4), "dy": round(float(np.median(dy)), 4), "s": round(float(np.median(s)), 4)}
+        pairs.append(pair_offset(bi, br, fs["ir"].gray.shape, fs["rgb"].gray.shape))
+    return summarise_pairs(pairs)
 
 
 def capture_pose(cap: Capture, models: Models, cams: dict, seconds: float = 1.2) -> PoseResult:

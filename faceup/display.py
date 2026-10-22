@@ -36,12 +36,23 @@ def user_wayland_env() -> dict[str, str]:
     uid = os.environ.get("SUDO_UID") or os.environ.get("PKEXEC_UID")
     if not uid:
         return env
-    for name in ("wayland-0", "wayland-1"):
-        sock = f"/run/user/{uid}/{name}"
-        if os.path.exists(sock):
-            env["WAYLAND_DISPLAY"] = sock
-            env.setdefault("GDK_BACKEND", "wayland,x11")
-            break
+    import glob
+    import pwd
+    socks = sorted(p for p in glob.glob(f"/run/user/{uid}/wayland-*") if not p.endswith(".lock"))
+    if socks:
+        env["WAYLAND_DISPLAY"] = socks[0]
+        env.setdefault("GDK_BACKEND", "wayland,x11")
+    elif os.environ.get("DISPLAY") and not os.environ.get("XAUTHORITY"):
+        # X11 session: sudo keeps DISPLAY but resets XAUTHORITY, so root is refused by the X server
+        try:
+            home = pwd.getpwuid(int(uid)).pw_dir
+        except (KeyError, ValueError):
+            home = ""
+        cands = glob.glob(f"/run/user/{uid}/gdm/Xauthority") + glob.glob(f"/run/user/{uid}/xauth_*") \
+            + glob.glob(f"/run/user/{uid}/.mutter-Xwaylandauth.*") + ([os.path.join(home, ".Xauthority")] if home else [])
+        auth = next((c for c in cands if os.path.exists(c)), None)
+        if auth:
+            env["XAUTHORITY"] = auth
     # (the user's session bus refuses root, so GTK runs without one — its warning is silenced below)
     return env
 
@@ -183,14 +194,14 @@ class Cv2Display:
 
 
 def open_display(title: str, width: int, height: int, prefer: str = "gtk", kind: str = "raw", canvas=None, **kw):
-    """Open a window. kind="enroll" / "emitter" / "lab": the libadwaita application windows (faceup.appui),
+    """Open a window. kind="enroll" / "emitter" / "lab" / "calibrate": the libadwaita application windows (faceup.appui),
     which consume snapshot dicts (`screen.snapshot` is True); kind="raw" or any fallback: a
     canvas display (GTK4 picture, then OpenCV HighGUI). Raises DisplayUnavailable if nothing works."""
     errors = []
-    if kind in ("enroll", "emitter", "lab") and prefer == "gtk":
+    if kind in ("enroll", "emitter", "lab", "calibrate") and prefer == "gtk":
         try:
             from . import appui
-            cls = {"enroll": appui.EnrollWindow, "emitter": appui.EmitterWindow, "lab": appui.LabWindow}[kind]
+            cls = {"enroll": appui.EnrollWindow, "emitter": appui.EmitterWindow, "lab": appui.LabWindow, "calibrate": appui.CalibrateWindow}[kind]
             return cls(title, width, height, **kw)
         except DisplayUnavailable as e:
             errors.append(f"adwaita: {e}")

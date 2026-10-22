@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "faceup"
-version = "0.2.0"
+version = "0.3.0"
 description = "Face unlock for Linux that actually works: dual-spectrum (IR+RGB) recognition with liveness voters, fail-open PAM integration."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,3 +28,6 @@ Homepage = "https://github.com/<you>/faceup"
 
 [tool.setuptools.packages.find]
 include = ["faceup*"]
+
+[tool.setuptools.package-data]
+faceup = ["models/*"]

@@ -56,8 +56,7 @@ def profile() -> Profile:
         p.dlib_avx = bool(getattr(dlib, "DLIB_USE_AVX", False)) if hasattr(dlib, "DLIB_USE_AVX" ) else False
     except ImportError:
         pass
-    # OpenCV's own thread pool: enough for DNN + image ops, leave cores for dlib and the UI
-    p.threads = max(1, min(4, p.cores // 2))
+    p.threads = threads_for(p.cores)
     try:
         p.power_profile = subprocess.run(["powerprofilesctl", "get"], capture_output=True, text=True, timeout=3).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
@@ -70,16 +69,25 @@ def profile() -> Profile:
     return p
 
 
-def apply(p: Profile | None = None) -> Profile:
-    """Configure OpenCV for this machine (thread count; OpenCL stays opt-in via config)."""
-    p = p or profile()
-    cv2.setNumThreads(p.threads)
-    return p
+def threads_for(cores: int) -> int:
+    """OpenCV's own thread pool: enough for DNN + image ops, leave cores for dlib and the UI."""
+    return max(1, min(4, cores // 2))
+
+
+def apply(p: Profile | None = None) -> int:
+    """Configure OpenCV for this machine. On the auth path this must stay cheap (roadmap R2):
+    only the thread count is needed, so no subprocess and no OpenCL probe unless a Profile
+    is passed in. Returns the thread count."""
+    n = p.threads if p is not None else threads_for(os.cpu_count() or 1)
+    cv2.setNumThreads(n)
+    return n
 
 
 def dnn_target(accel: str, p: Profile | None = None) -> tuple[int, int]:
-    """(backend, target) for OpenCV DNN models. 'opencl' only if the runtime is actually there."""
-    p = p or profile()
-    if accel == "opencl" and p.opencl:
-        return cv2.dnn.DNN_BACKEND_OPENCV, cv2.dnn.DNN_TARGET_OPENCL
+    """(backend, target) for OpenCV DNN models. 'opencl' only if the runtime is actually there;
+    the OpenCL probe runs only when opencl is requested."""
+    if accel == "opencl":
+        p = p or profile()
+        if p.opencl:
+            return cv2.dnn.DNN_BACKEND_OPENCV, cv2.dnn.DNN_TARGET_OPENCL
     return cv2.dnn.DNN_BACKEND_OPENCV, cv2.dnn.DNN_TARGET_CPU

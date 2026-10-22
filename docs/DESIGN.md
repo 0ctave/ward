@@ -191,6 +191,14 @@ Budget on a Ryzen 6600HS (no AVX dlib build): **typical accept in 250–450 ms**
 ### 6.2 Settle, then capture window (≤ 1200 + 2000 ms)
 Laptop IR cameras run auto-exposure in firmware with no manual control and start each session over- or under-exposed; the face is undetectable until it converges (~1–2 s measured). The engine reads frames until the primary camera's brightness is stable for 4 frames (max `settle_ms`), and only then starts the window. dlib models are loaded before the camera opens so that cost overlaps nothing. Both cameras are read in lock-step (20 pairs/s measured); the window ends early on success.
 
+**Emitter warm-up (2026-09-08).** The IR LEDs take ~400 ms to reach full brightness after the control is set (measured on the reference module). `authenticate` therefore turns the emitter **on first, before the cameras open** (its control fd on the IR node opens without blocking the streaming open), so the ramp overlaps the ~600 ms camera-open + model-load window and recognition starts on a lit face — instead of the first ~800 ms seeing a dark IR frame (the "LEDs light up slowly, then it starts" delay). This runs whenever an emitter instruction is known, not only when the shadow test is enabled, since a probe or a previous run may have left the LEDs off. The emitter is restored/left on in the `finally`.
+
+**Fast path (roadmap R1–R3, 2026-09-07).** The cameras are opened in the background (`Capture.open_async`, one thread per device — the two interfaces of a Windows-Hello module open in parallel without contending) while the dlib models load; a busy device is retried twice 150 ms apart before the attempt fails. `hw.apply()` on this path only sets the OpenCV thread count — no subprocess, no OpenCL probe. Measured: first frame set at ≈ 1.1 s after start instead of ≈ 1.4 s; the remaining floor is the IR module itself (≈ 520 ms in the V4L2 open, ≈ 200 ms to the first frame), which only a resident helper that keeps the device open removes (roadmap R4/R5).
+
+**Dark-room camera rule and watchdog (2026-10-22).** On a Windows-Hello module (RGB and IR as interfaces of one USB device), **opening the RGB camera in a dark room starves the IR stream**: the IR node keeps delivering a flat pedestal frame (mean ≈ 24, std 0.3–0.7 against ≥ 9 for a live frame), the LED goes out, and closing RGB does not revive it — IR has to be reopened (≈ 1.4 s). Every night-time no-match in the log had both cameras open. Two layers fix it. (1) `engine/ambient.py` reads the laptop's ambient light sensor over iio (≈ 36–99 lux lit, 0 dark on the reference machine; a node without a scale is ignored, `FACEUP_LUX` overrides for tests) and, below `DARK_LUX` = 5 lux and only when both nodes are one USB device, opens **IR only**; the attempt logs `ir-only (dark)`. In the dark RGB sees nothing anyway, so nothing is lost. (2) Where there is no sensor, `Capture._watch` drops RGB (`_release`) and reopens IR after `STARVED_FRAMES` = 6 flat IR frames (std < 1) *while RGB is dark too* — a flat IR frame next to a usable RGB picture is a different fault and is left alone. Measured: IR-only dark frames sit at 0.31 from daylight-enrolled models (gate 0.40), so no separate night enrolment is needed. LED-only imaging (on − off) gained ≈ 0.02 and was not worth its toggle. Caveat: the driver reports the LED control as on at open, but the LED may not be lit until a SET — the emitter warm-up above always writes it. The rule is specific to modules that share a USB device; separate cameras never trigger it.
+
+**Phases.** Every log line carries `ph=models,cams,face` (ms to models loaded, cameras open, first face), so a slow attempt says where the time went.
+
 ### 6.3 Quality gate (≈ 1 ms/frame)
 Drop frames that are dark (below threshold), blown out (p95 > 250), blurred (Laplacian variance < 60 at 320 px), or where the face box would be < 60 px. A window with *only* dark IR frames ends with reason `dark` — this is the emitter-failure signature and `doctor` reports it.
 
@@ -198,6 +206,25 @@ Drop frames that are dark (below threshold), blown out (p95 > 250), blurred (Lap
 - Detect on the best frame first, then track (correlation tracker) — detection is not re-run every frame.
 - Align with 5-point landmarks, compute the 128-d embedding per frame per camera.
 - **Fusion:** keep the top `fusion_frames` by quality, average the embeddings (L2-normalised). Averaging removes per-frame noise — the largest single reducer of false rejects after multi-pose enrollment.
+
+### 6.4a Recognisers (pluggable, `recognition.recogniser`)
+
+`engine/recognise.py` puts the embedding network behind one interface; `Models.embed` dispatches, the store records which space its vectors live in (`recogniser` field — a change forces `enroll --fresh`; the engine refuses a mismatched store with reason `store`).
+
+| Backend | Model | Dim | Cost | Trained on | Same-person radius |
+|---|---|---|---|---|---|
+| `dlib` (default) | ResNet-34, distro `dlib-models` | 128 | 30 ms | colour photos | 0.6 (99.38 % LFW) |
+| `arcface` | insightface `w600k_mbf` (MobileFaceNet) or `w600k_r50` (ResNet-50), OpenCV DNN | 512 | 5 ms / 57 ms | WebFace600K, ArcFace margin | ≈ cos 0.40 → 1.10 Euclidean (provisional) |
+
+**Why ArcFace.** Additive-angular-margin training produces far tighter identity clusters than dlib's metric loss: on IJB-C, r50 reaches ≈ 95 % TAR at FAR 1e-4, the regime a Windows-Hello-class false-accept target (1 : 100 000) lives in, where dlib's model was never characterised. It is what makes a look-alike land well outside the gate instead of near it.
+
+**One scale for every gate.** Both backends report the Euclidean distance between unit embeddings; ArcFace's is multiplied by `0.6 / ARCFACE_RADIUS` (= 0.545) so that every threshold in the config — `certainty`, `hard_cap`, `early_reject`, `learn_*` — keeps its dlib meaning. Whitening thresholds are learned per store and need no scaling. `Store.scale` carries the factor; `Store.distance()` / `min_distance()` apply it.
+
+**Alignment.** ArcFace expects the 112×112 five-point crop. YuNet's own five landmarks (image-left eye, image-right eye, nose, mouth corners — order verified on 35/35 live frames) feed `recognise.align()`; when a box has none (HOG/CNN, enrollment hints) the dlib 5-point predictor's eye centres + nose give a 3-point similarity. Measured on the reference IR camera (face ≈ 116 px): YuNet landmarks beat 68-landmark-derived points (p95 spread 0.57 vs 0.78 raw for r50) and flip-averaging gained < 0.02, so neither extra is used.
+
+**Measured so far (one subject, single frames, raw units).** dlib: median 0.10 / p95 0.29 from the mean; ArcFace r50: 0.36 / 0.57 (= 0.20 / 0.31 in dlib units); mbf: 0.39 / 0.66. Multi-frame fusion roughly halves these. The *impostor* side — the point of the exercise — needs a second person in `faceup lab`; until that calibrates `ARCFACE_RADIUS`, ArcFace is opt-in.
+
+**Install.** `sudo faceup recogniser install [mbf|r50]` downloads the pinned insightface release zip (sha256 of the zip and of the ONNX member both verified), writes `/etc/faceup/arcface.onnx`, and loads it once. The packs are licensed for non-commercial research use, so faceup fetches, never bundles, and says so. `recogniser use arcface` switches the config; `doctor` reports the active backend; `setup` offers it.
 
 ### 6.5 Decision rule
 ```
@@ -216,6 +243,8 @@ accept = recognised ∧ live
 - A **FAIL** vote blocks acceptance for that frame-set only; the window continues (a spoof detector can misfire on one frame). A window that ends with any FAIL logs `spoof:<voter>`.
 - ABSTAIN never counts against the user. This is how a still user, a dark room, or a missing optional model degrade gracefully.
 - `required_votes` is automatically capped at the number of *available* voters for the profile.
+
+**Early reject (roadmap R7).** Each frame also carries its own raw distance (`Obs.dist`). When `fusion_frames + 2` consecutive embeddings of the primary camera all sit above `recognition.early_reject` (0.65 by default, above dlib's 0.6 same-person radius; 0 disables), the window ends at once with `no-match` instead of running to `window_ms`: a stranger reaches the password prompt ≈ 1.5 s sooner. The user's own frames never all sit that far.
 
 ### 6.5a Lighting: what actually varies, and the whitened gate
 
@@ -251,10 +280,12 @@ embedding cloud extends**, and the principled tool is to learn that cloud:
 The only way to get *real* night-time samples from a daytime enrollment is use. After a
 confident accept — raw ≤ 0.30 (a stranger never gets near), at least one liveness PASS and
 no FAIL — the live fused embedding is stored as a **learned** model of its pose bin if it is
-novel (≥ 0.15 from every existing model there), at most 2 learned models per bin and
+novel (≥ 0.25 from every existing model there — 0.15 was below the frame-to-frame noise floor measured above and learned on nearly every accept; a store with 70 learned models on 168 attempts was the symptom), at most 2 learned models per bin and
 spectrum (oldest rotated out), originals never replaced; whitening is refitted. `faceup
 models` marks them, `faceup models --forget-learned` drops them. Over a few evenings the
-store thus acquires the user's actual dark-room appearance.
+store thus acquires the user's actual dark-room appearance. A learned model keeps the *per-frame* embeddings that were fused (not just their mean), so it feeds the whitening scatter — a single sample never could.
+
+**Bounded learning (2026-10-22).** Novelty is now measured against the *enrolled* models only — measuring against learned ones let each learned model justify the next, a chain that walked away from the enrolment. A learned model needs ≥ 2 fused frames, and on top of the 2-per-bin cap there is a total cap of learned models per camera (oldest removed first). Whitening refits move the threshold by at most ±20 % and never below the calibration session's floor (`store.fit_whitening` clamp), so a run of odd accepts cannot open the whitened path. Limit: this is still self-training on accepted attempts; a false accept would be learned, which is why the confidence bar (raw ≤ 0.30, a PASS, no FAIL) sits well inside the gate.
 
 ### 6.5c Hardware path (future): emitter-differential imaging
 
@@ -263,8 +294,25 @@ exactly, day and night produce the same IR image. Depends on the same toggle-spe
 measurement as the shadow test (§7.3, §15.1).
 
 ### 6.6 Result
-Exit 0 → PAM `sufficient` succeeds. Any other outcome → exit 1, one log line:
+Early reject uses the **median raw distance of the last max(6, fusion_frames + 2) frames** above `early_reject` (`_confident_reject`); the earlier all-frames rule never fired because one near frame vetoed it. Exit 0 → PAM `sufficient` succeeds. Any other outcome → exit 1, one log line:
 `2026-08-28T21:02:11 user=octave result=accept ir=0.31 rgb=0.36 votes=cross:PASS cnn:PASS shadow:ABSTAIN motion:PASS t=380ms`
+
+### 6.7 Threshold calibration (`faceup calibrate`, end of enrollment)
+
+No gate is a constant. `engine/calibration.py` derives the recognition thresholds from **this user's real distances on this machine** and keeps them current:
+
+- **Session.** Eight guided passes of ~3 s (screen, keyboard, lean back, lean in, tilt, left, right, change the light) while the lab evaluator measures every frame set exactly as the engine would: the fused live embedding's raw and whitened distance to the store, per spectrum, with the face light state. Then, per spectrum: `gate = clamp(p95(raw) + 0.05, 0.33, 0.45)`, `hard_cap = min(gate + 0.15, 0.55)`, `early_reject = max(0.65, hard_cap + 0.10)`, `learn_max_dist = gate − 0.10`, and the store's whitening threshold `= p95(whitened) × 1.15`. The session's fused embeddings enter the whitening scatter as real, varied samples (the leave-one-out threshold over correlated enrollment frames was 3–6× too tight, §0 of the roadmap). Evidence — counts, percentiles, light conditions seen per spectrum, prompts with a face — is stored in `calib.calibration`; `doctor` shows it and flags a gate edited by hand afterwards. A p95 above the cap is reported as "re-enroll", never as a looser gate. Enrollment ends with the session followed by a two-attempt self-check; `calibrate pose` keeps the old 3D-model rebuild.
+- **The window (`appui.CalibrateWindow`, default; `--text` for prompts).** Built like enrollment so it stays at camera rate: the UI-thread loop (`gui.calibration_session`) only reads frames, runs YuNet + 68 landmarks + pose (~13 ms/frame, measured) and draws; the dlib embeddings (~85 ms each, GIL-holding) run in the `_Sampler` PROCESS at most every `SAMPLE_EVERY_MS`, and distances are computed from the returned embeddings. An earlier version embedded inline on the UI thread and stuttered; moving it off-thread is what enrollment already did. The session turns the IR emitter on for its duration (a probe may have left it off) and restores it after. It opens on an **intro** screen that auto-starts ~2.5 s after it first sees your face (or Enter), shows a short "✓ Pass complete" beat between passes, and warns if no face appears. Same shell as enrollment: mirrored preview with the face outline on the left, one card on the right — PASS i OF n, the instruction, a **movement cue drawn on the camera view** (`Preview.set_cue`: big animated glyphs over your own face — a target for centre, bobbing chevrons for down/left/right, chevrons pointing in/out for closer/back, a rotation arc for tilt, a sun for light; the pass fills a ring, everything turns green when the pose is met) with only a short word of text, a progress bar, the live distances, a pill (Looking / Move as shown / Hold it… / Face too dark). Each pass is **verified from the pose estimate**: `calibration.Collector` counts only frame sets whose display-space yaw/pitch/roll — or face width relative to the "screen" pass — satisfy the pass's condition (`PROMPTS[*][3]`), completes after `NEED_FRAMES` = 20 of them or `PASS_TIMEOUT_S` = 15 s, and still measures every frame with a face (transitions are genuine data). Enter skips a pass, Esc cancels with nothing written. Display-space rule: `gui.to_display` sign applied once in `Collector.display_pose` (`sgn = −1` when mirrored); conditions are written for what the user sees. The summary card at the end shows per-camera counts, median/p95, the derived gate and whitening threshold, and the warnings.
+- **Rolling refresh.** Every confident accept (no FAIL vote) appends its raw and whitened distances and light state to a 60-entry ring in the store. Every 20 accepts the whitening threshold is recomputed from the ring, bounded to ±20 % per refresh and never below the session's floor. A condition the session never saw (night, new glasses) first passes through the whitened path or online learning, then moves the threshold — adaptation without a human retune. The raw gate stays in config and is never rewritten by the engine; `doctor` says when the ring disagrees with it (`calibrate refresh` re-derives from the ring).
+- **Guardrails.** `GATE_MAX = 0.45` is a hard ceiling (a look-alike's territory); `GATE_MIN = 0.33` a floor against a session that was too easy; the session aborts after two faceless prompts; nothing is written unless ≥ 8 measurements per spectrum exist.
+
+### 6.8 Security policy, identities, conditions
+
+**Policy (`engine/policy.py`).** Three presets resolved *at attempt time* from the measured gates (an unlock never rewrites the config): `convenience` (raw gate or whitened path, one PASS), `balanced` (default: the colour camera must agree whenever it sees the face well — `rgb_when_bright` — and two PASSes when two voters exist), `strict` (gate −0.05 capped at 0.35, RGB match mandatory, whitened path off, a shadow-test or anti-spoof PASS required, learning off). Presets only ever *tighten* the calibrated gate. `security.policy_<service>` overrides per PAM service (`sudo`, `polkit`, `login`, `unlock`; `off` disables). Text-console logins are off unless `behaviour.tty_login`. **Lockout**: `security.lockout_failures` liveness FAILs within `lockout_minutes` (spoof signals only — never "no face" or a plain mismatch) pause face unlock for that user for `lockout_minutes`, reason `lockout`; the password path is untouched by construction. The log carries `policy=` when not balanced.
+
+**Identities.** A store belongs to a Linux login; each model carries an `identity` ("" = the owner, else a name). `enroll --identity "Alice"` runs the fused window for another person; `Store.nearest()` returns the matched model so the accept logs `who=Alice`; online learning inherits the matched identity. `--fresh` scoped to the identity never deletes the others; `models --remove-identity` does. Any registered face unlocks the login — the security decision is the registration, made by root.
+
+**Conditions.** `enroll --add glasses` (headset, night…) runs `calibration.CONDITION_POSES` (centre, down, left, right) and adds models tagged `condition`, clearing only that identity's *that* condition's labels. Conditions and extra identities never re-derive the owner's gate; the owner's calibration stays the source of truth.
 
 ## 7. Liveness voters
 
@@ -287,6 +335,12 @@ Silent-Face-Anti-Spoofing (MiniFASNet v2, MIT) exported to ONNX, run with `cv2.d
 - `Δ = mean(on − off)` inside the face: must be large (the face is near the LEDs) — a distant screen barely changes.
 - **Gradient ratio**: on a real face the illumination change is strongest on the nose/brow and weakest under them (self-shadowing); on a flat print the change is spatially uniform. Metric: coefficient of variation of Δ over face regions; `≥ 0.25` → PASS, `≤ 0.10` → FAIL, else ABSTAIN.
 - Any toggling failure → ABSTAIN and the voter is marked unavailable for the session.
+
+**Implementation (2026-09-07, roadmap L1/L4).** `engine/emitter.py` drives the LEDs directly: it parses linux-enable-ir-emitter's files for the instruction marked `status: start` (unit, selector, bytes) and sends it with the UVC extension-unit ioctl (`UVCIOC_CTRL_QUERY`, ctypes, no dependency). "Off" is whatever the control read before we switched it on, else the device default (GET_DEF), else the minimum — if none differs from "on", the emitter is `unavailable` and the voter abstains. `faceup emitter toggle-bench` switches off/on three times, measures the frame-brightness step and the latency until the brightness follows, and writes `liveness.shadow_toggle_ms` (usable when ≤ 100 ms and the step is ≥ 12 levels). With `shadow_test = "auto"` the engine then runs the test **once per attempt after recognition**: emitter off → 2 settle frames → off frame, on → 2 frames → on frame (≈ 130 ms), `shadow.vote()` on the recognised box, LEDs left on. Any error → ABSTAIN; the LEDs are restored in `finally`.
+
+**Finding the control by measurement (`faceup emitter probe`).** linux-enable-ir-emitter's search assumes the LEDs are off until configured and asks the user to watch for a flash in a dark room. On modules whose LEDs are on by default (the reference laptop: the tool refuses with "already working") it stores nothing, so nothing can be toggled. The probe instead alternates every small extension-unit control between its minimum and its current value every four frames — faster than the firmware auto-exposure can follow — and watches the *face* brightness; the control whose minimum darkens the face by ≥ 12 levels is the LED. Reference module: unit 5 selector 2, range 0–100, default 25 = on, 0 = off, face 154 → 107 while the background moves 54 → 47; values above 25 change nothing. Result stored in config `[emitter]`, used by `Emitter` ahead of the tool's files; `toggle-bench` then measured 100–133 ms to full brightness (3–4 frames), and the shadow test settles ⌈latency/33 ms⌉+1 frames per state. In a lit room the LED adds only a few levels to the face, so the voter ABSTAINs honestly by day and decides in dim light — which is when it matters.
+
+**Earlier reading, corrected.** The handout said the emitter was "not configured" because the IR *frame* mean was dim (≈ 35). With a working emitter the room is black and only the face is lit — a dim frame mean is the signature of success. `doctor` now meters the detected face and reports "lit face on a dark background". **On the reference laptop the tool's search found no working instruction** (every entry is `idle`/`disable`) — `doctor` now says so instead of "a device is configured", and the toggle bench refuses until `emitter configure` succeeds. That single fact explains the dim IR frames noted since 2026-08-31.
 
 ### 7.4 Non-rigid motion (any profile) — reuses tracked landmarks, ~1 ms
 Over the window, take the 68-point landmarks of the first and last good frames (and mid-window pairs). Fit a homography `H` (RANSAC) to the point correspondences and measure the residual: a flat object's landmarks are explained by `H` almost exactly; a real head's are not (nose vs ears parallax, jaw/mouth deformation).
@@ -406,6 +460,16 @@ tracks (`<user>.tracks.npz`). Synthetic check (face with individual proportions,
 1 px landmark noise, 150 frames): fit residual 1.9 px, recovered poses within 2.8° rms for
 both yaw and pitch, pitch bias −1.1°.
 
+### 8.1.3 Fused setup (`faceup enroll`, default)
+
+Enrolment and threshold calibration in ONE guided window (`gui.guided_setup`), so setup is a single sweep instead of two commands. It reuses the calibration window's look: mirrored preview, a **target ring** the head is guided into, a **face marker** at the live angle, and an **arrow derived from marker → target** — so left/right is always right regardless of pose sign (the arrow points where the head must go). Poses cover the grid (`calibration.SETUP_POSES`: centre, up, down, left, right, closer, back, light); left targets negative display yaw (the user's left, matching §8.1's hint). Each pose captures embeddings in the `_Sampler` process; `calibration.build_from_captures` fuses the best ~2/3 per pose into the pose's model (the rest **held out**) and measures the held-out frames against the finished store — genuine fresh-frame distances, so `derive_from_holdout` sets the gate honestly in the same sweep (no self-match zeros, no transition inflation that capped the two-step gate). `--classic` keeps the old free-move map + a separate `calibrate`.
+
+**Frame selection and holdout (2026-10-22).** A frame counts for a pose only once the head is within `POSE_TOLERANCE_DEG` = 12° of its target (frames on the way there used to enrol transitions). Dark frames enrol nothing. Each camera is ranked by its own quality, not by the other's. A pose completes on **usable samples** — `NEED_SAMPLES` = 9 pose-true, lit embeddings (6 for the model, 3 held out), not camera frames, so a slow sampler cannot finish a pose with nothing in it; embeddings still in flight when a pose completes are kept. The holdout is the **last third in time** of each pose, not a random third: adjacent frames are near-duplicates, and a random split would measure the model against copies of itself. `calibration.usable_rows`/`select_rows` implement this; the light pass stays open 4 s so a light change can actually happen. Honest limit: the gate is measured on ~3 frames × 8 poses from one sitting; the rolling refresh (§6.7) is what makes it representative.
+
+**Window behaviour.** The window path asks nothing in the terminal; IR↔RGB alignment runs during the intro (while the user settles) instead of as a separate step; the done card lists the poses that were missed and closes itself; closing the window early keeps what was enrolled; an empty sweep is never saved. Launched with neither a terminal nor a display, `enroll` fails with a clear message instead of answering its own prompts.
+
+**Glasses in the same window.** The done card offers "I also wear glasses": a short sweep of `CONDITION_POSES` with the glasses on, models tagged `condition=glasses`. The calibrated gate is untouched — the extra models only widen what matches, they never loosen the threshold. `enroll --add glasses` remains the standalone path.
+
 ### 8.2 Interpolation between poses
 
 The store synthesises a **virtual model** for every pair of grid-adjacent filled cells: the
@@ -436,12 +500,48 @@ frame happens to be dark.
 
 ## 9. Security considerations
 
-- **PAM placement:** `auth sufficient pam_exec.so quiet stdout /usr/local/bin/faceup-auth` inserted *before* `pam_unix` in `common-auth` (or the distro equivalent), with the original file backed up. `pam_exec` runs the engine as root with `PAM_USER` set; the engine authenticates only that user.
+- **PAM placement:** `auth sufficient pam_exec.so quiet stdout seteuid /usr/local/bin/faceup-auth` inserted *before* `pam_unix` in `common-auth` (or the distro equivalent), with the original file backed up. `pam_exec` runs the engine as root with `PAM_USER` set; the engine authenticates only that user.
 - **Files:** models 0600 root, config 0644 root, engine 0755 root-owned, log 0640 root:adm. Snapshots off by default.
 - **Residual risk (documented):** two high-quality prints aligned for both lenses, plus a way to fake near-field shadowing, could defeat a profile-A setup. This is the same order of difficulty as attacking Windows Hello on the same hardware. faceup is convenience-grade with strong anti-casual-spoofing, not a hardware security module.
 - **Lockout:** none by default — the password is always available, so lockout only creates denial-of-service. Optional `lockout_failures` for users who want a cooling-off after N spoof detections.
 - **No timing side channels of note:** results are all-or-nothing and the password path is unchanged.
 - **Coexistence with Howdy:** `setup` offers to disable `pam_howdy` (two face steps in a row is pointless) and can *import* nothing — dlib embeddings from RGB frames don't match IR; re-enroll.
+
+### 9a. Session feedback (what the user sees)
+
+pam_exec runs the engine behind a password prompt, so without help an attempt is two silent
+seconds followed by a prompt. `feedback.py` gives every attempt a visible shape, chosen by the
+channel the caller offers — automatically, and never on the critical path (every write is
+wrapped; a feedback failure cannot fail authentication):
+
+| Caller | Channel | What appears |
+|---|---|---|
+| sudo, su, `faceup auth` in a shell | stderr is a terminal → an animated status line (`◐ Looking for your face… 0.8s`) redrawn in place, then `✔ Face recognised · IR 0.21 · cross ✓ · motion – · 0.9 s` in green or `✘ Face not recognised — enter your password` in yellow | |
+| GDM / GNOME lock screen, SDDM, KDE lock screen (kscreenlocker), GNOME and KDE polkit agents | the PAM line's `stdout` option: each line printed to stdout becomes a `PAM_TEXT_INFO` message, which the greeters render under the password field — the channel fprintd uses for "Swipe your finger" | "Looking for your face…", then at most one hint ("Face recognised — move your head a little" when only the motion voter is holding) and the result |
+| any desktop session (`behaviour.notify`, default `accept`) | a libnotify notification sent as the user on their own session bus, detached; **transient** (GNOME ignores the expiry time and would otherwise keep every attempt in the notification list) and **replacing** the previous one (id kept in `$XDG_RUNTIME_DIR/faceup-notify.id`), so attempts never pile up | "Unlocked with your face · sudo · IR 0.21 · cross ✓ · 0.9 s"; `all` also reports failures, `off` disables |
+
+Rules: a terminal on stderr wins over the PAM channel (sudo would otherwise print both);
+messages are few because GNOME Shell queues info messages and shows each for a minimum time;
+"looking…" is printed *before* cv2/dlib import so the greeter shows it during the ~0.7 s of
+loading; nothing is said for `ssh`, `no-models` and `store` (the user can do nothing about them
+at a prompt). The notifier is spawned with stdin/stdout/stderr on `/dev/null` — it must not
+inherit pam_exec's stdout pipe, or the greeter would wait for the notifier to exit.
+
+**Keyring (roadmap K0).** `pam_gnome_keyring`/`pam_kwallet5` unlock the login keyring with the password PAM received; a face accept carries none, so after a face *login* the keyring stays locked until first use (fingerprints have the same limit). Screen unlock, sudo and polkit run inside a session whose keyring is already open and are unaffected. `behaviour.skip_login = true` leaves the first login of a session to the password: `feedback.is_session_login()` recognises a greeter service (`gdm-password`, `sddm`, `lightdm`, `greetd`, `login`…) with no session bus for the user yet, and `auth` returns `login` (silent, logged). `doctor` explains this next to the PAM status.
+
+### 9b. Native PAM module and the keyring (roadmap K1)
+
+`data/pam_faceup.c` (built by `install.sh` when gcc is present, installed as `/usr/local/lib/security/pam_faceup.so`; pam_exec stays the fallback) does three things pam_exec cannot: it forwards the helper's stdout lines itself as `PAM_TEXT_INFO`, it runs the helper with both uids root (sudo's real uid is the caller), and on an accept it can hand PAM an authentication token. It is deliberately tiny (fork/exec, a pipe, `pam_set_item`), declares the five libpam entry points it uses instead of needing the -dev headers, and is fail-open by construction: anything but helper exit 0 is `PAM_AUTH_ERR`.
+
+**Stack placement.** `sufficient` would end the whole stack on success — including the caller's own lines after `@include common-auth`, which is exactly where `pam_gnome_keyring.so` sits in `gdm-password`. The module is therefore inserted like `pam_unix`: `auth [success=N default=ignore] pam_faceup.so`, N computed to land on the stack's `pam_permit` line (`pam.render_enabled(native=True)`), so the keyring module still runs and reads the token. `faceup pam enable` picks the native line when the module exists and upgrades a pam_exec line in place.
+
+**The credential.** `faceup keyring enable` asks for the login password, verifies it against `/etc/shadow` (crypt; yescrypt supported), and seals it with `systemd-creds`. **Key choice (`keyring.choose_key`)**: the **host key** by default when the root disk is encrypted — protected at rest by FDE and instant to decrypt; a firmware-TPM decrypt costs 2–4 s and would be felt as a freeze at every login. The **TPM2** (PCR 7, Secure Boot state) is used when there is no FDE, or forced with `--tpm` (stronger, at that latency cost). Host key without FDE is refused unless `--force-host-key`. File `/etc/faceup/keyring/<user>.cred`, 0600 root, credential name `faceup-keyring-<user>` so it cannot be replayed for another user. The module **starts the `systemd-creds decrypt` in the background before running the helper**, so the decrypt overlaps face recognition and even a slow TPM adds nothing to the wall-clock; it collects the plaintext only after the helper reports an accept (aborting the decrypt on a reject) and calls `pam_set_item(PAM_AUTHTOK)`; `pam_gnome_keyring`/`pam_kwallet5` then unlock exactly as after a typed password. `keyring disable` deletes the file; a firmware or Secure Boot change invalidates a TPM-bound credential (re-enable).
+
+**Timeout and portability (2026-10-22).** The module enforces its timeout (`timeout=`, default 8 s) with `poll()` on the helper's pipe and, on expiry, kills the helper's **process group** (the helper runs under `setsid`) — a hung helper that printed nothing used to block the login, since a blocking `read` never returned. `faceup-auth` adds a kernel `SIGALRM` backstop of its own, so even a pam_exec line cannot hang. Both fall through to the password. `engine/pam.py` targets `common-auth` (Debian family) or `system-auth` (Fedora/Arch), writes atomically through symlinks (the link stays a link), and **refuses stacks managed by `authselect`** with instructions instead of editing files the tool will overwrite (`PamError`). `install.sh` gives distro-aware package hints via `faceup/distro.py` (apt/dnf/pacman/zypper), checks every PAM file on uninstall, and relabels for SELinux. Other portability: libadwaita < 1.3 fallbacks, X11 under sudo (XAUTHORITY), any Wayland socket name, YuNet → HOG fallback when the ONNX cannot load, `FACEUP_DLIB_DIR` and more dlib model paths (`detect.dlib_dirs`), 16-bit IR frames (`_to_frame`), libcrypt on minimal/musl systems.
+
+**Repair.** On the reference machine an earlier experiment had commented out `auth optional pam_gnome_keyring.so` in `gdm-password` and the `password` line in `common-password` (tagged `# faceup-keyring`), which left even *password* logins with a locked keyring. `faceup keyring status` detects the tag, `keyring repair` (or `keyring enable`) restores the lines.
+
+**Test.** `tests/test_keyring.py` builds the module and runs a real `pam_authenticate` over a private config directory (`pam_start_confdir`, Linux-PAM ≥ 1.4) with a fake helper and a fake systemd-creds; a `pam_exec expose_authtok` line consumes the token the way the keyring module would. Reject → the stack's `pam_deny`, no token; accept without a credential → success, no token.
 
 ## 10. Degraded modes
 
@@ -451,6 +551,8 @@ frame happens to be dark.
 | Emitter dead, lit room | IR sees you by ambient light; works. Shadow test ABSTAINs (no toggle). |
 | RGB covered (privacy shutter) | cross-spectrum ABSTAINs; CNN ABSTAINs; liveness relies on shadow + motion. If both abstain → degraded rule accepts on recognition alone *only if* `require_liveness_when_available = false` (default true → password). |
 | Anti-spoof model missing | voter disabled; `doctor` says so. |
+| Dark room, Windows-Hello module | IR only (ALS < 5 lux) or watchdog drops RGB and reopens IR; logged `ir-only (dark)`. |
+| Helper hangs | module `poll()` timeout kills the group; `SIGALRM` in the helper → password. |
 | Camera busy (video call) | open fails → immediate password fallback, one log line. |
 | CPU under heavy load | hard timeout → password. Never an indefinite hang. |
 
@@ -469,6 +571,10 @@ sudo faceup lab [--text] [--subject NAME]   live evaluation: policies side by si
 sudo faceup-auth                   the engine (PAM calls this; also runnable by hand for debugging)
 ```
 
+## 11b. The application (`faceup app`)
+
+`app.py` is one GTK 4 / libadwaita window (Gtk.StackSidebar + Adw.PreferencesPage per page) that renders `health.collect()` — the structured checks behind `doctor`: sections of items with a level, a sentence and, when one command fixes it, that command — and runs every action as a **subprocess of the CLI** (`python -m faceup …`) with the output streamed into a console pane. Design decisions: the CLI is the single source of truth (no second implementation of enrol/keyring/PAM), long windows (enrol, calibrate, lab, emitter check) open as their own windows from the subprocess exactly as from a terminal, the keyring password comes from an Adw dialog and is passed on stdin (`keyring enable --password-stdin`), and without root the app is read-only and says so. The launcher entry runs `pkexec faceup app` through the polkit action `org.faceup.app` (`allow_gui`, `auth_admin_keep`). The roadmap's privilege split (U1: user-side app talking to a root D-Bus service) is the next step; the page model is built for it.
+
 ## 12. Performance budget (Ryzen 5 6600HS, distro dlib without AVX)
 
 | Stage | Cost | Notes |
@@ -481,6 +587,10 @@ sudo faceup-auth                   the engine (PAM calls this; also runnable by 
 | Anti-spoof CNN | 15 ms | |
 | Shadow test | 2 frames ≈ 100 ms | only if toggle is fast |
 | **Typical accept** | **250–450 ms** | |
+
+## 11a. `faceup log` (the attempts as data)
+
+`attempts.py` parses the log lines back into typed rows. `faceup log` prints coloured one-liners; `--summary` gives accept rate, median/p90 time (median time to accept flagged above 800 ms), IR distance median against the gate, failure reasons, per-service counts, learned-model count and liveness FAILs; `--follow` tails; `--json` for scripts. `doctor` shows the last-20 summary. Reading needs group `adm` or root.
 
 ## 12a. The lab (measurement instrument)
 
@@ -501,6 +611,14 @@ attempts should score 0 % with raw distances above the hard cap or liveness FAIL
 - **Voter tests:** synthetic homography motion vs jittered 3D motion for §7.4; synthetic uniform vs gradient Δ for §7.3.
 - **Integration:** `faceup doctor --spoof` interactive self-test; `faceup-auth` exit codes under missing camera / busy camera / no models / timeout.
 - **Bench:** `faceup bench` output committed for reference hardware in `docs/bench/`.
+
+### 13a. Replay harness (roadmap L7)
+
+`faceup lab --record-frames DIR` saves every frame set as PNGs plus `index.json`; `faceup auth --replay DIR` (or `FACEUP_REPLAY=DIR`) runs the unchanged `Engine.authenticate` on them through `replay.ReplayCapture`, which implements the `Capture` interface. A recorded night, glasses, phone replay or stranger is thereby a regression test that needs no hardware; `tests/test_replay.py` already runs the whole loop on synthetic dark and blank frames (reasons `dark`, `no-face`, `camera`). Recorded corpora are biometric data: keep them out of the repo, 0700, and delete them when the test is done.
+
+## 13b. Compatibility matrix (`tests/test_compat.py`)
+
+The pipeline on recorded frames with a synthetic face (the detector, landmarks and embedding patched to deterministic stand-ins, so faceup's own logic is what runs): profiles A/B/C, other frame sizes (1280×720 IR + 640×480 RGB, 320×240), a stranger (early reject), the shadow test without an emitter, learning + rolling calibration, and the lab evaluator (step, decide, record, summary) with one or two cameras. Portability decisions it protects: TOML parsing without `tomllib` (Python 3.10), `crypt` via libcrypt (3.13), dlib optional on the ArcFace + YuNet path, motion thresholds as fractions of the face width, windows falling back to text without libadwaita, the lab dir honouring `FACEUP_ETC`.
 
 ## 14. Roadmap after v0.2
 

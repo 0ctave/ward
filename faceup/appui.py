@@ -57,6 +57,11 @@ CSS = b"""
 .fu-banner.info { background-color: alpha(currentColor, 0.06); }
 .fu-progress trough { min-height: 4px; }
 .fu-progress progress { min-height: 4px; }
+.fu-cue-word { font-size: 22px; font-weight: 700; color: white; text-shadow: 0 1px 6px rgba(0,0,0,0.7);
+               background: alpha(black, 0.35); border-radius: 999px; padding: 6px 18px; }
+.fu-dot { font-size: 10px; opacity: 0.35; }
+.fu-dot-now { font-size: 13px; opacity: 1; }
+.fu-pill.accent { }
 """
 
 _css_loaded = False
@@ -111,6 +116,25 @@ class Preview(Gtk.Overlay):
         self.state = "track"       # track | sampled | dark | none
         self._sampled_t = 0.0
         self.accent = (0.21, 0.52, 0.89)
+        self.cue = None            # None | "centre" "down" "left" "right" "closer" "away" "tilt" "light"
+        self.cue_ok = False
+        self.cue_progress = 0.0
+        self.cue_pose = None       # (yaw, pitch) display space, live head angle
+        self.cue_target = None     # (yaw, pitch) display space, where to bring the head
+        self._anim = None
+
+    def set_cue(self, cue, ok: bool, progress: float, pose=None, target=None) -> None:
+        self.cue, self.cue_ok, self.cue_progress = cue, ok, progress
+        self.cue_pose, self.cue_target = pose, target
+        self.area.queue_draw()
+        if cue is not None and self._anim is None:
+            self._anim = GLib.timeout_add(40, lambda: (self.area.queue_draw(), True)[1])
+        elif cue is None and self._anim is not None:
+            GLib.source_remove(self._anim); self._anim = None
+
+    def stop(self) -> None:
+        if self._anim is not None:
+            GLib.source_remove(self._anim); self._anim = None
 
     def set_frame(self, frame: np.ndarray) -> None:
         self.frame_size = (frame.shape[1], frame.shape[0])
@@ -124,12 +148,96 @@ class Preview(Gtk.Overlay):
         if changed or state == "sampled":
             self.area.queue_draw()
 
-    def _draw(self, area, cr: cairo.Context, W: int, H: int) -> None:
+    def _draw(self, area, cr, W, H):
+        if self.cue is not None:
+            self._draw_cue(cr, W, H)          # the ring frames the face; no separate box (cleaner)
+        else:
+            self._draw_box(cr, W, H)
+
+    def _draw_cue(self, cr, W, H):
+        """Clean, face-anchored guidance: one ring frames the face (faint track, fills green with
+        progress), a single arrow just outside it points the way to move, green when the pose is
+        held. Lean in/out use converging/diverging chevrons on the ring; the light pass a small sun.
+        Only blue (guide) and green (progress/done); no box, no marker, minimal text."""
+        import math as _m
+        t = time.monotonic()
+        pulse = 0.5 + 0.5 * _m.sin(t * 3.0)
+        bob = _m.sin(t * 3.0) * 0.5 + 0.5
+        green = (0.24, 0.82, 0.48)
+        col = green if self.cue_ok else self.accent
+        if self.box is not None:
+            fw, fh = self.frame_size
+            sc = max(W / fw, H / fh); ox, oy = (W - fw * sc) / 2, (H - fh * sc) / 2
+            bx, by, bw, bh = self.box
+            cx, cy = ox + (bx + bw / 2) * sc, oy + (by + bh / 2) * sc
+            R = max(bw, bh) * sc / 2 * 1.12
+        else:
+            cx, cy, R = W / 2, H / 2, min(W, H) * 0.26
+        # the frame ring (faint track)
+        cr.set_source_rgba(*col, 0.32); cr.set_line_width(3.0)
+        cr.arc(cx, cy, R, 0, 2 * _m.pi); cr.stroke()
+
+        def arrow(ang):
+            s0 = R + R * 0.16
+            reach = R * (0.42 + 0.28 * bob)
+            sx, sy = cx + _m.cos(ang) * s0, cy + _m.sin(ang) * s0
+            ex, ey = cx + _m.cos(ang) * (s0 + reach), cy + _m.sin(ang) * (s0 + reach)
+            cr.set_source_rgba(*self.accent, 0.96); cr.set_line_width(7.0)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND); cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            cr.move_to(sx, sy); cr.line_to(ex, ey); cr.stroke()
+            hd = R * 0.24
+            for side in (-1, 1):
+                cr.move_to(ex, ey); cr.line_to(ex - _m.cos(ang + side * 0.5) * hd, ey - _m.sin(ang + side * 0.5) * hd)
+            cr.stroke()
+
+        if not self.cue_ok:
+            if self.cue in ("left", "right", "up", "down"):
+                arrow({"left": _m.pi, "right": 0.0, "up": -_m.pi / 2, "down": _m.pi / 2}[self.cue])
+            elif self.cue in ("closer", "away"):
+                # a dashed target ring the solid face-ring should grow into (lean in) or shrink to
+                # (lean back) — "make the circle match the dashed one", no ambiguous arrowheads
+                tr = R * 1.6 if self.cue == "closer" else R * 0.6
+                cr.save(); cr.set_dash([10, 9]); cr.set_source_rgba(*self.accent, 0.85); cr.set_line_width(3.0)
+                cr.arc(cx, cy, tr, 0, 2 * _m.pi); cr.stroke(); cr.restore()
+                for k in range(4):                          # four small marks showing which way to go
+                    a = k * _m.pi / 2 + _m.pi / 4
+                    d = 1 if self.cue == "closer" else -1
+                    r0 = R + d * R * (0.18 + 0.12 * bob)
+                    tip = cx + _m.cos(a) * (r0 + d * R * 0.2), cy + _m.sin(a) * (r0 + d * R * 0.2)
+                    cr.set_source_rgba(*self.accent, 0.9); cr.set_line_width(5.0); cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                    for side in (-1, 1):
+                        cr.move_to(*tip); cr.line_to(tip[0] - _m.cos(a + side * 0.6) * R * 0.16 * d, tip[1] - _m.sin(a + side * 0.6) * R * 0.16 * d)
+                    cr.stroke()
+            elif self.cue == "light":
+                lx, ly, lr = cx, cy - R - R * 0.5, R * 0.34
+                cr.set_source_rgba(*self.accent, 0.85 + 0.15 * pulse); cr.set_line_width(4.0)
+                cr.arc(lx, ly, lr, 0, 2 * _m.pi); cr.stroke()
+                for k in range(8):
+                    a = k * _m.pi / 4 + t * 0.6
+                    cr.move_to(lx + _m.cos(a) * lr * 1.6, ly + _m.sin(a) * lr * 1.6); cr.line_to(lx + _m.cos(a) * lr * 2.2, ly + _m.sin(a) * lr * 2.2)
+                cr.set_line_width(3.0); cr.stroke()
+        # progress fills the ring; a soft glow when held
+        if self.cue_progress > 0 or self.cue_ok:
+            cr.set_source_rgba(*green, 0.98); cr.set_line_width(5.0)
+            cr.arc(cx, cy, R, -_m.pi / 2, -_m.pi / 2 + 2 * _m.pi * (1.0 if self.cue_ok else min(1.0, self.cue_progress))); cr.stroke()
+        if self.cue_ok:
+            cr.set_source_rgba(*green, 0.16 + 0.16 * pulse); cr.set_line_width(9.0)
+            cr.arc(cx, cy, R, 0, 2 * _m.pi); cr.stroke()
+
+    @staticmethod
+    def _face_glyph(cr, x, y, r, col):
+        import math as _m
+        cr.set_source_rgba(*col, 0.96); cr.set_line_width(max(2.0, r * 0.14))
+        cr.arc(x, y, r, 0, 2 * _m.pi); cr.stroke()
+        cr.arc(x - r * 0.35, y - r * 0.12, max(1.2, r * 0.11), 0, 2 * _m.pi); cr.fill()
+        cr.arc(x + r * 0.35, y - r * 0.12, max(1.2, r * 0.11), 0, 2 * _m.pi); cr.fill()
+        cr.set_line_width(max(1.5, r * 0.1)); cr.arc(x, y + r * 0.25, r * 0.4, 0.15 * _m.pi, 0.85 * _m.pi); cr.stroke()
+
+    def _draw_box(self, cr: cairo.Context, W: int, H: int) -> None:
         if self.box is None:
             return
         fw, fh = self.frame_size
-        # picture uses COVER: uniform scale, centred crop
-        s = max(W / fw, H / fh)
+        s = max(W / fw, H / fh)                 # picture uses COVER: uniform scale, centred crop
         ox, oy = (W - fw * s) / 2, (H - fh * s) / 2
         x, y, w, h = self.box
         x, y, w, h = ox + x * s, oy + y * s, w * s, h * s
@@ -145,13 +253,10 @@ class Preview(Gtk.Overlay):
         cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
         cr.close_path()
         cr.set_source_rgba(*col, 0.35 + 0.4 * glow)
-        cr.set_line_width(6.0)
-        cr.stroke_preserve()
+        cr.set_line_width(6.0); cr.stroke_preserve()
         cr.set_source_rgba(*col, 0.95)
-        cr.set_line_width(1.6)
-        cr.stroke()
-        # corner ticks for a "viewfinder" feel
-        t = min(w, h) * 0.12
+        cr.set_line_width(1.6); cr.stroke()
+        t = min(w, h) * 0.12                    # corner ticks for a "viewfinder" feel
         cr.set_line_width(2.2)
         for (cx, cy, dx, dy) in ((x, y, 1, 1), (x + w, y, -1, 1), (x, y + h, 1, -1), (x + w, y + h, -1, -1)):
             cr.move_to(cx, cy + dy * t); cr.line_to(cx, cy); cr.line_to(cx + dx * t, cy)
@@ -347,11 +452,20 @@ class _Shell:
         self._pending = False
         self._loop = GLib.MainLoop()
         ctl = Gtk.EventControllerKey(); ctl.connect("key-pressed", self._on_key); self.win.add_controller(ctl)
-        self.win.connect("close-request", lambda *_: (self._keys.put(KEY_ESC), False)[1])
+        self._t_open = time.monotonic()
+        self.win.connect("close-request", self._on_close_request)
         self.backend = "?"
         self.name = "adwaita"
 
+    def _on_close_request(self, *_) -> bool:
+        if os.environ.get("FACEUP_DEBUG"):
+            print(f"[ui] close-request after {time.monotonic() - self._t_open:.2f}s", flush=True)
+        self._keys.put(KEY_ESC)
+        return False
+
     def _on_key(self, _c, keyval, _code, _state) -> bool:
+        if os.environ.get("FACEUP_DEBUG"):
+            print(f"[ui] key {Gdk.keyval_name(keyval)} after {time.monotonic() - self._t_open:.2f}s", flush=True)
         if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             self._keys.put(KEY_ENTER)
         elif keyval == Gdk.KEY_Escape:
@@ -383,6 +497,8 @@ class _Shell:
         except Exception:
             pass
 
+        self.error = None
+
         def worker():
             try:
                 while True:
@@ -392,6 +508,8 @@ class _Shell:
                     if not self._pending:
                         self._pending = True
                         GLib.idle_add(self._apply, snap, priority=GLib.PRIORITY_HIGH_IDLE)
+            except BaseException as e:                 # surfaced after the loop instead of a silent close
+                self.error = e
             finally:
                 GLib.idle_add(self._loop.quit)
 
@@ -402,6 +520,8 @@ class _Shell:
         ctx = GLib.MainContext.default()
         while ctx.pending():
             ctx.iteration(False)
+        if self.error is not None:
+            raise self.error
 
     def on_close(self) -> None:
         pass
@@ -751,6 +871,11 @@ class LabWindow(_Shell):
         self._last_sample = None
         self._summary_t = 0.0
         self._n_rec = 0
+        devs = getattr(self.ev, "devices", None) or {}
+        if devs and "rgb" not in devs:                     # single-camera machine: no RGB view to switch to
+            self.btn_rgb.set_sensitive(False); self.btn_rgb.set_tooltip_text("no RGB camera configured")
+        if devs and "ir" not in devs:
+            self.btn_ir.set_sensitive(False); self.btn_rgb.set_active(True); self.view = "rgb"
 
     # -- theme / helpers
     def _read_theme(self) -> None:
@@ -926,3 +1051,137 @@ class LabWindow(_Shell):
         finally:
             self._pending = False
         return False
+
+
+# -------------------------------------------------------------- calibration ----
+class CalibrateWindow(_Shell):
+    """Preview-centric calibration: the camera view fills the window with the movement cue drawn
+    ON it (a big arrow / target / rings, minimal text); a slim strip underneath holds the pass
+    dots, a short label, the progress and a status pill. Intro and a done summary bookend it."""
+
+    CUE_WORD = {"centre": "Look at the centre", "down": "Look down", "away": "Lean back",
+                "closer": "Lean in", "tilt": "Tilt your head", "left": "Turn left",
+                "right": "Turn right", "light": "Change the light"}
+
+    def __init__(self, title: str = "faceup", width: int = 640, height: int = 360, sgn: float = 1.0):
+        super().__init__(title, "Calibration", 760, 720)
+        pw = 700; ph = int(pw * height / width)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(outer, f"set_margin_{side}")(20)
+        self.root.append(outer)
+
+        self.preview = Preview(pw, ph)
+        self.preview.set_hexpand(True)
+        # the short instruction sits as a chip over the top of the preview
+        self.overlay = Gtk.Overlay(); self.overlay.set_child(self.preview)
+        self.word = Gtk.Label(); self.word.add_css_class("fu-cue-word")
+        self.word.set_halign(Gtk.Align.CENTER); self.word.set_valign(Gtk.Align.START); self.word.set_margin_top(14)
+        self.overlay.add_overlay(self.word)
+        self.pill_over = _pill(""); self.pill_over.set_halign(Gtk.Align.CENTER); self.pill_over.set_valign(Gtk.Align.END); self.pill_over.set_margin_bottom(14)
+        self.overlay.add_overlay(self.pill_over)
+        outer.append(self.overlay)
+
+        self.dots = Gtk.Box(spacing=9); self.dots.set_halign(Gtk.Align.CENTER)
+        self._dot_widgets = []
+        outer.append(self.dots)
+        self.bar = Gtk.ProgressBar(); self.bar.add_css_class("fu-progress")
+        outer.append(self.bar)
+        self.summary = Gtk.Label(xalign=0.5, wrap=True); self.summary.add_css_class("caption"); self.summary.set_visible(False)
+        outer.append(self.summary)
+
+        spacer = Gtk.Box(); spacer.set_vexpand(True); outer.append(spacer)
+        actions = Gtk.Box(spacing=10)
+        self.btn_cancel = Gtk.Button(label="Cancel"); self.btn_cancel.connect("clicked", lambda *_: self.push_key(KEY_ESC))
+        self.btn_next = Gtk.Button(label="Start"); self.btn_next.add_css_class("suggested-action"); self.btn_next.add_css_class("pill")
+        self.btn_next.connect("clicked", lambda *_: self.push_key(KEY_ENTER))
+        self.btn_cancel.set_hexpand(True); self.btn_next.set_hexpand(True)
+        self.btn_skip = Gtk.Button(label="Skip"); self.btn_skip.connect("clicked", lambda *_: self.push_key(KEY_ENTER)); self.btn_skip.set_visible(False)
+        # offered on the done card: a short second sweep with glasses on, in this same window
+        self.btn_glasses = Gtk.Button(label="I also wear glasses"); self.btn_glasses.add_css_class("pill")
+        self.btn_glasses.connect("clicked", lambda *_: self.push_key("glasses")); self.btn_glasses.set_visible(False)
+        self.btn_glasses.set_hexpand(True)
+        actions.append(self.btn_cancel); actions.append(self.btn_glasses); actions.append(self.btn_next)
+        outer.append(actions)
+        self._phase = None; self._pass_done_t = 0.0
+        self.win.connect("realize", lambda *_: setattr(self.preview, "accent", _rgba(self.win)))
+
+    def _ensure_dots(self, n: int) -> None:
+        if len(self._dot_widgets) == n:
+            return
+        for w in self._dot_widgets:
+            self.dots.remove(w)
+        self._dot_widgets = []
+        for _ in range(n):
+            d = Gtk.Label(label="\u2b24"); d.add_css_class("fu-dim"); d.add_css_class("fu-dot"); self.dots.append(d); self._dot_widgets.append(d)
+
+    def _set_phase(self, phase: str) -> None:
+        if phase == self._phase:
+            return
+        self._phase = phase
+        self.summary.set_visible(phase == "done")
+        self.bar.set_visible(False)              # the ring on the face carries progress; no duplicate bar
+        self.dots.set_visible(phase != "done")
+        self.btn_next.set_label({"intro": "Start", "measuring": "Skip pass", "done": "Finish"}.get(phase, "Start"))
+        (self.btn_next.add_css_class if phase != "measuring" else self.btn_next.remove_css_class)("suggested-action")
+
+    def _apply(self, s: dict) -> bool:
+        try:
+            if s.get("frame") is not None:
+                self.preview.set_frame(s["frame"])
+            ok = s.get("ok")
+            self.preview.set_box(s.get("box"), "dark" if s.get("light") == "dark" else ("sampled" if s.get("counted") else ("track" if s.get("box") else "none")))
+            phase = s.get("phase", "measuring")
+            self._set_phase(phase)
+            n, i = s.get("total", 0), s.get("index", 0)
+            self._ensure_dots(n)
+            for k, d in enumerate(self._dot_widgets):
+                d.remove_css_class("fu-dim"); d.remove_css_class("accent"); d.remove_css_class("fu-dot-now")
+                if k < i:
+                    d.add_css_class("accent")
+                elif k == i and phase == "measuring":
+                    d.add_css_class("fu-dot-now")
+                else:
+                    d.add_css_class("fu-dim")
+            self.btn_glasses.set_visible(phase == "done" and bool(s.get("offer_glasses")))
+            self.btn_cancel.set_visible(phase != "done")
+            if phase == "intro":
+                self.preview.set_cue(None, False, 0.0)
+                self.word.set_label(s.get("intro_text") or "Sit comfortably in your usual light")
+                if s.get("light") == "dark":
+                    _set_pill(self.pill_over, "Face too dark", "bad")
+                elif s.get("ready"):
+                    cd = s.get("countdown")
+                    _set_pill(self.pill_over, f"Starting in {cd:.0f}" if cd and cd > 0.5 else "Starting", "ok")
+                elif s.get("waited", 0) > 6:
+                    _set_pill(self.pill_over, "Sit in front of the camera", "warn")
+                else:
+                    _set_pill(self.pill_over, "Looking for you", "")
+                return False
+            if phase == "done":
+                self.preview.set_cue(None, False, 0.0)
+                self.word.set_label(s.get("headline", "Done"))
+                self.summary.set_label(s.get("summary", ""))
+                left = s.get("closing_in")
+                _set_pill(self.pill_over, f"Saved · closing in {left:.0f}" if left else "Saved", "ok")
+                return False
+            if s.get("pass_done"):
+                self._pass_done_t = time.monotonic()
+            cue = s.get("cue", "centre")
+            self.preview.set_cue(cue, bool(ok), s.get("progress", 0.0), s.get("pose"), s.get("target"))
+            self.word.set_label(s.get("text") or self.CUE_WORD.get(cue, ""))
+            # the arrow + ring convey the guidance; the pill appears only for a problem, else hides
+            if (time.monotonic() - self._pass_done_t) < 0.7:
+                self.pill_over.set_visible(True); _set_pill(self.pill_over, "\u2713", "ok")
+            elif s.get("light") == "dark":
+                self.pill_over.set_visible(True); _set_pill(self.pill_over, "Too dark \u2014 turn a light on", "bad")
+            elif s.get("box") is None:
+                self.pill_over.set_visible(True); _set_pill(self.pill_over, "Looking for you", "")
+            else:
+                self.pill_over.set_visible(False)
+        finally:
+            self._pending = False
+        return False
+
+    def on_close(self) -> None:
+        self.preview.stop()

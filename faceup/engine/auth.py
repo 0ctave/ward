@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import brightness, config, store as storemod
+from . import brightness, calibration, config, emitter as emitmod, policy as polmod, replay as replaymod, store as storemod
 from .capture import Capture, CaptureError, Frame
 from .detect import Box, Models, fuse
 from .liveness import Result, Vote, antispoof_cnn, cross_spectrum, motion, shadow
@@ -29,21 +29,26 @@ class Obs:
     embedding: np.ndarray | None
     dark: bool
     light: str = ""          # face light state: ok | dim | bright | dark | blown ("" = no face)
+    dist: float | None = None   # this frame's own raw distance to the nearest model (None = no embedding)
 
 
 @dataclass
 class Outcome:
     accepted: bool
-    reason: str                      # accept | no-face | dark | no-match | spoof:<voter> | camera | no-models | ssh | timeout | store
+    reason: str                      # accept | no-face | dark | no-match | liveness | spoof:<voter> | camera | no-models | ssh | timeout | store | login
     user: str = ""
     ir_dist: float | None = None
     rgb_dist: float | None = None
     wdist: dict = field(default_factory=dict)      # spectrum -> (whitened distance, threshold)
     learned: str = ""                             # label of a model added by online adaptation
+    identity: str = ""                            # named identity that matched ("" = the account owner)
+    condition: str = ""                           # condition of the matched model (glasses, headset…)
+    policy: str = ""                              # policy level this attempt ran under
     votes: list[Vote] = field(default_factory=list)
     elapsed_ms: int = 0
     frames: int = 0
     detail: str = ""
+    phases: dict = field(default_factory=dict)    # ms from the start: models, cams, face (roadmap F3)
 
     def logline(self) -> str:
         parts = [time.strftime("%Y-%m-%dT%H:%M:%S"), f"user={self.user}", f"result={'accept' if self.accepted else self.reason}"]
@@ -58,8 +63,16 @@ class Outcome:
             parts.append("votes=" + ",".join(str(v) for v in self.votes))
         if self.learned:
             parts.append(f"learned={self.learned}")
+        if self.identity:
+            parts.append(f"who={self.identity}")
+        if self.condition:
+            parts.append(f"cond={self.condition}")
+        if self.policy and self.policy != "balanced":
+            parts.append(f"policy={self.policy}")
         parts.append(f"frames={self.frames}")
         parts.append(f"t={self.elapsed_ms}ms")
+        if self.phases:
+            parts.append("ph=" + ",".join(f"{k}:{v}" for k, v in self.phases.items()))
         if self.detail:
             parts.append(f"detail={self.detail!r}")
         return " ".join(parts)
@@ -79,12 +92,24 @@ class Engine:
         rec = self.cfg["recognition"]
         from .. import hw
         hw.apply()
-        self.models = models or Models(rec["detector"], rec["max_height"], rec.get("accel", "cpu"))
+        self.models = models or Models(rec["detector"], rec["max_height"], rec.get("accel", "cpu"), rec.get("recogniser", "dlib"))
         self.verbose = verbose
+        self.events = None          # optional callable(kind, **kw): 'face' once, 'hold' (recognised, liveness pending)
+        # per-attempt state, also read by the lab which calls _liveness outside authenticate()
+        self._cap = None
+        self._emitter = None
+        self._shadow_done = None
 
     def say(self, msg: str) -> None:
         if self.verbose:
             print("  " + msg, flush=True)
+
+    def emit(self, kind: str, **kw) -> None:
+        if self.events is not None:
+            try:
+                self.events(kind, **kw)
+            except Exception:
+                pass                 # feedback must never break authentication
 
     # ------------------------------------------------------------------ run ----
     def authenticate(self, user: str) -> Outcome:
@@ -98,27 +123,76 @@ class Engine:
 
         if beh["abort_if_ssh"] and os.environ.get("SSH_CONNECTION"):
             return fail("ssh")
+        service = os.environ.get("PAM_SERVICE", "")
+        pol = polmod.effective(self.cfg, service)
+        self._policy = pol
+        if pol.get("off"):
+            return fail("policy", f"policy off for {service or 'this service'}")
+        if service == "login" and str(os.environ.get("PAM_TTY", "")).startswith("/dev/tty") and not beh.get("tty_login", False):
+            return fail("policy", "text console (behaviour.tty_login = false)")
+        locked, remaining = polmod.locked_out(self.cfg, config.LOG_PATH, user)
+        if locked:
+            return fail("lockout", f"{remaining}s left after repeated liveness failures")
+        # this attempt's knobs: the preset tightens the measured gates, never loosens them
+        rec = dict(rec); live = dict(live); beh = dict(beh)
+        rec["certainty"], rec["rgb_certainty"] = pol["certainty"], pol["rgb_certainty"]
+        rec["whitened"] = pol["whitened"]; rec["require_rgb_match"] = pol["require_rgb_match"]
+        live["required_votes"] = pol["required_votes"]; beh["learn"] = pol["learn"]
         try:
-            st = storemod.load(user)
-        except (storemod.StoreError, OSError, ValueError) as e:
+            st = storemod.load(user, self.models.recogniser_name, self.models.distance_scale)
+        except (storemod.StoreError, OSError, ValueError, FileNotFoundError) as e:
             return fail("store", str(e))
         if not st.models:
             return fail("no-models")
 
-        paths, notes = config.camera_paths(self.cfg)
-        for n in notes:
-            self.say(n)
-        devices = {s: paths[s] for s in ("ir", "rgb") if paths.get(s) and s in st.spectra()}
+        replay_dir = replaymod.replay_dir()
+        if replay_dir:                                   # roadmap L7: recorded frame sets instead of cameras
+            try:
+                rc = replaymod.ReplayCapture(replay_dir)
+            except CaptureError as e:
+                return fail("camera", str(e))
+            devices = {s: f"replay:{s}" for s in rc.spectra if s in st.spectra()}
+            notes = []
+        else:
+            paths, notes = config.camera_paths(self.cfg)
+            for n in notes:
+                self.say(n)
+            devices = {s: paths[s] for s in ("ir", "rgb") if paths.get(s) and s in st.spectra()}
         if not devices:
             return fail("camera", "; ".join(notes) or "no camera matches the enrolled spectra")
         primary = "ir" if "ir" in devices else "rgb"
-        # load the dlib models before the camera opens so their cost overlaps nothing user-visible
-        self.models.sp5; self.models.rec
+        self._shadow_done = None
+        self._emitter = None
+        # Turn the IR LEDs on FIRST, before the cameras open: they take ~400 ms to reach full
+        # brightness, and asserting them here lets that ramp overlap the camera open + model load
+        # instead of the first ~800 ms of recognition seeing a dark IR frame (the "LEDs light up
+        # slowly, then it starts recognising" delay). Done whenever an emitter is known, not only
+        # for the shadow test; a probe/previous run may have left the LEDs off.
+        if "ir" in devices and not replay_dir:
+            try:
+                em = emitmod.Emitter(devices["ir"])
+                if em.available:
+                    em.on(); self._emitter = em                # fails soft: .available False → shadow ABSTAINs
+            except Exception:
+                self._emitter = None
+        # open the cameras in the background while the dlib models load: the two costs overlap
+        # (roadmap R1; each V4L2 open blocks 150–500 ms in the driver and releases the GIL)
+        pending = replaymod.PendingReplay(replay_dir) if replay_dir else Capture.open_async(devices)
+        ph = self._phases = {}
+        self.models.preload()
+        ph["models"] = int((time.monotonic() - t0) * 1000)
         try:
-            cap = Capture(devices)
+            cap = pending.result(timeout=timing["hard_timeout_ms"] / 1000)
         except CaptureError as e:
+            if self._emitter is not None:
+                self._emitter.close(); self._emitter = None
             return fail("camera", str(e))
+        self._cap = cap
+        ph["cams"] = int((time.monotonic() - t0) * 1000)
+        self._notes_seen = 0
+        devices = self._follow_cameras(cap, devices)
 
+        camera_lost = ""
         obs: dict[str, list[Obs]] = {s: [] for s in devices}
         last_votes: list[Vote] = []
         saw_face = False
@@ -131,15 +205,27 @@ class Engine:
                 self.say(f"exposure settled in {self._settle(cap, primary, timing['settle_ms'])} ms")
             deadline = min(hard, time.monotonic() + timing["window_ms"] / 1000)   # window starts now
             while time.monotonic() < deadline:
-                fs = cap.read_set()
+                try:
+                    fs = cap.read_set()
+                except CaptureError as e:
+                    self.say(str(e)); camera_lost = str(e); break      # fail open: the password follows
+                if set(getattr(cap, "spectra", devices)) != set(devices):
+                    devices = self._follow_cameras(cap, devices)     # RGB dropped mid-attempt (dark room)
+                    primary = "ir" if "ir" in devices else primary
                 if not fs:
                     continue
                 n_sets += 1
                 for s, fr in fs.items():
                     prev = next((o.box for o in reversed(obs[s]) if o.box is not None), None)
-                    obs[s].append(self._observe(fr, s, cams, rec, prev, cap))
+                    o = self._observe(fr, s, cams, rec, prev, cap)
+                    if o.embedding is not None and st.by_spectrum(s):
+                        o.dist = st.min_distance(o.embedding, s)[0]     # per-frame raw distance (early reject, log)
+                    obs[s].append(o)
                 for s in fs:
                     if obs[s][-1].box is not None:
+                        if not saw_face:
+                            ph["face"] = int((time.monotonic() - t0) * 1000)
+                            self.emit("face")
                         saw_face = True
                     if not obs[s][-1].dark:
                         all_dark = False
@@ -158,25 +244,46 @@ class Engine:
 
                 decision = self._decide(st, obs, primary, devices, rec, live)
                 if decision is None:
+                    if self._confident_reject(obs[primary], rec):
+                        self.say("confident reject: ending the window early")
+                        break                                     # roadmap R7: the password prompt comes sooner
                     continue
                 accepted, votes, dists = decision
                 last_votes = votes
                 if accepted:
-                    out = Outcome(True, "accept", user, dists.get("ir"), dists.get("rgb"), getattr(self, "_last_w", {}), "", votes,
+                    who = getattr(self, "_last_who", None)
+                    out = Outcome(True, "accept", user, dists.get("ir"), dists.get("rgb"), getattr(self, "_last_w", {}), "",
+                                  who.identity if who else "", who.condition if who else "", pol["level"], votes,
                                   int((time.monotonic() - t0) * 1000), n_sets)
+                    out.detail = self._light_note(cap); out.phases = dict(ph)
                     out.learned = self._learn(st, obs, dists, votes, beh, rec)
+                    self._remember(st, obs, dists, votes)
                     log(out)
                     return out
+                # recognised but liveness is holding: tell the user what would help
+                still = any(v.result == Result.ABSTAIN and v.voter == motion.NAME and "still" in v.reason for v in votes)
+                self.emit("hold", still=still, votes=votes)
                 if time.monotonic() > hard:
                     break
         finally:
+            if self._emitter is not None:
+                self._emitter.on(); self._emitter.close(); self._emitter = None
             cap.close()
+            self._cap = None
 
         elapsed = int((time.monotonic() - t0) * 1000)
         dists = self._best_dists(st, obs, rec)
         fails = [v for v in last_votes if v.result == Result.FAIL]
+        # what each camera saw, for the log: "ir:face:dim rgb:dark" — the difference between
+        # "not recognised" and "recognised but the other camera was covered" must be visible
+        seen = " ".join(f"{s}:" + ("dark" if all(o.dark for o in lst) else f"face:{next((o.light for o in reversed(lst) if o.box), '')}" if any(o.box for o in lst) else "no-face")
+                        for s, lst in obs.items() if lst)
         if fails:
             reason, detail = f"spoof:{fails[0].voter}", fails[0].reason
+        elif last_votes and dists.get(primary) is not None:
+            # recognised at least once but liveness never reached the required PASSes
+            reason = "liveness"
+            detail = ", ".join(f"{v.voter} {v.result.value.lower()}: {v.reason}" for v in last_votes) + f" | {seen}"
         elif not saw_face:
             reason, detail = ("dark", "") if all_dark and n_sets else ("no-face", "")
         elif dists.get(primary) is None and any(d is not None for d in dists.values()):
@@ -184,14 +291,32 @@ class Engine:
             rng = f"{min(ir_means):.0f}..{max(ir_means):.0f}" if ir_means else "-"
             reason, detail = f"no-face:{primary}", f"{primary} faces {n_ir}/{len(obs.get(primary, []))}, ir brightness {rng}"
         elif any(d is not None for d in dists.values()):
-            reason, detail = "no-match", ""
+            reason, detail = "no-match", seen
         else:
             reason, detail = "no-face", ""
         if n_sets == 0:
             reason, detail = "camera", "no frames"
-        out = Outcome(False, reason, user, dists.get("ir"), dists.get("rgb"), getattr(self, "_last_w", {}), "", last_votes, elapsed, n_sets, detail)
+        if camera_lost:
+            reason, detail = "camera", camera_lost
+        note = self._light_note(cap)
+        detail = f"{note}; {detail}" if note and detail else (note or detail)
+        out = Outcome(False, reason, user, dists.get("ir"), dists.get("rgb"), getattr(self, "_last_w", {}), "", "", "",
+                      getattr(self, "_policy", {}).get("level", ""), last_votes, elapsed, n_sets, detail, dict(ph))
         log(out)
         return out
+
+    # ------------------------------------------------------- adaptation ----
+    def _remember(self, st, obs, dists, votes) -> None:
+        """Rolling calibration (calibration.py): a confident accept's distances go into the store's
+        ring; every REFRESH_EVERY accepts the whitening threshold follows the recent window."""
+        try:
+            if any(v.result == Result.FAIL for v in votes):
+                return
+            light = {s: next((o.light for o in reversed(lst) if o.box is not None), "") for s, lst in obs.items()}
+            calibration.record_accept(st, dists, getattr(self, "_last_w", {}), light)
+            st.save()
+        except Exception:
+            pass                                       # never on the critical path
 
     # ------------------------------------------------------------- learning ----
     def _learn(self, st, obs, dists, votes, beh, rec) -> str:
@@ -206,9 +331,16 @@ class Engine:
             return ""
         learned = []
         for sp, fused in getattr(self, "_last_fused", {}).items():
-            d = dists.get(sp)
-            if fused is None or d is None or d > beh.get("learn_max_dist", 0.30) or not st.by_spectrum(sp):
+            originals = [m for m in st.by_spectrum(sp) if not m.learned]
+            if fused is None or not originals:
                 continue
+            # measured against ENROLLED models only: learned models must never anchor further learning,
+            # or each one sits at the edge of the accept region and the next chains off it (review D1)
+            d = min(st.distance(m.embedding, fused) for m in originals)
+            if d > beh.get("learn_max_dist", 0.30):
+                continue
+            if len(getattr(self, "_last_samples", {}).get(sp, [])) < 2:
+                continue                                      # one frame is not evidence of a new condition
             # pose bin of the best-quality observation with a face
             best = max((o for o in obs.get(sp, []) if o.box is not None), key=lambda o: o.quality.score(), default=None)
             label = None
@@ -223,18 +355,26 @@ class Engine:
                 except Exception:
                     label = None
             label = label or "unknown"
-            same = [m for m in st.by_spectrum(sp) if m.label == label]
-            if same and min(float(np.linalg.norm(m.embedding - fused)) for m in same) < beh.get("learn_min_novelty", 0.15):
+            # novelty against EVERY model of the spectrum: a condition already covered by any bin
+            # (or a bin the pose estimator failed to name) is not new
+            if min(st.distance(m.embedding, fused) for m in st.by_spectrum(sp)) < beh.get("learn_min_novelty", 0.25):
                 continue                                      # nothing new about this condition
-            mine = [m for m in same if m.learned]
+            mine = [m for m in st.by_spectrum(sp) if m.label == label and m.learned]
             if len(mine) >= beh.get("learn_per_bin", 2):
                 st.models.remove(min(mine, key=lambda m: m.time))   # rotate the oldest learned one
-            st.add(label, sp, fused, 0.5, None, samples=[fused], learned=True)
+            allmine = [m for m in st.by_spectrum(sp) if m.learned]
+            if len(allmine) >= beh.get("learn_max_total", 12):
+                st.models.remove(min(allmine, key=lambda m: m.time))   # and a total cap per camera
+            # the per-frame embeddings (not just their mean) so the whitening scatter learns this condition
+            frames = [np.asarray(v) for v in getattr(self, "_last_samples", {}).get(sp, [])] or [fused]
+            who = st.nearest(fused, sp)[1]
+            st.add(label, sp, fused, 0.5, None, samples=frames, learned=True,
+                   identity=who.identity if who else "", condition=who.condition if who else "")
             learned.append(f"{sp}:{label}")
         if learned:
             try:
                 for sp in st.spectra():
-                    st.fit_whitening(sp)
+                    st.fit_whitening(sp, clamp=0.2)          # bounded drift; `calibrate refresh` re-derives it
                 st.save()
             except OSError:
                 pass
@@ -273,12 +413,29 @@ class Engine:
         emb = self.models.embed(rgb, box)
         return Obs(fr, q, box, emb, False, state)
 
-    def _fused(self, obs: list[Obs], n: int) -> np.ndarray | None:
+    def _fused(self, obs: list[Obs], n: int, samples: list | None = None) -> np.ndarray | None:
+        """Fusion of the n best-quality embeddings; `samples` (if given) receives them (roadmap L3)."""
         good = [o for o in obs if o.embedding is not None]
         if not good:
             return None
         good.sort(key=lambda o: o.quality.score(), reverse=True)
-        return fuse([o.embedding for o in good[:n]])
+        chosen = [o.embedding for o in good[:n]]
+        if samples is not None:
+            samples[:] = chosen
+        return fuse(chosen)
+
+    @staticmethod
+    def _confident_reject(obs: list[Obs], rec: dict) -> bool:
+        """True when enough frames of the primary camera agree that this is not the user (§6.5):
+        `early_reject` (0 = off) exceeded by the median raw distance of the last max(6, fusion_frames + 2)."""
+        thr = float(rec.get("early_reject", 0.0) or 0.0)
+        if thr <= 0:
+            return False
+        # the MEDIAN of the last n, not all of them: one lucky frame under the threshold kept the
+        # old rule from ever firing, so every stranger/no-match waited out the whole window (3.5 s)
+        good = [o.dist for o in obs if o.embedding is not None and getattr(o, "dist", None) is not None]
+        n = max(6, int(rec.get("fusion_frames", 4)) + 2)
+        return len(good) >= n and float(np.median(good[-n:])) > thr
 
     def _best_dists(self, st, obs, rec) -> dict[str, float | None]:
         out: dict[str, float | None] = {}
@@ -302,19 +459,39 @@ class Engine:
             return False, (wd, thr)
         return False, (None, None)
 
+    @staticmethod
+    def _light_note(cap) -> str:
+        """'ir-only (dark)' when the attempt ran on IR alone because of the room light — the
+        attempts view and `log --summary` can then tell night unlocks from day ones."""
+        return "ir-only (dark)" if any("IR only" in n for n in getattr(cap, "notes", [])) else ""
+
+    def _follow_cameras(self, cap, devices: dict) -> dict:
+        """The cameras actually streaming: Capture opens IR alone in a dark room and drops RGB
+        when it starves the IR stream (ambient.py). Liveness availability follows from this."""
+        for n in getattr(cap, "notes", [])[getattr(self, "_notes_seen", 0):]:
+            self.say(n)
+        self._notes_seen = len(getattr(cap, "notes", []))
+        spectra = getattr(cap, "spectra", None)
+        return devices if spectra is None else {s: p for s, p in devices.items() if s in spectra}
+
     def _decide(self, st, obs, primary, devices, rec, live):
         """None = not enough evidence yet; else (accepted, votes, dists)."""
         dists = self._best_dists(st, obs, rec)
         if dists.get(primary) is None:
             return None
-        fused = {s: self._fused(obs[s], rec["fusion_frames"]) for s in obs}
+        samples: dict[str, list] = {s: [] for s in obs}
+        fused = {s: self._fused(obs[s], rec["fusion_frames"], samples[s]) for s in obs}
+        self._last_samples = samples
+        self._last_who = st.nearest(fused[primary], primary)[1] if fused.get(primary) is not None else None
         rec_ir, w_ir = self._recognised(st, fused.get("ir"), "ir", dists.get("ir"), rec["certainty"], rec)
         rec_rgb, w_rgb = self._recognised(st, fused.get("rgb"), "rgb", dists.get("rgb"), rec["rgb_certainty"], rec)
         self._last_w = {sp: w for sp, w in (("ir", w_ir), ("rgb", w_rgb)) if w[0] is not None}
         self._last_fused = fused
         recognised = rec_ir if primary == "ir" else rec_rgb
-        if primary == "ir" and rec["require_rgb_match"]:
-            recognised = recognised and rec_rgb
+        pol = getattr(self, "_policy", {}) or {}
+        rgb_sees_well = any(o.light in ("ok", "bright") and o.embedding is not None for o in obs.get("rgb", [])[-3:])
+        if primary == "ir" and (rec["require_rgb_match"] or (pol.get("rgb_when_bright") and rgb_sees_well and "rgb" in devices)):
+            recognised = recognised and rec_rgb            # balanced/strict: the colour camera must agree when it can see you
         if not recognised:
             return None   # keep collecting; a later frame may match
 
@@ -323,8 +500,11 @@ class Engine:
         n_fail = sum(v.result == Result.FAIL for v in votes)
         enabled = len(votes)
         required = min(live["required_votes"], enabled)
+        strong = any(v.result == Result.PASS and v.voter in polmod.STRONG_VOTERS for v in votes)
         if n_fail:
             ok = False
+        elif pol.get("need_strong_voter") and not strong:
+            ok = False           # strict: a shadow-test or CNN PASS is mandatory
         elif enabled == 0:
             ok = True
         elif n_pass >= required:
@@ -337,6 +517,41 @@ class Engine:
                  + " votes=" + ",".join(f"{v}({v.reason})" for v in votes) + f" → {'ACCEPT' if ok else 'hold'}")
         return ok, votes, dists
 
+    @staticmethod
+    def _shadow_enabled(live: dict) -> bool:
+        """True when config says so, or "auto" and `emitter toggle-bench` proved the LEDs switch fast enough."""
+        v = live.get("shadow_test", "auto")
+        if v is True:
+            return True
+        if v == "auto":
+            ms = int(live.get("shadow_toggle_ms", -1))
+            return 0 <= ms <= emitmod.SHADOW_MAX_LATENCY_MS
+        return False
+
+    def _shadow_vote(self, li) -> Vote:
+        """Emitter-modulation shadow test, once per attempt (it costs ~4 IR frames)."""
+        if self._shadow_done is not None:
+            return self._shadow_done
+        from .liveness import ABSTAIN
+        em, cap = getattr(self, "_emitter", None), getattr(self, "_cap", None)
+        if em is None or not em.available or cap is None or li is None or li.box is None:
+            self._shadow_done = ABSTAIN(shadow.NAME, (em.error if em is not None and em.error else "toggle unavailable"))
+            return self._shadow_done
+        def read_gray():
+            fr = cap.read_one("ir", flush=1)
+            return None if fr is None else fr.gray
+        # settle frames follow the measured switch latency (reference module: ~3 frames to full brightness)
+        ms = int(self.cfg["liveness"].get("shadow_toggle_ms", 100) or 100)
+        settle = max(2, -(-ms // 33) + 1)
+        try:
+            off, on = emitmod.shadow_pair(em, read_gray, settle_frames=settle)
+        except Exception as e:
+            off = on = None
+            em.error = str(e)
+        self._shadow_done = shadow.vote(off, on, li.box)
+        self.say(f"shadow test: {self._shadow_done}({self._shadow_done.reason})")
+        return self._shadow_done
+
     def _liveness(self, st, obs, devices, live) -> list[Vote]:
         votes: list[Vote] = []
         ir = obs.get("ir", []); rgb = obs.get("rgb", [])
@@ -348,8 +563,8 @@ class Engine:
                 (li.frame.gray.shape[1], li.frame.gray.shape[0]), (lr.frame.gray.shape[1], lr.frame.gray.shape[0])))
         if live["antispoof_cnn"] and "rgb" in devices and antispoof_cnn.available():
             votes.append(antispoof_cnn.vote(lr.frame.rgb if lr else None, lr.box if lr else None, lr.dark if lr else True))
-        if live["shadow_test"] is True:   # "auto" stays off until toggle-bench proves the hardware (§15.1)
-            votes.append(shadow.vote(None, None, None))
+        if self._shadow_enabled(live) and "ir" in devices:
+            votes.append(self._shadow_vote(li))
         if live["motion"]:
             seq = [o for o in (ir if ir else rgb) if o.box is not None]
             if len(seq) >= 2:

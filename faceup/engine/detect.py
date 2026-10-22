@@ -7,24 +7,39 @@ unless a voter or the config asks for them.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 import cv2
-import dlib
 import numpy as np
 
-DLIB_DIRS = [Path("/usr/share/dlib"), Path("/usr/lib/howdy/dlib-data"), Path("/usr/share/dlib-models")]
+try:
+    import dlib                                   # distro package; optional with recogniser = arcface + YuNet
+except ImportError:                               # doctor still runs and explains; ArcFace + YuNet auth works
+    dlib = None
+
+# where distros / Howdy / hand installs put dlib's model files; FACEUP_DLIB_DIR is searched first
+DLIB_DIRS = [
+    Path("/usr/share/dlib"), Path("/usr/share/dlib-models"), Path("/usr/local/share/dlib"),
+    Path("/usr/lib/howdy/dlib-data"), Path("/usr/share/howdy/dlib-data"), Path("/usr/lib/security/howdy/dlib-data"),
+    Path("/usr/lib64/security/howdy/dlib-data")]
 YUNET_MODEL = Path(__file__).resolve().parents[1] / "models" / "face_detection_yunet_2022mar.onnx"
 YUNET_WIDTH = 480          # working width: 4 ms/frame on a laptop CPU, faces ≥ ~40 px
 YUNET_SCORE = 0.6          # small/far faces score lower; false positives are filtered by size and landmarks
 
 
+def dlib_dirs() -> list[Path]:
+    """FACEUP_DLIB_DIR first (read at call time), then the known locations."""
+    extra = os.environ.get("FACEUP_DLIB_DIR")
+    return ([Path(extra)] if extra else []) + DLIB_DIRS
+
+
 def model_path(name: str) -> Path:
-    for d in DLIB_DIRS:
+    for d in dlib_dirs():
         p = d / name
         if p.exists():
             return p
-    raise FileNotFoundError(f"dlib model {name} not found in {[str(d) for d in DLIB_DIRS]} (install dlib-models)")
+    raise FileNotFoundError(f"dlib model {name} not found in {[str(d) for d in dlib_dirs()]} (install dlib-models, or set FACEUP_DLIB_DIR)")
 
 
 @dataclass
@@ -34,12 +49,15 @@ class Box:
     w: int
     h: int
 
+    lm5: np.ndarray | None = None      # 5 landmarks from YuNet (image-left eye, image-right eye, nose, mouth corners), full-frame px
+
     @property
     def rect(self) -> dlib.rectangle:
         return dlib.rectangle(self.x, self.y, self.x + self.w, self.y + self.h)
 
     def scaled(self, s: float) -> "Box":
-        return Box(int(self.x * s), int(self.y * s), int(self.w * s), int(self.h * s))
+        return Box(int(self.x * s), int(self.y * s), int(self.w * s), int(self.h * s),
+                   None if self.lm5 is None else self.lm5 * s)
 
     def iou(self, o: "Box") -> float:
         ix = max(0, min(self.x + self.w, o.x + o.w) - max(self.x, o.x))
@@ -59,13 +77,17 @@ def yunet_available() -> bool:
 class Models:
     """detector: "yunet" (default: fast AND pose-robust), "hog" (frontal only), "cnn" (slow)."""
 
-    def __init__(self, detector: str = "yunet", max_height: int = 320, accel: str = "cpu"):
+    def __init__(self, detector: str = "yunet", max_height: int = 320, accel: str = "cpu", recogniser: str = "dlib"):
         if detector == "yunet" and not yunet_available():
             detector = "hog"
         self.detector_kind = detector
         self.max_height = max_height
         self.accel = accel
-        self._hog = dlib.get_frontal_face_detector()
+        self.recogniser_kind = recogniser if recogniser in ("dlib", "arcface") else "dlib"
+        self._arc = None
+        if dlib is None and self.recogniser_kind == "dlib":
+            raise RuntimeError("python3-dlib is not installed: install it, or `faceup recogniser install` + `recogniser use arcface`")
+        self._hog = dlib.get_frontal_face_detector() if dlib is not None else None
         self._yunet = None
         self._yunet_size = None
         self._misses = 0          # consecutive full-frame misses; the 2x-upsampled search runs on every 4th
@@ -75,29 +97,67 @@ class Models:
         self._rec = None
 
     # -- lazy loaders ---------------------------------------------------------
+    @staticmethod
+    def _need_dlib(what: str) -> None:
+        if dlib is None:
+            raise RuntimeError(f"{what} needs python3-dlib (not installed)")
+
     @property
     def cnn(self):
         if self._cnn is None:
+            self._need_dlib("the CNN detector")
             self._cnn = dlib.cnn_face_detection_model_v1(str(model_path("mmod_human_face_detector.dat")))
         return self._cnn
 
     @property
     def sp5(self):
         if self._sp5 is None:
+            self._need_dlib("the 5-point landmarks")
             self._sp5 = dlib.shape_predictor(str(model_path("shape_predictor_5_face_landmarks.dat")))
         return self._sp5
 
     @property
     def sp68(self):
         if self._sp68 is None:
+            self._need_dlib("the 68-point landmarks (pose)")
             self._sp68 = dlib.shape_predictor(str(model_path("shape_predictor_68_face_landmarks.dat")))
         return self._sp68
 
     @property
     def rec(self):
         if self._rec is None:
+            self._need_dlib("the dlib recogniser")
             self._rec = dlib.face_recognition_model_v1(str(model_path("dlib_face_recognition_resnet_model_v1.dat")))
         return self._rec
+
+    @property
+    def arc(self):
+        if self._arc is None:
+            from .. import hw
+            from . import recognise
+            self._arc = recognise.ArcFace(backend_target=hw.dnn_target(self.accel))
+        return self._arc
+
+    @property
+    def recogniser_name(self) -> str:
+        """Identity of the embedding space, recorded in the store (a change forces re-enrol)."""
+        from . import recognise
+        return self.arc.store_name if self.recogniser_kind == "arcface" else recognise.DLIB_NAME
+
+    @property
+    def distance_scale(self) -> float:
+        """Raw embedding distance × this = dlib-equivalent units used by every config gate."""
+        from . import recognise
+        return recognise.scale_factor(self.arc.radius) if self.recogniser_kind == "arcface" else 1.0
+
+    def preload(self) -> None:
+        """Load what `embed` will need, so the cost overlaps the camera open rather than the first face."""
+        if self.recogniser_kind == "arcface":
+            self.arc
+            if dlib is not None:
+                self.sp5                              # only the fallback alignment (HOG/CNN boxes) needs it
+        else:
+            self.sp5; self.rec
 
     def _yunet_detect(self, gray: np.ndarray) -> Box | None:
         H, W = gray.shape[:2]
@@ -116,16 +176,27 @@ class Models:
             return None
         f = max(faces, key=lambda r: r[2] * r[3])
         x, y, w, h = (float(v) / s for v in f[:4])
+        lm5 = (np.asarray(f[4:14], dtype=np.float32).reshape(5, 2) / s) if len(f) >= 14 else None
         # dlib's landmark predictors were trained on square HOG-style boxes (brow to chin);
         # YuNet's are taller (forehead to chin). Normalise so the 68/5-point fits stay accurate.
         side = max(w, h * 0.85)
         cx, cy = x + w / 2, y + h * 0.55
-        return Box(int(cx - side / 2), int(cy - side / 2), int(side), int(side))
+        return Box(int(cx - side / 2), int(cy - side / 2), int(side), int(side), lm5)
 
     # -- operations -------------------------------------------------------------
     def detect(self, gray: np.ndarray, near: Box | None = None) -> Box | None:
         if self.detector_kind == "yunet":
-            return self._yunet_detect(gray)
+            try:
+                return self._yunet_detect(gray)
+            except cv2.error as e:
+                # an OpenCV build whose DNN cannot run the bundled model (old 4.5.x, odd builds):
+                # use dlib's HOG for the rest of this process instead of failing every frame
+                if dlib is None:
+                    raise
+                self.detector_kind = "hog"
+                self.fallback_reason = f"YuNet unavailable ({str(e).splitlines()[0][:80]}); using HOG"
+        if dlib is None:
+            return None
         return self._detect_dlib(gray, near)
 
     def _detect_dlib(self, gray: np.ndarray, near: Box | None = None) -> Box | None:
@@ -170,9 +241,24 @@ class Models:
         return np.array([(p.x, p.y) for p in shape.parts()], dtype=np.float64)
 
     def embed(self, rgb: np.ndarray, box: Box) -> np.ndarray:
+        if self.recogniser_kind == "arcface":
+            return self.arc.embed(rgb, self.points5(rgb, box))
         shape = self.landmarks5(rgb, box)
         vec = np.asarray(self.rec.compute_face_descriptor(rgb, shape, 1), dtype=np.float64)
         return vec / (np.linalg.norm(vec) or 1.0)
+
+    def points5(self, rgb: np.ndarray, box: Box) -> np.ndarray:
+        """Alignment points in ArcFace template order. YuNet's own 5 landmarks when the box came
+        from it; otherwise eye centres + nose from dlib's 5-point predictor (3 points)."""
+        if box.lm5 is not None:
+            return box.lm5
+        self._need_dlib("alignment without YuNet landmarks")
+        shape = self.landmarks5(rgb, box)
+        p = np.array([(pt.x, pt.y) for pt in shape.parts()], dtype=np.float32)
+        # dlib order: outer left-eye corner, inner left-eye corner, outer right-eye corner, inner right-eye corner, nose bottom
+        eye_a, eye_b, nose = (p[0] + p[1]) / 2, (p[2] + p[3]) / 2, p[4]
+        left, right = (eye_a, eye_b) if eye_a[0] < eye_b[0] else (eye_b, eye_a)
+        return np.array([left, right, nose], dtype=np.float32)
 
 
 def fuse(embeddings: list[np.ndarray]) -> np.ndarray:

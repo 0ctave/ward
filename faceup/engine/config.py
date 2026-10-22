@@ -7,7 +7,10 @@ from __future__ import annotations
 import copy
 import os
 import re
-import tomllib
+try:
+    import tomllib                      # Python ≥ 3.11
+except ImportError:                     # 3.10: parse the flat subset faceup itself writes
+    tomllib = None
 from pathlib import Path
 from typing import Any
 
@@ -21,38 +24,78 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "cameras": {"ir": "", "rgb": "", "ir_dark_threshold": 25, "rgb_dark_threshold": 40, "force_roles": False},
     "recognition": {
         "certainty": 0.40, "rgb_certainty": 0.38, "fusion_frames": 4,
-        "require_rgb_match": False, "detector": "yunet", "max_height": 320, "accel": "cpu",
-        "whitened": True, "hard_cap": 0.55,
+        "require_rgb_match": False, "detector": "yunet", "max_height": 320, "accel": "cpu", "recogniser": "dlib",
+        "whitened": True, "hard_cap": 0.55, "early_reject": 0.65,
     },
     "liveness": {
         "required_votes": 2, "cross_spectrum": True, "antispoof_cnn": True,
-        "shadow_test": "auto", "motion": True, "motion_challenge": False,
+        "shadow_test": "auto", "shadow_toggle_ms": -1, "motion": True, "motion_challenge": False,
         "require_liveness_when_available": True,
     },
     "timing": {"settle_ms": 0, "window_ms": 2500, "hard_timeout_ms": 4000},
-    "behaviour": {"abort_if_ssh": True, "lockout_failures": 0, "log_images": False,
-                  "learn": True, "learn_max_dist": 0.30, "learn_min_novelty": 0.15, "learn_per_bin": 2},
+    "emitter": {"unit": 0, "selector": 0, "on": "", "off": ""},
+    "behaviour": {"abort_if_ssh": True, "tty_login": False,
+                  "learn": True, "learn_max_dist": 0.30, "learn_min_novelty": 0.25, "learn_per_bin": 2, "learn_max_total": 12,
+                  "notify": "accept", "skip_login": False},
+    "security": {"policy": "balanced", "policy_sudo": "", "policy_polkit": "", "policy_login": "", "policy_unlock": "",
+                 "lockout_failures": 3, "lockout_minutes": 15},
 }
 
 _COMMENTS = {
     "cameras": "Stable ids usb:<vid>:<pid>:<iface> (setup writes them), 'auto', or a /dev path; '' = none.",
-    "recognition": "certainty = max raw distance (dlib scale; 0.6 is 'same person'). whitened: also accept raw <= hard_cap when the distance whitened by the user's own variation is under its learned threshold.",
-    "liveness": "Voters return PASS/FAIL/ABSTAIN; `required_votes` PASSes and zero FAILs are needed.",
+    "recognition": "recogniser = dlib (distro) | arcface (`faceup recogniser install`; tighter identity clusters). certainty = max raw distance (dlib scale for every recogniser; 0.6 is 'same person'). whitened: also accept raw <= hard_cap when the distance whitened by the user's own variation is under its learned threshold. early_reject: end the window as soon as fusion_frames+2 frames all sit above this distance (0 = off).",
+    "liveness": "Voters return PASS/FAIL/ABSTAIN; `required_votes` PASSes and zero FAILs are needed. shadow_test = auto runs the emitter shadow test once `faceup emitter toggle-bench` has written shadow_toggle_ms (<= 150).",
     "timing": "Milliseconds. settle_ms > 0 waits for auto-exposure before the window (not needed with YuNet).",
-    "behaviour": "learn: after a confident accept (raw <= learn_max_dist, liveness passed) store the live embedding as a learned model when it is novel (>= learn_min_novelty from existing ones), max learn_per_bin per pose bin and spectrum.",
+    "security": "policy = convenience | balanced | strict (`faceup tune policy X`); policy_<service> overrides it for sudo / polkit / login / unlock ('' = default, 'off' = disabled there). lockout_failures liveness FAILs within lockout_minutes pause face unlock (password unaffected); 0 = never.",
+    "emitter": "The IR LED control found by `faceup emitter probe` (UVC extension unit; on/off = comma-separated bytes). unit 0 = use linux-enable-ir-emitter's instruction instead.",
+    "behaviour": "learn: after a confident accept (raw <= learn_max_dist, liveness passed) store the live embedding as a learned model when it is novel (>= learn_min_novelty from existing ones), max learn_per_bin per pose bin and learn_max_total per spectrum; distance is measured against enrolled models only, and a single-frame accept never learns. notify: desktop notification after an attempt — accept | all | off. skip_login: leave the FIRST login of a session to the password; tty_login: allow face unlock on text consoles (off by default).",
 }
 
 
 def load() -> dict[str, dict[str, Any]]:
     cfg = copy.deepcopy(DEFAULTS)
     try:
-        data = tomllib.loads(CONFIG_PATH.read_text())
+        text = CONFIG_PATH.read_text()
     except FileNotFoundError:
         return cfg
+    data = tomllib.loads(text) if tomllib is not None else parse_flat_toml(text)
     for section, values in data.items():
         if section in cfg and isinstance(values, dict):
             cfg[section].update(values)
     return cfg
+
+
+def parse_flat_toml(text: str) -> dict:
+    """The subset `dump()` writes: [section] headers and `key = value` with quoted strings,
+    ints, floats and true/false. Comments and blank lines are skipped. Enough for 3.10."""
+    out: dict[str, dict] = {}
+    section = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip(); out.setdefault(section, {}); continue
+        if section is None or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        if "#" in v and not v.startswith('"'):
+            v = v.split("#", 1)[0].strip()
+        if v.startswith('"') and v.endswith('"'):
+            val: Any = v[1:-1].replace('\\"', '"')
+        elif v in ("true", "false"):
+            val = v == "true"
+        else:
+            try:
+                val = int(v)
+            except ValueError:
+                try:
+                    val = float(v)
+                except ValueError:
+                    val = v
+        out[section][k] = val
+    return out
 
 
 def _fmt(v: Any) -> str:
