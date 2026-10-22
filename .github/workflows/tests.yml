@@ -1,0 +1,15 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  unittest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Distro dependencies (the only ones faceup uses — no pip)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-opencv python3-dlib dlib-models python3-numpy gcc libpam0g
+      - name: Unit tests (no camera, no root)
+        run: python3 -m unittest discover -s tests -v
+      - name: Native PAM module builds
+        run: gcc -O2 -Wall -Wextra -fPIC -shared -o /tmp/pam_faceup.so data/pam_faceup.c

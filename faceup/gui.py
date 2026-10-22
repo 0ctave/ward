@@ -5,6 +5,8 @@ cannot open a window (no DISPLAY, headless), callers fall back to the text flows
 """
 from __future__ import annotations
 
+import os
+
 import queue
 import time
 from dataclasses import dataclass, field
@@ -116,19 +118,21 @@ def _light_variants(rgb: np.ndarray) -> list[np.ndarray]:
     return [night, bright, side]
 
 
-def _sampler_main(req, res, detector_kind: str, max_height: int) -> None:
+def _sampler_main(req, res, detector_kind: str, max_height: int, recogniser: str = "dlib") -> None:
     """Worker PROCESS: dlib's Python bindings hold the GIL during detection and embedding, so a
     thread would freeze the preview (measured: 30 → 14 fps). A separate process keeps the UI
     at camera rate; frames travel over a pipe (~0.7 MB per sample, a few times per second)."""
-    models = Models("yunet", max_height)        # fast detector here: this must keep up with the preview
-    models.sp5; models.rec
+    models = Models("yunet", max_height, recogniser=recogniser)   # fast detector here: this must keep up with the preview
+    models.preload()
     while True:
         job = req.get()
         if job is None:
             break
         cell, pose, items = job
         results = []
-        for sp, rgb, hint, q, exact in items:
+        for item in items:
+            sp, rgb, hint, q, exact = item[:5]
+            want_aug = item[5] if len(item) > 5 else True
             gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
             box = Box(*hint)
             if not exact:
@@ -138,7 +142,7 @@ def _sampler_main(req, res, detector_kind: str, max_height: int) -> None:
             emb = models.embed(rgb, box)
             # lighting variants of the same frame: not match targets, but they teach the
             # whitening which embedding directions are "just lighting" for this user
-            aug = [models.embed(v, box) for v in _light_variants(rgb)]
+            aug = [models.embed(v, box) for v in _light_variants(rgb)] if want_aug else []
             results.append((sp, q, emb, aug))
         res.put((cell, pose, results))
 
@@ -151,7 +155,7 @@ class _Sampler:
         self.res = ctx.Queue()
         # never let interpreter exit block on a queue feeder thread if the worker died
         self.req.cancel_join_thread(); self.res.cancel_join_thread()
-        self.proc = ctx.Process(target=_sampler_main, args=(self.req, self.res, models.detector_kind, models.max_height), daemon=True)
+        self.proc = ctx.Process(target=_sampler_main, args=(self.req, self.res, models.detector_kind, models.max_height, models.recogniser_kind), daemon=True)
         self.proc.start()
         self.pending = 0
 
@@ -299,7 +303,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     cell still needs samples, at most every SAMPLE_EVERY_MS, and the second camera is read
     only at those moments.
     """
-    models.sp68; models.sp5; models.rec                     # preload: no stall on the first face
+    models.sp68; models.preload()                           # preload: no stall on the first face
     primary = "ir" if "ir" in cap.spectra else "rgb"
     cells: dict[tuple[int, int], Cell] = {}
     others = [sp for sp in cap.spectra if sp != primary]
@@ -465,7 +469,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
         if frac >= 0.97 and state["t_complete"] is None:
             state["t_complete"] = time.monotonic()
 
-        state["fps_n"] += 1
+        state["fps_n"] += 1; state["frames_total"] = state.get("frames_total", 0) + 1
         if time.monotonic() - state["fps_t"] >= 1.0:
             state["fps"] = state["fps_n"] / (time.monotonic() - state["fps_t"]); state["fps_n"] = 0; state["fps_t"] = time.monotonic()
         img = _canvas_of(fr)
@@ -613,3 +617,518 @@ def emitter_check(cap: Capture, models: Models, gui: bool = True, seconds: float
             if t_end is None or time.monotonic() > t_end:
                 break
     return result["state"], result["msg"]
+
+
+# ------------------------------------------------------------ calibration ----
+def _ir_device(cap) -> str:
+    from .engine import config as cfgmod
+    paths, _ = cfgmod.camera_paths(cfgmod.load())
+    return paths.get("ir", "")
+
+
+class _LiveSample:
+    """What calibration.Collector needs from one frame set (the lab's Sample shape, computed here)."""
+    __slots__ = ("raw", "wdist", "light", "label", "yaw", "pitch", "roll", "face_w")
+
+    def __init__(self):
+        self.raw, self.wdist, self.light, self.label = {}, {}, {}, {}
+        self.yaw = self.pitch = self.roll = None
+        self.face_w = None
+
+
+def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict, mirror: bool = True,
+                 need: int | None = None, timeout: float | None = None,
+                 identity: str = "", condition: str = "", poses=None):
+    """ONE guided window that both ENROLLS and CALIBRATES (roadmap: fused setup). For each pose the
+    window guides the head to a target (chase-the-dot with a derived arrow, so left/right is always
+    right in the mirrored preview), captures embeddings in the `_Sampler` PROCESS, and keeps them
+    smooth. Enrollment uses the best per-pose frames; the REMAINING (held-out) frames measure real
+    distances so the gate is honest in the same sweep. Returns a dict summary, or None if cancelled.
+    """
+    from .engine import calibration as cal
+    from .engine.detect import fuse
+    from collections import defaultdict, deque
+    sgn = -1.0 if mirror else 1.0
+    poses = list(poses) if poses else cal.SETUP_POSES
+    primary = "ir" if "ir" in cap.spectra else "rgb"
+    others = [sp for sp in cap.spectra if sp != primary]
+    models.sp68
+    em = None
+    if "ir" in cap.spectra:
+        try:
+            from .engine import emitter as emitmod, config as cfgmod
+            ins = emitmod.instructions_for(cfgmod.load())
+            if ins:
+                em = emitmod.Emitter(_ir_device(cap), ins)
+                if em.available:
+                    em.on()
+        except Exception:
+            em = None
+    sampler = _Sampler(models)
+    probe = cap.read_one(primary, flush=0)
+    ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
+    title = "faceup setup" + (f" · {identity}" if identity else "") + (f" · {condition}" if condition else "")
+    try:
+        screen = disp.open_display(title, pw, ph, kind="calibrate", sgn=1.0)
+    except disp.DisplayUnavailable as e:
+        sampler.close()
+        if em is not None:
+            em.close()
+        raise GuiUnavailable(str(e))
+    if not getattr(screen, "snapshot", False):       # canvas fallback (no libadwaita): this window needs snapshots
+        sampler.close()
+        if em is not None:
+            em.close()
+        raise GuiUnavailable("the setup window needs GTK 4 + libadwaita (python3-gi, gir1.2-adw-1); use --guided for the text flow")
+    shape3d = np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None
+    neutral = posemod.Neutral(st.calib["neutral_ratios"]) if st.calib.get("neutral_ratios") else None
+    offset = tuple(st.calib.get("pose_offset") or (0.0, 0.0))
+
+    # per pose: all captured (quality, emb, aug) per spectrum, and the baseline face width
+    caps: dict = {i: defaultdict(list) for i in range(len(poses))}
+    need_align = len(cap.spectra) == 2 and not condition and not st.calib.get("s")
+    align_pairs: list = []
+    widths: list = []
+    st_data = {"phase": "intro", "cancel": False, "done": None, "i": 0, "hits": 0, "started": None,
+               "last_sample_t": 0.0, "lmfilter": posemod.LandmarkFilter(), "filter": posemod.PoseFilter(),
+               "prev_box": None, "fps_t": time.monotonic(), "fps_n": 0, "fps": 0.0, "emit_t": 0.0,
+               "counted_t": 0.0, "ready_since": None, "intro_t0": None}
+    NEEDN = need or cal.NEED_FRAMES
+    NEED_S = min(cal.NEED_SAMPLES, NEEDN)               # tests pass a small `need` to finish quickly
+    TIMEOUT = timeout or cal.PASS_TIMEOUT_S
+
+    def satisfied(pose_disp, cue, face_w):
+        if cue == "light":
+            return True
+        if cue == "closer":
+            return face_w is not None and widths and face_w >= float(np.median(widths)) * 1.12
+        if cue == "away":
+            return face_w is not None and widths and face_w <= float(np.median(widths)) * 0.9
+        if pose_disp is None:
+            return None
+        y, p = pose_disp[0], pose_disp[1]
+        tgt = poses[st_data["i"]][3]
+        return abs(y - tgt[0]) <= cal.POSE_TOLERANCE_DEG and abs(p - tgt[1]) <= cal.POSE_TOLERANCE_DEG
+
+    def advance():
+        if st_data["i"] == 0 and widths:
+            pass
+        st_data["i"] += 1; st_data["hits"] = 0; st_data["started"] = time.monotonic()
+
+    def step():
+        for k in screen.keys():
+            if k == KEY_GLASSES and st_data["phase"] == "done" and st_data.get("offer_glasses"):
+                start_condition("glasses"); continue
+            if k == disp.KEY_ESC:
+                if st_data["phase"] == "done":
+                    return None                              # closing the summary keeps the finished enrolment
+                st_data["cancel"] = True
+            elif k == disp.KEY_ENTER:
+                if st_data["phase"] == "intro":
+                    st_data["phase"] = "run"; st_data["started"] = time.monotonic()
+                elif st_data["phase"] == "done":
+                    return None
+                elif st_data["phase"] == "run":
+                    advance()
+                    if st_data["i"] >= len(poses):
+                        finish()
+        if st_data["cancel"]:
+            return None
+        now = time.monotonic()
+        fr = cap.read_one(primary, flush=0)
+        if fr is None:
+            return {"phase": st_data["phase"], "index": st_data["i"], "total": len(poses)}
+        st_data["fps_n"] += 1
+        if now - st_data["fps_t"] >= 1.0:
+            st_data["fps"] = st_data["fps_n"] / (now - st_data["fps_t"]); st_data["fps_n"], st_data["fps_t"] = 0, now
+        if em is not None and em.available and primary == "ir" and (now - st_data["emit_t"]) > 0.8:
+            em.on(); st_data["emit_t"] = now
+        h, w = fr.gray.shape[:2]
+        q = measure(fr.gray, models.max_height)
+        gray_n = brightness.normalise(fr.gray, q.mean)
+        box = None if (q.sharpness < 5.0 and q.mean < cams[f"{primary}_dark_threshold"]) else models.detect(gray_n, st_data["prev_box"])
+        st_data["prev_box"] = box
+        light = cap.meter(primary, fr.gray, box) if box is not None else None
+        light_state = light.state(primary) if light else ""
+        img = fr.rgb[:, ::-1].copy() if mirror else fr.rgb
+        b = ((w - box.x - box.w) if mirror else box.x, box.y, box.w, box.h) if box is not None else None
+        base = {"frame": img, "box": b, "light": light_state, "fps": st_data["fps"]}
+
+        if st_data["phase"] == "intro":
+            ready = box is not None and light_state != "dark"
+            intro_wait = 6.0 if st_data.get("main") else 2.5     # time to put the glasses on before it starts
+            st_data["intro_t0"] = st_data["intro_t0"] or now
+            # IR↔RGB alignment while the user settles in (was a separate terminal step before the window)
+            if ready and need_align and not st_data.get("main") and primary == "ir" and len(align_pairs) < 10:
+                fo = cap.read_one("rgb", flush=0)
+                br = models.detect(fo.gray) if fo is not None else None
+                if br is not None:
+                    from .engine.enroll import pair_offset
+                    align_pairs.append(pair_offset(box, br, fr.gray.shape, fo.gray.shape))
+            if ready:
+                st_data["ready_since"] = st_data["ready_since"] or now
+                if now - st_data["ready_since"] >= intro_wait:
+                    st_data["phase"] = "run"; st_data["started"] = now
+            else:
+                st_data["ready_since"] = None
+            base.update({"phase": "intro", "index": 0, "total": len(poses), "ready": ready,
+                         "intro_text": CONDITION_INTRO.get(condition, "") if st_data.get("main") else "",
+                         "waited": now - st_data["intro_t0"],
+                         "countdown": max(0.0, intro_wait - (now - st_data["ready_since"])) if st_data["ready_since"] else None})
+            return base
+        if st_data["phase"] == "done":
+            left = (DONE_AUTOCLOSE_S * (2 if st_data.get("offer_glasses") else 1)) - (now - st_data["done_t"])
+            if left <= 0:
+                return None                                  # auto-finish: the summary is printed in the terminal too
+            base.update(st_data["done"]); base["closing_in"] = left; return base
+
+        # pose (smoothed) at camera rate
+        pose_disp = None; face_w = None
+        if box is not None and box.w >= MIN_ENROLL_FACE_PX and light_state != "dark":
+            face_w = int(box.w)
+            sbox = st_data["lmfilter"].smooth_box(box, now)
+            lm68 = st_data["lmfilter"](models.landmarks68(gray_n, sbox), now)
+            raw = posemod.estimate(lm68, w, h, shape3d=shape3d, neutral=neutral)
+            if raw is not None:
+                filt = st_data["filter"](raw, now)
+                if shape3d is not None:
+                    filt = posemod.Pose(filt.yaw - offset[0], filt.pitch - offset[1], filt.roll)
+                pose_disp = (sgn * filt.yaw, filt.pitch)
+            if st_data["i"] == 0 and not st_data.get("main"):
+                widths.append(face_w)
+            # capture embeddings for this pose in the worker process
+            if (now - st_data["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy and sampler.alive:
+                items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True, True)]
+                lights = {primary: light_state}
+                for sp in others:
+                    fo = cap.read_one(sp, flush=0)
+                    if fo is not None:
+                        qo = measure(fo.gray, models.max_height)   # rank each camera by ITS OWN quality
+                        lights[sp] = "dark" if qo.mean < cams[f"{sp}_dark_threshold"] else ""
+                        # lighting variants only for the primary: 4 embeddings per camera per sample
+                        # halved the pass's sample rate, and whitening also learns from real samples
+                        items.append((sp, fo.rgb, (box.x, box.y, box.w, box.h), qo.score(), False, False))
+                # the pose and light travel WITH the sample: tagged when it was taken, not when it drains
+                if sampler.submit(st_data["i"], (pose_disp, lights), items):
+                    st_data["last_sample_t"] = now
+        for pose_i, tag, results in sampler.drain():
+            pose_at, lights = tag
+            for item in results:
+                sp, qq, emb = item[0], item[1], item[2]
+                aug = item[3] if len(item) > 3 else []
+                caps[pose_i][sp].append((qq, emb, aug, lights.get(sp, ""), pose_at))
+        label, cue, text, target = poses[st_data["i"]]
+        ok = satisfied(pose_disp, cue, face_w)
+        if st_data["started"] is None:
+            st_data["started"] = now
+        if ok:
+            st_data["hits"] += 1; st_data["counted_t"] = now
+        elapsed = now - st_data["started"]
+        # a pass is done when it has enough USABLE embeddings (pose-true, lit), not camera frames:
+        # the sampler yields one every ~0.3–0.7 s, so 20 on-target frames (~0.7 s) left most
+        # directional poses with < 3 samples once transition frames stopped counting
+        got = len(cal.usable_rows(caps[st_data["i"]].get(primary, []), target, cue))
+        if cue == "light":                                # time to actually change the light, then samples
+            progress = min(1.0, elapsed / cal.LIGHT_PASS_MIN_S, got / NEED_S)
+            done = elapsed >= cal.LIGHT_PASS_MIN_S and got >= NEED_S
+        else:
+            progress = min(1.0, st_data["hits"] / NEEDN, got / NEED_S)
+            done = st_data["hits"] >= NEEDN and got >= NEED_S
+        base.update({"phase": "run", "index": st_data["i"], "total": len(poses), "key": cue, "text": text,
+                     "cue": cue, "pose": pose_disp, "target": _target_display(target, sgn), "progress": progress,
+                     "ok": ok, "hits": st_data["hits"], "need": NEEDN, "elapsed": elapsed,
+                     "counted": (now - st_data["counted_t"]) < 0.25})
+        if done or elapsed >= TIMEOUT:
+            base["pass_done"] = True
+            advance()
+            if st_data["i"] >= len(poses):
+                finish()
+                base.update(st_data["done"])
+        return base
+
+    def start_condition(name: str) -> None:
+        """Second sweep in the SAME window (review C1): the user puts their glasses on and does the
+        short condition poses; models carry `condition`, the owner's measured gate is untouched."""
+        nonlocal poses, caps, condition, sampler
+        st_data["main"] = {"done": st_data["done"], "result": st_data.get("result"), "added": st_data.get("added", 0)}
+        condition, poses = name, list(cal.CONDITION_POSES)
+        caps = {i: defaultdict(list) for i in range(len(poses))}
+        sampler = _Sampler(models)
+        st_data.update({"phase": "intro", "i": 0, "hits": 0, "started": None, "ready_since": None,
+                        "intro_t0": None, "done": None, "offer_glasses": False, "prev_box": None,
+                        "lmfilter": posemod.LandmarkFilter(), "filter": posemod.PoseFilter()})
+
+    def finish():
+        from .engine import calibration as cal
+        for pose_i, tag, results in sampler.close():    # samples still in flight belong to the last pass
+            pose_at, lights = tag
+            for item in results:
+                caps[pose_i][item[0]].append((item[1], item[2], item[3] if len(item) > 3 else [], lights.get(item[0], ""), pose_at))
+        if align_pairs and not st_data.get("main"):
+            from .engine.enroll import summarise_pairs
+            st.calib.update(summarise_pairs(align_pairs))
+        added, dist_by, _extra = cal.build_from_captures(st, caps, poses, SAMPLES_PER_CELL, fuse,
+                                                         identity=identity, condition=condition)
+        missed = [poses[i][2] for i in range(len(poses))
+                  if cal.select_rows(caps[i].get(primary, []), poses[i][3], poses[i][1], SAMPLES_PER_CELL) is None]
+        main = st_data.get("main")
+        if main is not None:                                 # the condition sweep: the main result stands
+            st_data.update({"result": main["result"], "added": main["added"] + added, "done_t": time.monotonic(), "phase": "done"})
+            extra = f"With {condition}: {added} models" + (f" (no model for: {', '.join(missed)})" if missed else "") + "."
+            st_data["done"] = dict(main["done"], summary=main["done"]["summary"] + "\n" + extra, offer_glasses=False,
+                                   headline=f"Enrolled {main['added'] + added} models · {condition} included")
+            return
+        res = cal.derive_from_holdout(dist_by)
+        st_data["result"] = res
+        st_data["added"] = added
+        st_data["done_t"] = time.monotonic()
+        st_data["done"] = {"phase": "done", "index": len(poses), "total": len(poses),
+                           "headline": f"Enrolled {added} models · gate set from your real distances" if res.ok() else f"Enrolled {added} models",
+                           "summary": _setup_summary(res, added, missed, ir="ir" in cap.spectra, condition=condition)}
+        st_data["phase"] = "done"
+        st_data["offer_glasses"] = not condition and added > 0
+        st_data["done"]["offer_glasses"] = st_data["offer_glasses"]
+
+    try:
+        screen.run(step)
+    finally:
+        sampler.close()
+        if em is not None:
+            try:
+                em.on(); em.close()
+            except Exception:
+                pass
+    if st_data["cancel"] and st_data["phase"] != "done":
+        main = st_data.get("main")
+        if main is None:
+            return None
+        # cancelled during the optional glasses sweep: the finished main enrolment still stands
+        return {"result": main["result"], "added": main["added"], "extra_saved": True}
+    return {"result": st_data.get("result"), "added": st_data.get("added", 0), "extra_saved": True}
+
+
+def _target_display(target, sgn):
+    return (target[0], target[1])   # SETUP_POSES targets are already in display space
+
+
+DONE_AUTOCLOSE_S = 12.0
+KEY_GLASSES = "glasses"                # the done card's "I wear glasses" button
+CONDITION_INTRO = {"glasses": "Put your glasses on", "headset": "Put your headset on"}
+
+
+def _setup_summary(res, added, missed=(), ir: bool = False, condition: str = ""):
+    lines = [f"Enrolled {added} pose models" + (f" for the condition '{condition}'." if condition else ".")]
+    if missed:
+        lines.append("No model for: " + ", ".join(missed) + " — re-run later to add them (the timeout moved on).")
+    for sp in sorted(res.gate):
+        lines.append(f"{sp.upper()}  {res.n[sp]} checks · median {res.p50[sp]:.2f} · p95 {res.p95[sp]:.2f} → gate {res.gate[sp]}"
+                     + (f" · whitening {res.w_threshold[sp]}" if sp in res.w_threshold else ""))
+    lines += [f"⚠ {w}" for w in res.warnings]
+    if ir and not condition:
+        lines.append("Works in the dark too: at night the camera's own infrared light shows the same face.")
+    return "\n".join(lines)
+
+
+def calibration_session(st, cap: Capture, models: Models, cams: dict, rec: dict, mirror: bool = True,
+                        need: int | None = None, timeout: float | None = None):
+    """The calibration session in a window (appui.CalibrateWindow).
+
+    Built like enrollment so the window stays at camera rate: this loop only reads frames,
+    runs YuNet and the 68 landmarks (a few ms) and draws; the embeddings — dlib holds the GIL for
+    ~30 ms each — run in the `_Sampler` PROCESS at most every SAMPLE_EVERY_MS. Distances are
+    computed here from the returned embeddings (fusion of the last `fusion_frames` per camera,
+    raw and whitened against the store). Returns the Measures, or None when cancelled."""
+    from .engine import calibration as cal
+    from .engine.detect import fuse
+    from collections import deque
+    sgn = -1.0 if mirror else 1.0
+    col = cal.Collector(need=need or cal.NEED_FRAMES, timeout=timeout or cal.PASS_TIMEOUT_S, sgn=sgn)
+    primary = "ir" if "ir" in cap.spectra else "rgb"
+    others = [sp for sp in cap.spectra if sp != primary]
+    models.sp68
+    em = None
+    if "ir" in cap.spectra:
+        try:
+            from .engine import emitter as emitmod, config as cfgmod
+            ins = emitmod.instructions_for(cfgmod.load())
+            if ins:
+                em = emitmod.Emitter(_ir_device(cap), ins)
+                if em.available:
+                    em.on()                                  # recognition needs the LEDs; a probe may have left them off
+                if os.environ.get("FACEUP_DEBUG"):
+                    print(f"[calibrate] emitter available={em.available} err={em.error!r}", flush=True)
+        except Exception as e:
+            if os.environ.get("FACEUP_DEBUG"):
+                print(f"[calibrate] emitter setup failed: {e!r}", flush=True)
+            em = None
+    sampler = _Sampler(models)
+    probe = cap.read_one(primary, flush=0)
+    ph, pw = (probe.gray.shape[:2] if probe is not None else (360, 640))
+    try:
+        screen = disp.open_display("faceup calibration", pw, ph, kind="calibrate", sgn=1.0)
+    except disp.DisplayUnavailable as e:
+        sampler.close()
+        raise GuiUnavailable(str(e))
+    if not getattr(screen, "snapshot", False):
+        sampler.close()
+        raise GuiUnavailable("the calibration window needs GTK 4 + libadwaita; use --text")
+    shape3d = np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None
+    neutral = posemod.Neutral(st.calib["neutral_ratios"]) if st.calib.get("neutral_ratios") else None
+    offset = tuple(st.calib.get("pose_offset") or (0.0, 0.0))
+    n_fuse = int(rec.get("fusion_frames", 4))
+    recent: dict[str, deque] = {sp: deque(maxlen=n_fuse) for sp in cap.spectra}
+    state = {"phase": "intro", "cancel": False, "pass_done_at": None, "done": None, "last_sample_t": 0.0,
+             "lmfilter": posemod.LandmarkFilter(), "filter": posemod.PoseFilter(), "prev_box": None,
+             "fps_t": time.monotonic(), "fps_n": 0, "fps": 0.0, "counted_t": 0.0, "pending_light": {}}
+
+    def snapshot_base(fr, box, light_state):
+        img = fr.rgb[:, ::-1].copy() if mirror else fr.rgb
+        w = fr.gray.shape[1]
+        b = ((w - box.x - box.w) if mirror else box.x, box.y, box.w, box.h) if box is not None else None
+        return {"frame": img, "box": b, "light": light_state, "fps": state["fps"]}
+
+    def distances(sample: _LiveSample) -> None:
+        for sp, dq in recent.items():
+            if not dq or not st.by_spectrum(sp):
+                continue
+            fused = fuse(list(dq))
+            d, label = st.min_distance(fused, sp)
+            wd, _thr = st.wdist(fused, sp)
+            sample.raw[sp], sample.label[sp], sample.wdist[sp] = d, label or "", wd
+            sample.light[sp] = state["pending_light"].get(sp, "")
+        # fused embeddings for the whitening scatter
+        state["fused"] = {sp: fuse(list(dq)) for sp, dq in recent.items() if dq}
+
+    def step():
+        for k in screen.keys():
+            if os.environ.get("FACEUP_DEBUG"):
+                print(f"[calibrate] key {k} in phase {state['phase']}", flush=True)
+            if k == disp.KEY_ESC:
+                state["cancel"] = True
+            elif k == disp.KEY_ENTER:
+                if state["phase"] == "intro":
+                    state["phase"] = "measuring"; col.start_pass()
+                elif state["phase"] == "done":
+                    return None
+                elif state["phase"] == "measuring":
+                    col.skip()
+                    if col.finished:
+                        finish()
+        if state["cancel"]:
+            return None
+        fr = cap.read_one(primary, flush=0)
+        if fr is None:
+            return {"phase": state["phase"], "index": col.i, "total": len(col.prompts)}
+        state["fps_n"] += 1; state["frames_total"] = state.get("frames_total", 0) + 1
+        if time.monotonic() - state["fps_t"] >= 1.0:
+            state["fps"] = state["fps_n"] / (time.monotonic() - state["fps_t"]); state["fps_n"], state["fps_t"] = 0, time.monotonic()
+        h, w = fr.gray.shape[:2]
+        q = measure(fr.gray, models.max_height)
+        gray_n = brightness.normalise(fr.gray, q.mean)
+        box = None if (q.sharpness < 5.0 and q.mean < cams[f"{primary}_dark_threshold"]) else models.detect(gray_n, state["prev_box"])
+        state["prev_box"] = box
+        light = cap.meter(primary, fr.gray, box) if box is not None else None
+        light_state = light.state(primary) if light else ""
+        snap = snapshot_base(fr, box, light_state)
+        now = time.monotonic()
+        if os.environ.get("FACEUP_DEBUG") and now - state.get("dbg_t", 0) >= 1.0:
+            state["dbg_t"] = now
+            print(f"[calibrate] phase={state['phase']} fps={state['fps']:.0f} box={'yes' if box is not None else 'no'} light={light_state!r} "
+                  f"q.mean={q.mean:.0f} ready_for={now - state['ready_since']:.1f}s" if state.get("ready_since") else
+                  f"[calibrate] phase={state['phase']} fps={state['fps']:.0f} box={'yes' if box is not None else 'no'} light={light_state!r} q.mean={q.mean:.0f}", flush=True)
+        # keep the IR LEDs on the whole session: in a dark room the emitter is the only light and
+        # some modules silently drop the control — re-assert it periodically so it never goes black
+        if em is not None and em.available and primary == "ir" and (now - state.get("emit_t", 0)) > 0.8:
+            em.on(); state["emit_t"] = now
+        if state["phase"] == "intro":
+            ready = box is not None and light_state != "dark"
+            if ready:
+                state.setdefault("ready_since", now)
+                if now - state["ready_since"] >= INTRO_AUTOSTART_S:      # the face has been there long enough: go
+                    state["phase"] = "measuring"; col.start_pass()
+            else:
+                state.pop("ready_since", None)
+            state.setdefault("intro_t0", now)
+            snap.update({"phase": "intro", "index": 0, "total": len(col.prompts), "ready": ready,
+                         "waited": now - state["intro_t0"],
+                         "countdown": max(0.0, INTRO_AUTOSTART_S - (now - state["ready_since"])) if ready else None})
+            return snap
+        if state["phase"] == "done":
+            snap.update(state["done"]); return snap
+        # pose at camera rate (smoothed like enrollment), embeddings only every SAMPLE_EVERY_MS
+        sample = _LiveSample()
+        if box is not None and box.w >= MIN_ENROLL_FACE_PX and light_state != "dark":
+            sbox = state["lmfilter"].smooth_box(box, now)
+            lm68 = state["lmfilter"](models.landmarks68(gray_n, sbox), now)
+            raw = posemod.estimate(lm68, w, h, shape3d=shape3d, neutral=neutral)
+            if raw is not None:
+                filt = state["filter"](raw, now)
+                if shape3d is not None:
+                    filt = posemod.Pose(filt.yaw - offset[0], filt.pitch - offset[1], filt.roll)
+                sample.yaw, sample.pitch, sample.roll = filt.yaw, filt.pitch, filt.roll
+            sample.face_w = int(box.w)
+            if (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy and sampler.alive:
+                items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True, False)]
+                state["pending_light"][primary] = light_state
+                for sp in others:
+                    fo = cap.read_one(sp, flush=0)
+                    if fo is not None:
+                        items.append((sp, fo.rgb, (box.x, box.y, box.w, box.h), q.score(), False, False))
+                if sampler.submit(None, None, items):
+                    state["last_sample_t"] = now
+        # results from the process → recent embeddings → distances
+        for _cell, _pose, results in sampler.drain():
+            for item in results:
+                sp, _q, emb = item[0], item[1], item[2]
+                recent[sp].append(emb)
+                if sp != primary:
+                    state["pending_light"][sp] = "ok"
+        if recent[primary]:
+            distances(sample)
+        stt = col.feed(sample if (sample.raw or sample.yaw is not None) else None, state.get("fused"))
+        if stt.get("ok") and stt.get("hits") and (sample.raw or sample.yaw is not None):
+            state["counted_t"] = now
+        dists = " · ".join(f"{sp} {sample.raw[sp]:.2f}" + (f" (w {sample.wdist[sp]:.1f})" if sample.wdist.get(sp) is not None else "")
+                           for sp in ("ir", "rgb") if sample.raw.get(sp) is not None)
+        snap.update({"phase": "measuring", "pose": col.display_pose(sample), "index": stt.get("index", col.i), "total": len(col.prompts),
+                     "key": stt.get("key", ""), "text": stt.get("text", ""), "cue": stt.get("cue", "centre"),
+                     "progress": stt.get("progress", 0.0), "ok": stt.get("ok"), "dists": dists,
+                     "hits": stt.get("hits", 0), "need": stt.get("need", col.need), "elapsed": stt.get("elapsed", 0.0),
+                     "counted": (now - state["counted_t"]) < 0.25, "sampling": sampler.busy})
+        if stt.get("pass_done"):
+            snap["pass_done"] = True
+        if stt.get("finished"):
+            finish()
+            snap.update(state["done"])
+        return snap
+
+    def finish():
+        res = cal.summarise(col.measures)
+        lines = []
+        for sp in sorted(res.gate):
+            lines.append(f"{sp.upper()}  {res.n[sp]} measurements · median {res.p50[sp]:.2f} · p95 {res.p95[sp]:.2f} → gate {res.gate[sp]}"
+                         + (f"\n      whitening threshold {res.w_threshold[sp]}" if sp in res.w_threshold else ""))
+        lines += [f"⚠ {wn}" for wn in res.warnings]
+        state["done"] = {"phase": "done", "index": len(col.prompts), "total": len(col.prompts),
+                         "headline": "Thresholds set from your measurements." if res.ok() else "Not enough measurements — nothing changed.",
+                         "summary": "\n".join(lines)}
+        state["phase"] = "done"
+
+    t_run = time.monotonic(); state["frames_total"] = 0
+    try:
+        screen.run(step)
+    finally:
+        sampler.close()
+        if em is not None:
+            try:
+                em.on(); em.close()
+            except Exception:
+                pass
+    calibration_session.last_fps = state["frames_total"] / max(1e-6, time.monotonic() - t_run)
+    if state["cancel"]:
+        return None
+    return col.measures
+
+
+calibration_session.last_fps = 0.0
+INTRO_AUTOSTART_S = 2.5

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=faceup
+Comment=Face unlock for Linux — set up, enrol faces, check status, open the lab
+Exec=pkexec /usr/local/bin/faceup app
+Icon=faceup
+Terminal=false
+Categories=Settings;Security;
+Keywords=face;unlock;login;camera;biometric;
+X-GNOME-UsesNotifications=true

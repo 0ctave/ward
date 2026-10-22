@@ -62,3 +62,32 @@ class PolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LivenessOutsideAuthenticate(unittest.TestCase):
+    def test_shadow_voter_abstains_on_a_fresh_engine(self):
+        """The lab (and the calibration session) call Engine._liveness without authenticate():
+        the shadow test's per-attempt state must exist and yield ABSTAIN, never AttributeError."""
+        import numpy as np
+        from faceup.engine.auth import Engine, Obs
+        from faceup.engine.detect import Box
+        from faceup.engine.capture import Frame
+        from faceup.engine.liveness import Result
+        eng = Engine.__new__(Engine)
+        eng.verbose = False; eng.events = None; eng.cfg = {"liveness": {"shadow_toggle_ms": 33}}
+        # emulate what __init__ sets without loading models
+        eng._cap = None; eng._emitter = None; eng._shadow_done = None
+        g = np.zeros((60, 80), np.uint8)
+        fr = Frame("ir", 0.0, g, np.repeat(g[..., None], 3, axis=2))
+        obs = {"ir": [Obs(fr, None, Box(10, 10, 30, 30), None, False, "ok")]}
+        live = {"cross_spectrum": False, "antispoof_cnn": False, "shadow_test": "auto", "shadow_toggle_ms": 33, "motion": False}
+        votes = eng._liveness(None, obs, {"ir": "/dev/videoX"}, live)
+        self.assertEqual([(v.voter, v.result) for v in votes], [("shadow", Result.ABSTAIN)])
+        self.assertIn("unavailable", votes[0].reason)
+
+    def test_engine_init_creates_the_per_attempt_state(self):
+        import inspect
+        from faceup.engine.auth import Engine
+        src = inspect.getsource(Engine.__init__)
+        for name in ("_cap", "_emitter", "_shadow_done"):
+            self.assertIn(f"self.{name} = None", src)
