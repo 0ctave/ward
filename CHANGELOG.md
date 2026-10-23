@@ -2,6 +2,17 @@
 
 ## Unreleased — 2026-10-22
 
+### Accuracy benchmarks (`faceup benchmark …`)
+- `faceup/lfw.py` (impostor/genuine FMR-FNMR, EER, AUC on LFW — recogniser), `faceup/celeba_spoof.py`
+  (APCER/BPCER/ACER on CelebA-Spoof — anti-spoof CNN, per-attack-type breakdown), `faceup/ir_pad.py`
+  (cross-spectrum PAD on paired colour+IR, CASIA-SURF/WMCA), `faceup/redteam.py` (digital attacks on
+  your own frames: recognition robustness + whether the RGB CNN alone is fooled). Wired as the
+  `benchmark {lfw,spoof,ir,redteam}` command group (forwards to each module's argparse). Datasets are
+  research-only and never bundled; tests use mocks (no dataset, no camera).
+- Measured finding: the RGB anti-spoof CNN does not flag *digitally* re-encoded replay/print (p_real
+  stays ~1.0) — it catches *physical* capture artifacts; replays are stopped by the IR cross-spectrum
+  voter (a screen emits no IR). Documented in each harness's scope notes.
+
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
 ### Portability matrix (rootless podman)

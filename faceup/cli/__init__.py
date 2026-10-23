@@ -36,7 +36,23 @@ from .setup import (  # noqa: F401
 )
 
 
+BENCHMARKS = {"lfw": "lfw", "spoof": "celeba_spoof", "ir": "ir_pad", "redteam": "redteam"}
+
+
+def cmd_benchmark(args) -> int:
+    """Forward to a harness module's own argparse (faceup/{lfw,celeba_spoof,ir_pad,redteam}.py)."""
+    import importlib
+    mod = importlib.import_module(f"faceup.{BENCHMARKS[args.bench_cmd]}")
+    return mod.main(args.rest)
+
+
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # `benchmark <name> …` hands the rest straight to that harness's own argparse (including --help),
+    # which REMAINDER-based subparsers mis-route; the parser below still lists it for discoverability.
+    if argv and argv[0] == "benchmark" and len(argv) > 1 and argv[1] in BENCHMARKS:
+        import importlib
+        return importlib.import_module(f"faceup.{BENCHMARKS[argv[1]]}").main(argv[2:])
     p = argparse.ArgumentParser(prog="faceup", description="Face unlock for Linux that actually works: dual-spectrum recognition with liveness.")
     p.add_argument("--version", action="version", version=f"faceup {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -63,6 +79,16 @@ def main(argv=None) -> int:
     t.add_argument("key", nargs="?"); t.add_argument("value", nargs="?"); t.set_defaults(fn=cmd_tune)
 
     b = sub.add_parser("bench", help="time HOG vs CNN detectors on a live frame"); b.add_argument("--device"); b.set_defaults(fn=cmd_bench)
+
+    bm = sub.add_parser("benchmark", help="offline accuracy on external datasets: recogniser (lfw), anti-spoof (spoof), IR liveness (ir), red-team your own frames (redteam)")
+    bms = bm.add_subparsers(dest="bench_cmd", required=True)
+    for name, h in (("lfw", "impostor/genuine distances on LFW (recogniser; `-m faceup.lfw`)"),
+                    ("spoof", "APCER/BPCER on CelebA-Spoof (anti-spoof CNN; `-m faceup.celeba_spoof`)"),
+                    ("ir", "cross-spectrum PAD on CASIA-SURF/WMCA (`-m faceup.ir_pad`)"),
+                    ("redteam", "digitally attack your own recorded frames (`-m faceup.redteam`)")):
+        sp = bms.add_parser(name, help=h, add_help=False)      # options are parsed by the module itself
+        sp.add_argument("rest", nargs=argparse.REMAINDER)
+    bm.set_defaults(fn=cmd_benchmark)
 
     a = sub.add_parser("auth", help="run the authentication engine once (what PAM calls); exit 0 = accepted")
     a.add_argument("-U", "--user"); a.add_argument("-v", "--verbose", action="store_true")
