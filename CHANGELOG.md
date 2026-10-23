@@ -4,6 +4,11 @@
 
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
+### Resident engine hardening
+- **systemd sandbox** (`data/faceup.service`): no capabilities at all (`CapabilityBoundingSet=`), `DevicePolicy=closed` + `char-video4linux rw` only, `ProtectSystem=strict` with `/etc/faceup` + `/var/log` writable, `PrivateNetwork`, `RestrictAddressFamilies=AF_UNIX`, kernel/cgroup/clock/hostname protection, `RestrictNamespaces`, `LockPersonality`, `MemoryDenyWriteExecute` (numpy, OpenCV YuNet/dnn and dlib verified working under W^X), `@system-service` syscall filter, `MemoryHigh=384M`/`MemoryMax=512M`. `systemd-analyze security` exposure 8.7 → 0.9.
+- **Watchdog:** `Type=notify` + `WatchdogSec=30`; a stdlib `sd_notify` (no libsystemd) sends READY=1 once the models are warm and WATCHDOG=1 from a thread that stops pinging while an attempt is wedged past its deadline, so systemd restarts a stuck daemon even with no new request. No-op without `$NOTIFY_SOCKET`. install.sh reports a daemon that fails to start (unlock still falls back in-process).
+- Memory measured: ~195 MB RSS warm, flat at ~203 MB over 200 replayed attempts (no growth, no thread/fd leak).
+
 ### Security audit
 - **PAM helper environment (critical):** `pam_faceup.so` now `clearenv()`s both root children (the faceup-auth helper and the systemd-creds unseal) and sets only PATH, LANG and PAM_*; through setuid sudo / the polkit agent the inherited environment was the unprivileged caller's (PYTHONHOME, HOME → user site-packages = root code before the password). Both launchers run `python3 -I` with the package path set inside, ignoring every PYTHON* variable and the user site (`faceup` no longer appends the caller's PYTHONPATH).
 - **Fail open in the PAM module:** the unseal abort kills and reaps with a bound (a decrypt wedged in the TPM no longer holds back the password module); an unreaped or buffer-filling unseal is never read as a good secret; SIGCHLD is defaulted around the helper (pam_exec-style) and a give-up kills the whole group.

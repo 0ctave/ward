@@ -76,8 +76,15 @@ if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   first=0; [[ -e /etc/systemd/system/faceup.service ]] || first=1
   install -Dm644 "$here/data/faceup.service" /etc/systemd/system/faceup.service
   systemctl daemon-reload
-  if [[ $first == 1 ]]; then systemctl enable --now faceup.service && echo "resident engine enabled (fast unlock)"
-  elif systemctl is-enabled --quiet faceup.service; then systemctl restart faceup.service && echo "resident engine restarted"; fi
+  systemd-analyze verify /etc/systemd/system/faceup.service 2>&1 | grep -v '^$' || true
+  # Type=notify: start/restart return only once the models are warm (READY=1), so a sandbox the
+  # engine cannot run in shows up here. Unlock never depends on it (the client falls back).
+  daemon_fail="  ! resident engine did not start — unlock still works (in-process). See: journalctl -u faceup -n 30"
+  if [[ $first == 1 ]]; then
+    if systemctl enable --now faceup.service; then echo "resident engine enabled (fast unlock)"; else echo "$daemon_fail"; fi
+  elif systemctl is-enabled --quiet faceup.service; then
+    if systemctl restart faceup.service; then echo "resident engine restarted"; else echo "$daemon_fail"; fi
+  fi
 fi
 echo "installed: $BIN, $AUTH  (package in $LIB)"
 echo "next:  faceup doctor   ·   sudo faceup setup"

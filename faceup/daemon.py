@@ -15,6 +15,11 @@ Safety: the socket lives in /run/faceup (0700 root) and is 0600 root, so only ro
 ask for an attempt; the user name is the client's to give, as for `faceup-auth`. One attempt runs
 at a time (the cameras are exclusive). Anything wrong with the daemon makes the client fall back
 to the in-process engine: the daemon is a speed-up, never a dependency (golden rule 3).
+
+systemd (data/faceup.service, Type=notify): READY=1 once the models are warm, then WATCHDOG=1
+from a thread every WatchdogSec/2 — which stops pinging while an attempt is wedged past its
+deadline, so systemd kills and restarts us even when no new request arrives to notice. Plain
+stdlib datagrams on $NOTIFY_SOCKET (no libsystemd); without it every notify is a no-op.
 """
 from __future__ import annotations
 
@@ -35,6 +40,47 @@ SEND_TIMEOUT_S = 5.0       # a client that stops reading drops events instead of
 PAM_ENV = ("PAM_SERVICE", "PAM_TTY", "PAM_TYPE", "PAM_RHOST", "PAM_RUSER", "PAM_USER", "SSH_CONNECTION", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_ID")
 
 
+def sd_notify(state: str, env=None) -> bool:
+    """Send `state` ("READY=1", "WATCHDOG=1", …) to systemd's $NOTIFY_SOCKET. False (never an
+    exception) when not run by systemd or the send fails. "@name" is an abstract socket."""
+    env = os.environ if env is None else env
+    addr = env.get("NOTIFY_SOCKET", "")
+    if not addr or addr[0] not in "/@":
+        return False
+    if addr[0] == "@":
+        addr = "\0" + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC) as s:
+            s.connect(addr)
+            s.sendall(state.encode())
+        return True
+    except OSError:
+        return False
+
+
+def watchdog_interval(env=None) -> float | None:
+    """Seconds between WATCHDOG=1 pings (half of WatchdogSec), or None when no watchdog is armed
+    for this process ($WATCHDOG_USEC absent/invalid, or $WATCHDOG_PID names another process)."""
+    env = os.environ if env is None else env
+    pid = env.get("WATCHDOG_PID")
+    if pid and pid != str(os.getpid()):
+        return None
+    try:
+        usec = int(env.get("WATCHDOG_USEC", ""))
+    except ValueError:
+        return None
+    return usec / 2e6 if usec > 0 else None
+
+
+def watchdog_loop(res: "Resident", interval: float, stop: threading.Event | None = None, notify=sd_notify) -> None:
+    """Ping the watchdog while the daemon is healthy; a wedged attempt silences it."""
+    stop = stop or threading.Event()
+    while not stop.is_set():
+        if not res.wedged():
+            notify("WATCHDOG=1")
+        stop.wait(interval)
+
+
 class Resident:
     """Holds the loaded models; builds a fresh Engine (fresh config) for every attempt."""
 
@@ -47,6 +93,12 @@ class Resident:
         self.started = 0.0          # monotonic start of the running attempt (0 = idle)
         self.budget_s = 0.0         # its hard timeout
         self.warm(cfgmod.load())
+
+    def wedged(self, now: float | None = None) -> bool:
+        """True while the running attempt is STUCK_MARGIN_S past its hard timeout."""
+        started = self.started
+        now = time.monotonic() if now is None else now
+        return bool(started) and now - started > self.budget_s + STUCK_MARGIN_S
 
     def _models_key(self, cfg: dict) -> tuple:
         rec = cfg["recognition"]
@@ -77,16 +129,15 @@ class Resident:
         env = {k: v for k, v in (req.get("env") or {}).items() if k in PAM_ENV and isinstance(v, str)}
         saved = {k: os.environ.get(k) for k in PAM_ENV}
         if not self.lock.acquire(timeout=BUSY_WAIT_S):
-            started = self.started
-            if started and time.monotonic() - started > self.budget_s + STUCK_MARGIN_S:
+            if self.wedged():
                 print("faceupd: an attempt is wedged (camera driver?): exiting for a restart", flush=True)
                 os._exit(1)                                    # Restart=on-failure brings up a fresh daemon
             send({"error": "busy"}); return
         try:
             if not alive():
                 return                                         # the client gave up while queued: no phantom attempt
-            self.started = time.monotonic()
             self.budget_s = float(cfg.get("timing", {}).get("hard_timeout_ms", 8000)) / 1000
+            self.started = time.monotonic()                    # after the budget: wedged() never sees a stale one
             try:
                 for k in PAM_ENV:
                     if k in env:
@@ -134,7 +185,12 @@ def serve(path: str = SOCK) -> int:
     finally:
         os.umask(old)
     srv.listen(4)
-    print(f"faceupd: ready in {int((time.monotonic() - t0) * 1000)} ms on {path}", flush=True)
+    ms = int((time.monotonic() - t0) * 1000)
+    print(f"faceupd: ready in {ms} ms on {path}", flush=True)
+    sd_notify(f"READY=1\nSTATUS=ready in {ms} ms")
+    iv = watchdog_interval()
+    if iv:
+        threading.Thread(target=watchdog_loop, args=(res, iv), daemon=True, name="watchdog").start()
     while True:
         conn, _ = srv.accept()
         threading.Thread(target=handle, args=(res, conn), daemon=True).start()
