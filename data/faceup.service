@@ -26,6 +26,7 @@ AmbientCapabilities=
 NoNewPrivileges=yes
 DevicePolicy=closed
 DeviceAllow=char-video4linux rw
+# no /dev/dri: recognition.accel=opencl finds no OpenCL device here and cv2.dnn runs on the CPU
 PrivateTmp=yes
 PrivateNetwork=yes
 IPAddressDeny=any
@@ -55,9 +56,10 @@ SystemCallFilter=~@privileged @resources
 SystemCallErrorNumber=EPERM
 RemoveIPC=yes
 KeyringMode=private
-# measured RSS: ~195 MB warm, flat at ~203 MB over 200 attempts; headroom for ArcFace r50 and a reload
-MemoryHigh=384M
-MemoryMax=512M
+# measured RSS: ~195 MB warm, flat at ~203 MB over 200 attempts (dlib). ArcFace r50 is a 281 MB ONNX
+# and a reload briefly holds the file buffer + the weights on top: 512M would OOM-kill that reload.
+MemoryHigh=768M
+MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target

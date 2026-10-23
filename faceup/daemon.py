@@ -136,15 +136,15 @@ class Resident:
         try:
             if not alive():
                 return                                         # the client gave up while queued: no phantom attempt
-            self.budget_s = float(cfg.get("timing", {}).get("hard_timeout_ms", 8000)) / 1000
-            self.started = time.monotonic()                    # after the budget: wedged() never sees a stale one
             try:
                 for k in PAM_ENV:
                     if k in env:
                         os.environ[k] = env[k]
                     else:
                         os.environ.pop(k, None)
-                self.warm(cfg)
+                self.warm(cfg)                                 # a reload (ArcFace r50: 281 MB) is not the attempt's budget
+                self.budget_s = float(cfg.get("timing", {}).get("hard_timeout_ms", 8000)) / 1000
+                self.started = time.monotonic()                # after the budget: wedged() never sees a stale one
                 eng = Engine(cfg, models=self.models, verbose=bool(req.get("verbose")))
                 eng.events = lambda kind, **kw: send({"event": kind, **kw})
                 if req.get("verbose"):
