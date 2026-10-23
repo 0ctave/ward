@@ -20,3 +20,13 @@ class Prefix(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StalePrefixLine(unittest.TestCase):
+    def test_pam_exec_line_from_other_prefix_is_rewritten(self):
+        from faceup.engine import pam
+        other = "/usr" if pam.ENGINE.startswith("/usr/local/") else "/usr/local"
+        stale = f"auth\tsufficient\t\t\tpam_exec.so quiet stdout seteuid {other}/bin/faceup-auth\t# faceup\n"
+        out = pam.render_enabled(stale + "auth\t[success=1 default=ignore]\tpam_unix.so\n", native=False)
+        self.assertIn(pam.ENGINE, out)
+        self.assertNotIn(f"{other}/bin/faceup-auth", out)
