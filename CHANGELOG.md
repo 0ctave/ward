@@ -5,7 +5,7 @@
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
 ### Anti-spoof CNN voter (active)
-- **MiniFASNetV2 bundled** (`faceup/models/minifasnet_v2.onnx`, Apache-2.0, 1.7 MB, sha256 pinned and checked at load, licence in `models/LICENSE-Apache-2.0.txt`): a second independent liveness PASS in daylight. Reference preprocessing (box ×2.7, 80×80, BGR, raw). Measured on recorded daylight RGB: p_real min 0.996 (80/80 PASS).
+- **MiniFASNetV2 bundled** (`faceup/models/minifasnet_v2.onnx`, Apache-2.0, 1.7 MB, sha256 pinned and checked at load, licence in `models/LICENSE-Apache-2.0.txt`): a second independent liveness PASS in daylight. Reference preprocessing (box ×2.7, shifted back inside the frame at an edge rather than clipped — review fix, as in the reference `_get_new_box`; 80×80, BGR, raw). Measured on recorded daylight RGB: p_real min 0.994 (80/80 PASS).
 - Conservative because a FAIL is sticky: PASS at median p_real ≥ 0.90; FAIL only when ≥ 2 RGB frames all score ≤ 0.02; else ABSTAIN. Grey/IR or dark frames, tiny faces and a broken model abstain.
 - `faceup antispoof status|on|off|test DIR`; doctor/health item (fix: turn on / reinstall), setup step 3, app Advanced row.
 

@@ -2,10 +2,10 @@
 
 The model is bundled (faceup/models/minifasnet_v2.onnx, Apache-2.0, 1.7 MB, sha256 pinned below
 and checked once at load). Preprocessing follows the reference implementation exactly: the
-detector box (x, y, w, h) scaled ×2.7 around its centre (clamped so it fits the frame), cropped,
+detector box (x, y, w, h) scaled ×2.7 around its centre (shifted back inside the frame like the reference, never clipped), cropped,
 resized to 80×80, BGR, raw 0–255 floats, no mean/std. Output = 3 logits → softmax; class 1 = real.
 
-Measured on this machine's recorded daylight RGB frames (80 frames, engine box): p_real min 0.997,
+Measured on this machine's recorded daylight RGB frames (80 frames, engine box): p_real min 0.994,
 p5 0.999, median 1.000. The network is trained on colour images: on IR frames converted to RGB it
 scores real faces as low as 0.01 — so it only ever runs on a genuine colour frame (a grey frame
 abstains). Because a FAIL is sticky (ends the attempt as spoof), the voter is asymmetric:
@@ -74,8 +74,18 @@ def _crop(img: np.ndarray, box) -> np.ndarray | None:
     s = min((H - 1) / bh, (W - 1) / bw, SCALE)
     nw, nh = bw * s, bh * s
     cx, cy = int(box.x) + bw / 2, int(box.y) + bh / 2
-    x1, y1 = max(0, int(cx - nw / 2)), max(0, int(cy - nh / 2))
-    x2, y2 = min(W - 1, int(cx + nw / 2)), min(H - 1, int(cy + nh / 2))
+    # reference CropImage._get_new_box: an edge that leaves the frame SHIFTS the box back inside
+    # (size and aspect kept), it is not clipped — clipping would feed an off-centre, squashed crop
+    x1, y1, x2, y2 = cx - nw / 2, cy - nh / 2, cx + nw / 2, cy + nh / 2
+    if x1 < 0:
+        x2 -= x1; x1 = 0
+    if y1 < 0:
+        y2 -= y1; y1 = 0
+    if x2 > W - 1:
+        x1 -= x2 - W + 1; x2 = W - 1
+    if y2 > H - 1:
+        y1 -= y2 - H + 1; y2 = H - 1
+    x1, y1, x2, y2 = max(0, int(x1)), max(0, int(y1)), int(x2), int(y2)
     if x2 - x1 < MIN_FACE_PX or y2 - y1 < MIN_FACE_PX:
         return None
     return cv2.resize(img[y1:y2 + 1, x1:x2 + 1], (INPUT, INPUT))

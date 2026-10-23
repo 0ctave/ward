@@ -78,6 +78,14 @@ class Voter(unittest.TestCase):
         self.assertEqual(big.shape, (80, 80, 3))
         self.assertIsNone(asc._crop(img, Box(10, 10, 20, 20)))     # too small to judge
 
+    def test_crop_at_edge_shifts_not_clips(self):
+        # reference _get_new_box: a box near the left edge keeps its 270 px size, shifted inside
+        img = np.zeros((360, 640, 3), np.uint8)
+        img[:, 255:271] = 255                                      # marker band ending at x=270
+        c = asc._crop(img, Box(0, 130, 100, 100))                  # 270 px crop → x 0..270
+        self.assertEqual(c.shape, (80, 80, 3))
+        self.assertGreater(c[:, 78:].mean(), 200); self.assertLess(c[:, 70:72].mean(), 5)  # band at the right edge, not squashed
+
     def test_single_spoof_frame_only_abstains(self):
         v = self.run_with(FakeNet([SPOOF]), [(colour_frame(), self.box, False)])
         self.assertEqual(v.result, Result.ABSTAIN)
