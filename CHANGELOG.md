@@ -10,6 +10,7 @@ Enrol once in normal light, unlock in any light; one coherent enrolment window; 
 - **No dlib / no dlib models:** `Models()` no longer raises at construction and `preload()` tolerates missing pieces; dark/no-face outcomes come out as such and the first embedding raises the clear error (faceup-auth still fails open). The suite passes without dlib.
 - `distro.py` corrected from measurement: python3-dlib is not in Debian/Ubuntu/Fedora (Tumbleweed has it), GTK needs pycairo (`python3-gi-cairo`, `python3-gobject-cairo`, `python-cairo`), Debian needs `libc6-dev` beside gcc; numpy added. Doctor's GTK check imports cairo and its gcc line flags missing libc headers.
 - RPM spec: `BuildRequires: python3-rpm-macros` (`%py_byte_compile` was undefined on a clean Fedora). Keyring test: the ignored-SIGCHLD case no longer goes through pam_exec, which itself fails that way on Linux-PAM < 1.5.3.
+- Doctor no longer blames a "shadowing pyenv/conda Python" when `/usr/bin/python3` itself simply lacks dlib (the case on every distro but Tumbleweed): a warning plus the distro hint instead of a failure.
 
 ### Distro packaging
 - `packaging/build-deb.sh` builds a .deb offline with `dpkg-deb` (Depends python3, python3-opencv, python3-numpy; Recommends dlib, GTK 4/libadwaita, polkit); `packaging/faceup.spec` (RPM) and `packaging/PKGBUILD` (Arch) mirror it. All install under `/usr`, compile `pam_faceup.so` at build time, enable the resident engine on first install and never edit PAM; .deb/.rpm removal is refused while `/etc/pam.d` still references faceup.
