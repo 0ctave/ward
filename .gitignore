@@ -3,4 +3,31 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# Private local extension (duress failsafe etc.) — never committed or distributed
 extensions/
+
+# --- Personal / biometric data: must NEVER be committed ------------------------
+# Enrolled face embeddings, calibration, learned models (the store lives in /etc/faceup,
+# but guard against a copy landing in the tree):
+*.cred
+models/*.json
+*_models.json
+calib*.json
+# Attempt log and any copy of it:
+*.log
+faceup.log*
+# Recorded camera frames / lab captures / replay corpora / benchmark dumps:
+samples/
+samples_*/
+frames/
+lab/
+*.ndjson
+# Datasets (LFW, CelebA-Spoof, CASIA-SURF, WMCA): research-only, never bundle:
+lfw/
+CelebA_Spoof/
+CASIA-SURF/
+WMCA/
+*_dataset/
+# NOTE: faceup/models/*.onnx (YuNet, MiniFASNet) and data/*.svg ARE tracked on purpose —
+# they are redistributable shipped models and the app icons, not personal data.
