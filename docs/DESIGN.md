@@ -145,7 +145,7 @@ max_height       = 320
 [liveness]
 required_votes = 2         # of the enabled voters that did not abstain… see §6.5
 cross_spectrum = true
-antispoof_cnn  = true      # needs the ONNX model file
+antispoof_cnn  = true      # bundled MiniFASNetV2; `faceup antispoof off` to disable
 shadow_test    = "auto"    # "auto" = enabled if emitter toggling is available
 motion         = true
 motion_challenge = false   # active "turn your head slightly" prompt
@@ -324,11 +324,12 @@ Requires a face in the IR frame **and** the paired RGB frame, and their boxes to
 - IR-tuned print: face in IR, RGB sees flat grey → **FAIL**.
 - Dark room where RGB legitimately sees nothing: IR mean ok, RGB mean < `rgb_dark_threshold` → **ABSTAIN** (not FAIL). This distinction is what keeps night-time unlocks working.
 
-### 7.2 Anti-spoof CNN (RGB) — ~15 ms
-Silent-Face-Anti-Spoofing (MiniFASNet v2, MIT) exported to ONNX, run with `cv2.dnn`. Input: the RGB face crop with the model's expected margin. Output: real / print / replay probabilities.
-- `p_real ≥ 0.7` → PASS; `p_real ≤ 0.3` → FAIL; between → ABSTAIN.
-- Frame too dark or crop < 80 px → ABSTAIN.
-- Model file absent → voter disabled (documented in `doctor`). The model is downloaded by `faceup setup` from a pinned release with a checksum; never at auth time.
+### 7.2 Anti-spoof CNN (RGB) — ~3 ms per frame
+Silent-Face-Anti-Spoofing (Minivision MiniFASNetV2, Apache-2.0; ONNX export by yakhyo/face-anti-spoofing, Apache-2.0) **bundled** as `faceup/models/minifasnet_v2.onnx` (1.7 MB, sha256 pinned in the voter and checked at load), run with `cv2.dnn` (loads on OpenCV 4.6). Preprocessing = the reference `crop_face`: detector box ×2.7 around its centre (scale clamped to fit the frame), 80×80, BGR, raw 0–255, no normalisation. Output: print / real / replay softmax.
+- Measured on recorded daylight RGB (80 frames): p_real min 0.996, p5 1.000; still ≥ 0.91 under darkening ×0.35, blur, half resolution, JPEG q30, colour tint. On IR frames shown as RGB real faces score down to 0.01 — the net is a colour model, so a grey frame ABSTAINs.
+- Asymmetric because a FAIL is sticky: median p_real over the newest ≤ 3 lit RGB faces ≥ 0.90 → PASS; FAIL only when ≥ 2 frames are scored and every one is ≤ 0.02; otherwise ABSTAIN. A single odd frame never sends a genuine user to the password.
+- Frame dark, grey, box < 40 px, broken/mismatched model → ABSTAIN (fail open). `faceup antispoof status|on|off|test DIR`; doctor/app expose on/off.
+- Not yet measured against real attacks (no printed photo / phone replay recorded): the FAIL threshold is deliberately far from the real-face distribution until a spoof set exists.
 
 ### 7.3 Emitter-modulation shadow test (IR) — ~2 frames
 `linux-enable-ir-emitter` discovers the UVC extension-unit instruction that switches the LEDs. If that instruction can be applied at runtime in < 50 ms (measured once in `setup`, stored as `shadow_test = true/false`), the engine captures one frame **emitter off** and one **on**, aligned by landmarks, and computes:
@@ -550,7 +551,7 @@ inherit pam_exec's stdout pipe, or the greeter would wait for the notifier to ex
 | Emitter dead, dark room | IR frames dark → window ends `dark`; RGB also dark → password. `doctor` flags the emitter. |
 | Emitter dead, lit room | IR sees you by ambient light; works. Shadow test ABSTAINs (no toggle). |
 | RGB covered (privacy shutter) | cross-spectrum ABSTAINs; CNN ABSTAINs; liveness relies on shadow + motion. If both abstain → degraded rule accepts on recognition alone *only if* `require_liveness_when_available = false` (default true → password). |
-| Anti-spoof model missing | voter disabled; `doctor` says so. |
+| Anti-spoof model missing/corrupt | voter abstains (checksum checked at load); `doctor` fails the item. |
 | Dark room, Windows-Hello module | IR only (ALS < 5 lux) or watchdog drops RGB and reopens IR; logged `ir-only (dark)`. |
 | Helper hangs | module `poll()` timeout kills the group; `SIGALRM` in the helper → password. |
 | Camera busy (video call) | open fails → immediate password fallback, one log line. |
@@ -584,7 +585,7 @@ sudo faceup-auth                   the engine (PAM calls this; also runnable by 
 | YuNet detect | 4 ms/frame (full frame, no tracking needed) | HOG 60 ms / 5 ms ROI; CNN@240 700 ms — opt-in |
 | Landmarks + embedding | 30 ms/frame/camera | 4 fused frames × 2 cameras ≈ 240 ms spread over the window |
 | Cross-spectrum, motion | < 2 ms | |
-| Anti-spoof CNN | 15 ms | |
+| Anti-spoof CNN | ~3 ms/frame (≤ 3 frames) | measured, cv2.dnn CPU |
 | Shadow test | 2 frames ≈ 100 ms | only if toggle is fast |
 | **Typical accept** | **250–450 ms** | |
 

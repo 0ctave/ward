@@ -4,3 +4,10 @@ licensed under the Apache License 2.0. Source: https://github.com/opencv/opencv_
 50ef07f702a31741ca46a4c0d947773b64143b9362780237bf0d427d6c79bab7
 The 2022 model is bundled because the 2023 revision requires OpenCV >= 4.8, while
 Ubuntu 24.04 ships 4.6.
+
+minifasnet_v2.onnx — MiniFASNetV2 silent face anti-spoofing network (80x80, 3 classes:
+0 print, 1 real, 2 replay) by Minivision AI (https://github.com/minivision-ai/Silent-Face-Anti-Spoofing,
+Apache License 2.0), ONNX export by yakhyo (https://github.com/yakhyo/face-anti-spoofing,
+Apache License 2.0, release "weights", asset MiniFASNetV2.onnx, repo commit 01a38903f4f2). sha256:
+b32929adc2d9c34b9486f8c4c7bc97c1b69bc0ea9befefc380e4faae4e463907
+Loads with cv2.dnn on OpenCV 4.6. The full licence text is in LICENSE-Apache-2.0.txt.

@@ -48,8 +48,8 @@ detector and ResNet face embedding, OpenCV, V4L2 — with what Howdy lacks:
   - *cross-spectrum consistency* — the face must appear in both cameras at the same place
     (screens emit no IR; IR-tuned prints look wrong in colour)
   - *non-rigid motion* — a head moves like a 3D object, a photo or screen like a plane
-  - *anti-spoof CNN* on the RGB crop (MiniFASNet, ONNX via OpenCV DNN; needs the model
-    file — not bundled yet, the voter is disabled until it's present)
+  - *anti-spoof CNN* on the RGB crop (MiniFASNetV2, ONNX via OpenCV DNN, bundled — Apache-2.0,
+    1.7 MB; passes real faces, fails only a confident repeated spoof, otherwise abstains)
   - *emitter-modulation shadow test* — metric implemented, enabled once the LED toggle is
     proven fast enough on the hardware (`shadow_test = "auto"`)
 - **Stable camera identification.** Cameras are stored as USB/PCI ids (vendor:product:interface,

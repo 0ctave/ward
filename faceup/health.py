@@ -130,6 +130,12 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
         still.append("shadow test")
     if has_rgb and live["antispoof_cnn"] and antispoof_cnn.available():
         still.append("anti-spoof CNN")
+    if has_rgb:
+        ok_model, _ = antispoof_cnn.verify()
+        if not ok_model:
+            sec.items.append(Item("fail", f"anti-spoof CNN model missing or corrupt ({cfgmod.ANTISPOOF_MODEL.name}) — reinstall faceup", ["antispoof", "status"], "Check"))
+        elif not live["antispoof_cnn"]:
+            sec.items.append(Item("warn", "anti-spoof CNN (daylight liveness, bundled) is switched off", ["antispoof", "on"], "Turn on"))
     if still:
         sec.items.append(Item("ok", "liveness for a still face: " + ", ".join(still)))
     elif has_ir:
