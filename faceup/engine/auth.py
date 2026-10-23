@@ -185,19 +185,26 @@ class Engine:
         # Let the IR camera reach streaming BEFORE loading the dlib models: their load holds the GIL
         # for 1–2.5 s and stalled the open thread behind it, so the LEDs came on ~3 s into the
         # attempt. IR open alone is ~0.4 s; the LED ramp and auto-exposure then settle during the load.
-        if hasattr(pending, "wait_primary"):
-            pending.wait_primary(min(1.5, timing["hard_timeout_ms"] / 1000))
-            ph["ir"] = int((time.monotonic() - t0) * 1000)
-        self.models.preload()
-        ph["models"] = int((time.monotonic() - t0) * 1000)
         try:
+            if hasattr(pending, "wait_primary"):
+                pending.wait_primary(min(1.5, timing["hard_timeout_ms"] / 1000))
+                ph["ir"] = int((time.monotonic() - t0) * 1000)
+            self.models.preload()
+            ph["models"] = int((time.monotonic() - t0) * 1000)
             # start on the primary (IR) camera; RGB joins on a later read once open (light read ~2 s)
             get = getattr(pending, "result_primary", pending.result)
             cap = get(timeout=timing["hard_timeout_ms"] / 1000)
-        except CaptureError as e:
+        except BaseException as e:
+            # nobody will read what is still opening: release it (non-blocking) and the emitter
+            try:
+                pending.cancel()
+            except Exception:
+                pass
             if self._emitter is not None:
                 self._emitter.close(); self._emitter = None
-            return fail("camera", str(e))
+            if isinstance(e, CaptureError):
+                return fail("camera", str(e))
+            raise
         self._cap = cap
         ph["cams"] = int((time.monotonic() - t0) * 1000)
         self._notes_seen = 0
@@ -264,6 +271,12 @@ class Engine:
                     continue
                 accepted, votes, dists = decision
                 last_votes = votes
+                spoof = next((v for v in votes if v.result == Result.FAIL and v.voter in polmod.SPOOF_VOTERS), None)
+                if spoof is not None:
+                    # sticky: a spoof signal ends the attempt — probing angles until one frame slips
+                    # through must not accept, and the FAIL is logged (spoof:*) for the lockout
+                    self.say(f"{spoof.voter} FAIL ({spoof.reason}): ending the attempt")
+                    break
                 if accepted:
                     who = getattr(self, "_last_who", None)
                     out = Outcome(True, "accept", user, dists.get("ir"), dists.get("rgb"), getattr(self, "_last_w", {}), "",
@@ -341,8 +354,12 @@ class Engine:
         learn_max_dist, and originals are never replaced."""
         if not beh.get("learn", True):
             return ""
-        if any(v.result == Result.FAIL for v in votes) or not any(v.result == Result.PASS for v in votes):
+        if any(v.result == Result.FAIL for v in votes):
             return ""
+        if not any(v.result == Result.PASS and v.voter in polmod.SPOOF_VOTERS for v in votes):
+            return ""                                         # motion alone is weak liveness: never learn from it
+        # never past the gate, even when hand-edited: each learned model widens the accept region around it
+        max_dist = min(beh.get("learn_max_dist", 0.30), rec.get("certainty", 0.40) - 0.10)
         learned = []
         for sp, fused in getattr(self, "_last_fused", {}).items():
             originals = [m for m in st.by_spectrum(sp) if not m.learned]
@@ -351,7 +368,7 @@ class Engine:
             # measured against ENROLLED models only: learned models must never anchor further learning,
             # or each one sits at the edge of the accept region and the next chains off it (review D1)
             d = min(st.distance(m.embedding, fused) for m in originals)
-            if d > beh.get("learn_max_dist", 0.30):
+            if d > max_dist:
                 continue
             if len(getattr(self, "_last_samples", {}).get(sp, [])) < 2:
                 continue                                      # one frame is not evidence of a new condition

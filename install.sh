@@ -30,17 +30,17 @@ cp -r "$here/faceup" "$LIB/"
 find "$LIB" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 # byte-compile now so the first faceup-auth on the PAM path doesn't pay for it
 /usr/bin/python3 -m compileall -q -j0 "$LIB" >/dev/null 2>&1 || true
-cat > "$BIN" <<EOF
+# Both launchers run as root (sudo, pkexec, PAM): python3 -I ignores every PYTHON* variable, the
+# user's site-packages and the cwd, so nothing in the caller's environment can load code; the
+# package path is set inside instead of through PYTHONPATH.
+launcher() {
+  cat <<EOF
 #!/bin/sh
-export PYTHONPATH="$LIB\${PYTHONPATH:+:\$PYTHONPATH}"
-exec /usr/bin/python3 -m faceup "\$@"
+exec /usr/bin/python3 -I -c 'import runpy, sys; sys.path.insert(0, "$LIB"); sys.argv[0] = "$2"; runpy.run_module("$1", run_name="__main__")' "\$@"
 EOF
-# The PAM entry point: fixed interpreter, fixed path, no user-controlled environment.
-cat > "$AUTH" <<EOF
-#!/bin/sh
-export PYTHONPATH="$LIB"
-exec /usr/bin/python3 -m faceup.client "\$@"
-EOF
+}
+launcher faceup faceup > "$BIN"
+launcher faceup.client faceup-auth > "$AUTH"
 chmod 755 "$BIN" "$AUTH"
 # native PAM module (keyring token + conversation messages); pam_exec stays the fallback
 if command -v gcc >/dev/null 2>&1; then

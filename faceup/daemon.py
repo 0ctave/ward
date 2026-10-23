@@ -20,12 +20,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import select
 import socket
 import threading
 import time
 
 SOCK_DIR = os.environ.get("FACEUP_RUN", "/run/faceup")
 SOCK = os.path.join(SOCK_DIR, "engine.sock")
+USER_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}\$?")
+BUSY_WAIT_S = 1.0          # a queued request waits this long for the cameras, then the client falls back
+STUCK_MARGIN_S = 15.0      # an attempt this far past its hard timeout is wedged: exit, systemd restarts us
+SEND_TIMEOUT_S = 5.0       # a client that stops reading drops events instead of blocking the attempt
 PAM_ENV = ("PAM_SERVICE", "PAM_TTY", "PAM_TYPE", "PAM_RHOST", "PAM_RUSER", "PAM_USER", "SSH_CONNECTION", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_ID")
 
 
@@ -38,6 +44,8 @@ class Resident:
         self.models = None
         self.key = None
         self.lock = threading.Lock()
+        self.started = 0.0          # monotonic start of the running attempt (0 = idle)
+        self.budget_s = 0.0         # its hard timeout
         self.warm(cfgmod.load())
 
     def _models_key(self, cfg: dict) -> tuple:
@@ -60,12 +68,25 @@ class Resident:
             pass
         self.models, self.key = m, key
 
-    def attempt(self, req: dict, send) -> None:
+    def attempt(self, req: dict, send, alive=lambda: True) -> None:
         from .engine.auth import Engine
+        user = req.get("user")
+        if not isinstance(user, str) or not USER_RE.fullmatch(user):
+            send({"error": "invalid user"}); return            # before the cameras, so the client falls back
         cfg = self.cfgmod.load()
         env = {k: v for k, v in (req.get("env") or {}).items() if k in PAM_ENV and isinstance(v, str)}
         saved = {k: os.environ.get(k) for k in PAM_ENV}
-        with self.lock:
+        if not self.lock.acquire(timeout=BUSY_WAIT_S):
+            started = self.started
+            if started and time.monotonic() - started > self.budget_s + STUCK_MARGIN_S:
+                print("faceupd: an attempt is wedged (camera driver?): exiting for a restart", flush=True)
+                os._exit(1)                                    # Restart=on-failure brings up a fresh daemon
+            send({"error": "busy"}); return
+        try:
+            if not alive():
+                return                                         # the client gave up while queued: no phantom attempt
+            self.started = time.monotonic()
+            self.budget_s = float(cfg.get("timing", {}).get("hard_timeout_ms", 8000)) / 1000
             try:
                 for k in PAM_ENV:
                     if k in env:
@@ -77,13 +98,16 @@ class Resident:
                 eng.events = lambda kind, **kw: send({"event": kind, **kw})
                 if req.get("verbose"):
                     eng.say = lambda msg: send({"say": msg})
-                out = eng.authenticate(str(req["user"]))
+                out = eng.authenticate(user)
             finally:
                 for k, v in saved.items():
                     if v is None:
                         os.environ.pop(k, None)
                     else:
                         os.environ[k] = v
+        finally:
+            self.started = 0.0
+            self.lock.release()
         send({"outcome": outcome_dict(out)})
 
 
@@ -126,18 +150,34 @@ def handle(res: Resident, conn: socket.socket) -> None:
             conn.settimeout(2.0)
             f = conn.makefile("rwb", buffering=0)
             req = json.loads(f.readline().decode() or "{}")
-            conn.settimeout(None)
+            conn.settimeout(SEND_TIMEOUT_S)
             if req.get("ping"):
                 f.write(b'{"pong": true}\n'); return
+            dead = []
 
             def send(obj):
+                if dead:
+                    return
                 try:
                     f.write((json.dumps(obj, default=str) + "\n").encode())
-                except OSError:
-                    pass                                       # the client left: finish and log anyway
-            res.attempt(req, send)
+                except OSError:                                # incl. timeout: a stalled reader
+                    dead.append(1)                             # the client left: finish and log anyway
+            res.attempt(req, send, alive=lambda: peer_alive(conn))
         except Exception as e:                                 # one bad request never stops the daemon
             try:
                 conn.sendall((json.dumps({"error": f"{type(e).__name__}: {e}"}) + "\n").encode())
             except OSError:
                 pass
+
+
+def peer_alive(conn: socket.socket) -> bool:
+    """False once the client hung up (EOF or error pending); never blocks."""
+    try:
+        r, _, x = select.select([conn], [], [conn], 0)
+        if x:
+            return False
+        if r:
+            return conn.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) != b""
+    except (OSError, ValueError):
+        return False
+    return True
