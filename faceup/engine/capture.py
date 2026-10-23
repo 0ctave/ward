@@ -282,10 +282,8 @@ class Capture:
 
     def close(self) -> None:
         late, self._late = self._late, None
-        if late is not None:                   # still opening the secondary camera: wait, then release it
-            late._thread.join(timeout=4.0)
-            for c in late.late.values():
-                c.release()
+        if late is not None:                   # still opening the secondary camera: whatever it opens is released
+            late.cancel(caps=False)
         for r in self.readers.values():
             r.stop = True
         for r in self.readers.values():
@@ -378,6 +376,8 @@ class PendingCapture:
         self.late: dict[str, cv2.VideoCapture] = {}
         self._error: CaptureError | None = None
         self.primary_open = threading.Event()        # the first (IR) device is streaming, or failed
+        self._lock = threading.Lock()
+        self._cancelled = False                      # nobody will use what opens from now on: release it
         self._thread = threading.Thread(target=self._run, name="faceup-open", daemon=True)
         self._thread.start()
 
@@ -388,7 +388,8 @@ class PendingCapture:
             order = sorted(self.devices, key=lambda s: s != "ir")
             self.primary = order[0]
             decide = _light_filter(self.devices, self.notes)
-            self._caps[self.primary] = _open_one(self.primary, self.devices[self.primary])
+            if not self._keep(self._caps, self.primary, _open_one(self.primary, self.devices[self.primary])):
+                return
         except CaptureError as e:
             self._error = e
             return
@@ -398,10 +399,20 @@ class PendingCapture:
         if decide is not None:
             rest = decide(rest)
         for s, p in rest.items():                    # one secondary at most (RGB)
+            if self._cancelled:
+                return
             try:
-                self.late[s] = _open_one(s, p)
+                self._keep(self.late, s, _open_one(s, p))
             except CaptureError as e:
                 self.notes.append(f"{e} — continuing with {self.primary.upper()} alone")
+
+    def _keep(self, into: dict, spectrum: str, cap) -> bool:
+        with self._lock:
+            if self._cancelled:
+                cap.release()
+                return False
+            into[spectrum] = cap
+            return True
 
     def wait_primary(self, timeout: float) -> None:
         """Block until the first device streams (or failed), at most `timeout` s."""
@@ -426,8 +437,15 @@ class PendingCapture:
         cap.notes[:0] = self.notes
         return cap
 
-    def cancel(self) -> None:
-        """Release the devices if nobody will use them."""
-        self._thread.join()
-        for cap in list(self._caps.values()) + list(self.late.values()):
+    def cancel(self, caps: bool = True) -> None:
+        """Release the devices if nobody will use them — never blocks: a device the open thread is
+        still opening is released by that thread as soon as it opens. caps=False keeps the
+        primary (already handed to a Capture) and gives up only the secondary."""
+        with self._lock:
+            self._cancelled = True
+            held = list(self.late.values()) + (list(self._caps.values()) if caps else [])
+            self.late.clear()
+            if caps:
+                self._caps.clear()
+        for cap in held:
             cap.release()

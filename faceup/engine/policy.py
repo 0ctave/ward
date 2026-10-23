@@ -34,6 +34,8 @@ PRESETS = {
                     "required_votes": 2, "need_strong_voter": True, "learn": False, "gate_delta": -0.05, "gate_max": 0.35},
 }
 STRONG_VOTERS = ("shadow", "cnn")
+SPOOF_VOTERS = ("cross", "shadow", "cnn")   # a FAIL from these is sticky for the attempt (motion stays soft)
+SPOOF_TAIL_BYTES = 1 << 20
 SERVICE_KEYS = {"sudo": "policy_sudo", "sudo-i": "policy_sudo", "su": "policy_sudo", "su-l": "policy_sudo", "doas": "policy_sudo",
                 "polkit-1": "policy_polkit", "gdm-password": "policy_unlock", "kde": "policy_unlock", "sddm": "policy_login",
                 "lightdm": "policy_login", "login": "policy_login", "greetd": "policy_login"}
@@ -88,8 +90,13 @@ def describe(level: str) -> str:
 def spoof_times(log_path, user: str, since_s: float) -> list[float]:
     """Timestamps (epoch) of liveness FAIL results for `user` in the last `since_s` seconds."""
     out: list[float] = []
+    # a byte tail, filtered by TIME below: a fixed line count let other users' and services'
+    # attempts push a user's spoof lines out of view (1 MB ≈ 5000+ attempts)
     try:
-        lines = open(log_path).read().splitlines()[-400:]
+        with open(log_path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - SPOOF_TAIL_BYTES))
+            lines = f.read().decode(errors="replace").splitlines()
     except OSError:
         return out
     now = time.time()

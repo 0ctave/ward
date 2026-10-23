@@ -4,6 +4,14 @@
 
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
+### Security audit
+- **PAM helper environment (critical):** `pam_faceup.so` now `clearenv()`s both root children (the faceup-auth helper and the systemd-creds unseal) and sets only PATH, LANG and PAM_*; through setuid sudo / the polkit agent the inherited environment was the unprivileged caller's (PYTHONHOME, HOME → user site-packages = root code before the password). Both launchers run `python3 -I` with the package path set inside, ignoring every PYTHON* variable and the user site (`faceup` no longer appends the caller's PYTHONPATH).
+- **Fail open in the PAM module:** the unseal abort kills and reaps with a bound (a decrypt wedged in the TPM no longer holds back the password module); an unreaped or buffer-filling unseal is never read as a good secret; SIGCHLD is defaulted around the helper (pam_exec-style) and a give-up kills the whole group.
+- **Resident engine:** a queued request waits ≤ 1 s for the cameras then answers `busy` (no phantom attempts for clients that left, no handler pile-up); an attempt far past its hard timeout makes the daemon exit for a systemd restart; writes time out; the user name is validated before the cameras. The client falls back to the in-process engine on any daemon error before the attempt starts.
+- **Liveness:** a FAIL from cross-spectrum, shadow or the CNN is sticky — the attempt ends as `spoof:*` (counted by the lockout) instead of waiting for a frame that slips through; motion stays soft. The lockout reads a 1 MB time-filtered tail instead of 400 shared lines. Online learning needs a cross/shadow/CNN PASS (never motion alone) and `learn_max_dist` is clamped to gate − 0.10.
+- **Privileges:** the app never runs a user-writable checkout as root through pkexec (installed launcher, or opt in with `FACEUP_DEV_PKEXEC=1`); the polkit action is `auth_admin` (not remembered — another process of the session could reuse a kept grant for any subcommand).
+- **Robustness:** a late camera open after `close()` or a failed attempt start (open timeout, model load error) is released by a non-blocking cancel; the log readers survive invalid UTF-8; the People page ignores an unexpected `models --json` reply.
+
 ### Cleanup
 - Removed dead code (unused pose/sfm helpers, howdy `set_many`/`pam_enabled`, `ambient.is_dark`,
   `appui.cue_angle`, unused constants and an import-time gamma LUT in gui).

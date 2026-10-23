@@ -50,6 +50,17 @@ class Learning(unittest.TestCase):
         self.assertGreater(self.st.distance(self.base, e2), 0.30)
         self.assertEqual(self.learn(e2), "")                                 # a learned model is no anchor
 
+    def test_motion_only_accept_never_learns(self):
+        # A3: a motion PASS alone is weak liveness — it must not widen the accept region
+        self.votes = [Vote("motion", Result.PASS, ""), Vote("cross", Result.ABSTAIN, "")]
+        self.assertEqual(self.learn(self.step_away(self.base, 0.2)), "")
+
+    def test_learn_distance_never_exceeds_gate_minus_margin(self):
+        e = self.step_away(self.base, 0.28)
+        eng = types.SimpleNamespace(_last_fused={"ir": e}, _last_samples={"ir": [e] * 3}, models=None)
+        beh = dict(self.BEH, learn_max_dist=0.60)                            # hand-edited past the gate
+        self.assertEqual(Engine._learn(eng, self.st, {}, {"ir": 0.0}, self.votes, beh, {"certainty": 0.35}), "")
+
     def test_single_frame_never_learns(self):
         self.assertEqual(self.learn(self.step_away(self.base, 0.2), frames=1), "")
 

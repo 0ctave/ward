@@ -9,8 +9,8 @@ the CLI stays complete on its own and the two can never disagree.
 
 Privileges: the window runs as the logged-in user — a GUI toolkit never runs as root. Reading the
 status, the config and the log needs nothing; each action that touches /etc/faceup, PAM or the
-keyring runs through `pkexec` (polkit action org.faceup.app: administrator password, remembered
-for a few minutes). The face store is 0600, so the People page asks once to show it and reads it
+keyring runs through `pkexec` (polkit action org.faceup.app: administrator password, asked
+for each action — not remembered, so no other process can reuse it). The face store is 0600, so the People page asks once to show it and reads it
 via `faceup models --json`. Started as root (`sudo faceup app`) it simply runs everything directly.
 """
 from __future__ import annotations
@@ -42,13 +42,17 @@ def faceup_cmd(argv: list[str]) -> list[str]:
 
 def priv_cmd(argv: list[str], root: bool | None = None, pkg_parent: str = PKG_PARENT) -> list[str]:
     """`faceup …` with administrator rights. As root: directly. Otherwise through pkexec — the
-    installed launcher when this IS the installed package (that path carries the polkit action and
-    its remembered authorisation), else this checkout via env (pkexec clears the environment)."""
+    root-owned installed launcher (it carries the polkit action). Never a user-writable checkout as
+    root (any process of the user could edit it before the next action) unless the developer opts in
+    with FACEUP_DEV_PKEXEC=1; without an install the command just explains what to do."""
     if root if root is not None else os.geteuid() == 0:
         return faceup_cmd(argv)
-    if pkg_parent == "/usr/local/lib/faceup" and os.path.exists(INSTALLED):
+    if os.environ.get("FACEUP_DEV_PKEXEC") == "1" and pkg_parent != "/usr/local/lib/faceup":
+        return ["pkexec", "env", f"PYTHONPATH={pkg_parent}", "NO_COLOR=1", sys.executable, "-m", "faceup", *argv]
+    if os.path.exists(INSTALLED):
         return ["pkexec", INSTALLED, *argv]
-    return ["pkexec", "env", f"PYTHONPATH={pkg_parent}", "NO_COLOR=1", sys.executable, "-m", "faceup", *argv]
+    return ["sh", "-c", "echo 'faceup is not installed: run sudo ./install.sh first "
+            "(or FACEUP_DEV_PKEXEC=1 to run this checkout as root)' >&2; exit 1"]
 
 
 def child_env() -> dict:
@@ -277,7 +281,10 @@ def main(argv=None) -> int:
                 except Exception as e:
                     rep = {"sections": [health.Section("error", "Error", [health.Item("fail", str(e))])], "identities": [], "conditions": [],
                            "policy": "", "attempts": {}, "user": manage.invoking_user(), "profile": "-", "calibrated": None, "root": ROOT}
-                rep["rows"] = att.read(cfgmod.LOG_PATH, 500)
+                try:
+                    rep["rows"] = att.read(cfgmod.LOG_PATH, 500)
+                except Exception:
+                    rep["rows"] = []
                 try:
                     from .cli import daemon_state
                     rep["daemon"] = daemon_state()           # systemctl calls: off the GTK thread
@@ -302,6 +309,8 @@ def main(argv=None) -> int:
                     data = json.loads(out.strip().splitlines()[-1]) if rc == 0 else None
                 except (ValueError, IndexError):
                     data = None
+                if not (isinstance(data, dict) and isinstance(data.get("people"), list)):
+                    data = None                        # an unexpected reply reads like no reply
                 if data is not None:
                     self.people = data["people"]; self.calibrated = data.get("calibrated", "")
                 elif self.people is None and rc == 1:

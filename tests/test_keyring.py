@@ -190,6 +190,37 @@ class NativeModule(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertTrue(seen and all(m == "hold" for _, m in seen))
 
+    def test_helper_gets_a_scrubbed_environment(self):
+        # PAM-1: through setuid sudo / polkit the caller's environment is the unprivileged user's;
+        # the root helper must not inherit PYTHONHOME, HOME (user site-packages) or the like
+        os.environ["PYTHONHOME"] = "/tmp/evil"; os.environ["FACEUP_CANARY"] = "x"
+        try:
+            rc, seen, _ = self._pam(0, None, body="#!/bin/sh\necho \"home=${PYTHONHOME:-unset} canary=${FACEUP_CANARY:-unset} user=$PAM_USER\"\nexit 0\n")
+        finally:
+            os.environ.pop("PYTHONHOME", None); os.environ.pop("FACEUP_CANARY", None)
+        self.assertEqual(rc, 0)
+        self.assertIn("home=unset canary=unset user=tester", [m for _, m in seen])
+
+    def test_reject_does_not_wait_for_a_stuck_unseal(self):
+        # PAM-2: a decrypt that ignores SIGTERM (wedged TPM) must not hold back the password module
+        import time as _t
+        d = self.dir
+        slow = d / "slowcreds.sh"; slow.write_text("#!/bin/sh\ntrap '' TERM\nsleep 30\n"); slow.chmod(0o755)
+        t = _t.monotonic()
+        rc, _, tok = self._pam(1, "s3cret", opts=f" creds={slow}")
+        self.assertLess(_t.monotonic() - t, 4.0)
+        self.assertNotEqual(rc, 0); self.assertIsNone(tok)
+
+    def test_accept_survives_an_ignored_sigchld(self):
+        # PAM-5: a caller with SIGCHLD ignored must not turn an accept into a failure (ECHILD)
+        import signal as _s
+        old = _s.signal(_s.SIGCHLD, _s.SIG_IGN)
+        try:
+            rc, _, _ = self._pam(0, None)
+        finally:
+            _s.signal(_s.SIGCHLD, old)
+        self.assertEqual(rc, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

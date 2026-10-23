@@ -27,6 +27,15 @@ class Parse(unittest.TestCase):
         self.assertEqual(rows[2]["service"], "sudo"); self.assertEqual(rows[3]["service"], "gdm-password")
         self.assertEqual(rows[4]["reason"], "spoof")
 
+    def test_read_survives_invalid_utf8(self):
+        # R4: a torn multibyte write must not crash the app's refresh / doctor / `faceup log`
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "log"
+            p.write_bytes(LINES.splitlines()[0].encode() + b"\nx\xff\n")
+            self.assertEqual(len(attempts.read(p)), 1)
+
     def test_summary(self):
         rows = [r for r in (attempts.parse(l) for l in LINES.splitlines()) if r]
         s = attempts.summary(rows)

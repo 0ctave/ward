@@ -295,6 +295,27 @@ class FastPath(unittest.TestCase):
         with self.assertRaises(CaptureError):
             Capture.open_async({"ir": "", "rgb": ""}).result(timeout=5)
 
+    def test_cancel_releases_devices_opened_after_it(self):
+        # R2/R3: close()/a failed attempt must never leave a late-opening camera held by nobody
+        import threading as _th
+        import time as _t
+        from faceup.engine import capture as capmod
+        released = []
+
+        class FakeCap:
+            def __init__(self, s): self.s = s
+            def release(self): released.append(self.s)
+        go = _th.Event()
+
+        def slow_open(spectrum, path, *a, **k):
+            go.wait(2); return FakeCap(spectrum)
+        mock = unittest.mock
+        with mock.patch.object(capmod, "_open_one", slow_open), mock.patch.object(capmod, "_light_filter", lambda d, n: None):
+            p = capmod.PendingCapture({"ir": "/dev/a", "rgb": "/dev/b"})
+            t = _t.monotonic(); p.cancel(); self.assertLess(_t.monotonic() - t, 0.5)   # never blocks
+            go.set(); p._thread.join(2)
+        self.assertEqual(released, ["ir"])                                       # opened after cancel → released, RGB never opened
+
     def test_hw_apply_is_cheap_and_needs_no_subprocess(self):
         import time
         from faceup import hw

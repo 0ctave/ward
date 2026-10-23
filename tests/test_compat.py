@@ -119,6 +119,18 @@ class Profiles(unittest.TestCase):
         self.assertIsNotNone(out.ir_dist); self.assertIsNotNone(out.rgb_dist)
         self.assertLess(out.ir_dist, 0.25)
 
+    def test_spoof_fail_is_sticky_for_the_attempt(self):
+        """A1: a cross FAIL on one frame then PASSes on later frames (an attacker probing angles)
+        must not accept; the attempt ends as spoof:cross so the lockout can count it."""
+        from faceup.engine import auth
+        from faceup.engine.liveness import FAIL, PASS
+        enrolled_store("sticky")
+        seq = iter([FAIL("cross", "face in RGB only — screen replay?")])
+        with mock.patch.object(auth.cross_spectrum, "vote", lambda *a, **k: next(seq, PASS("cross", "agree"))):
+            out = run_auth("sticky", frames_dir())
+        self.assertFalse(out.accepted, out.logline())
+        self.assertEqual(out.reason, "spoof:cross")
+
     def test_profile_b_ir_only(self):
         """IR only, no probed emitter, a STILL face: cross-spectrum has no RGB, shadow has no
         toggle, motion abstains — the documented rule asks for the password (the on-screen hint

@@ -39,6 +39,7 @@ def via_daemon(user: str, verbose: bool = False, path: str | None = None, fb=Non
     s = connect(path)
     if s is None:
         return None
+    started = False                                        # bound before any I/O: the except reads it
     with s:
         try:
             s.settimeout(timeout)
@@ -46,10 +47,10 @@ def via_daemon(user: str, verbose: bool = False, path: str | None = None, fb=Non
             env = {k: os.environ[k] for k in ("PAM_SERVICE", "PAM_TTY", "PAM_TYPE", "PAM_RHOST", "PAM_RUSER", "PAM_USER",
                                                "SSH_CONNECTION", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_ID") if k in os.environ}
             f.write((json.dumps({"user": user, "env": env, "verbose": verbose}) + "\n").encode())
-            started = False
             for raw in f:
                 msg = json.loads(raw.decode())
-                started = True
+                if "outcome" in msg or "event" in msg or "say" in msg:
+                    started = True                         # an error before any of these: fall back
                 if "outcome" in msg:
                     o = msg["outcome"]
                     o["votes"] = [_vote(v) for v in o.get("votes", [])]
@@ -63,7 +64,9 @@ def via_daemon(user: str, verbose: bool = False, path: str | None = None, fb=Non
                     return None if not started else SimpleNamespace(accepted=False, reason="daemon", detail=msg["error"],
                                                                     votes=[], ir_dist=None, rgb_dist=None, elapsed_ms=0, logline="")
         except (OSError, ValueError):
-            pass
+            if started:                                    # mid-attempt the cameras are the daemon's: no retry
+                return SimpleNamespace(accepted=False, reason="daemon", detail="daemon connection lost",
+                                       votes=[], ir_dist=None, rgb_dist=None, elapsed_ms=0, logline="")
     return None
 
 
@@ -91,8 +94,8 @@ def main(argv: list[str] | None = None) -> int:
                     if verbose:
                         print(("✔ " if out.accepted else "✘ ") + out.logline, flush=True)
                     return 0 if out.accepted else 1
-                fb.finish(SimpleNamespace(accepted=False, reason="camera", votes=[], ir_dist=None, rgb_dist=None, elapsed_ms=0))
-                return 1
+                if fb.spinner:                             # the daemon declined before starting: the engine decides
+                    fb.spinner.stop(); fb.spinner = None
         except LookupError:
             pass
         except Exception:

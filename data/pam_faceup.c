@@ -101,7 +101,19 @@ static const char *item_str(pam_handle_t *pamh, int type) {
 
 /* Run the helper as root with PAM_* in its environment; forward each stdout line as a PAM
  * info message; return its exit status (or -1). */
+static int run_helper_(pam_handle_t *pamh, const struct opts *o, const char *user);
+/* like pam_exec: the caller may ignore or reap SIGCHLD itself, which would make our waitpid
+ * fail (ECHILD) and turn a real accept into a failure — default it for the helper's lifetime */
 static int run_helper(pam_handle_t *pamh, const struct opts *o, const char *user) {
+    struct sigaction dfl, old;
+    memset(&dfl, 0, sizeof dfl); dfl.sa_handler = SIG_DFL; sigemptyset(&dfl.sa_mask);
+    int saved = sigaction(SIGCHLD, &dfl, &old) == 0;
+    int rc = run_helper_(pamh, o, user);
+    if (saved) sigaction(SIGCHLD, &old, NULL);
+    return rc;
+}
+
+static int run_helper_(pam_handle_t *pamh, const struct opts *o, const char *user) {
     int fds[2];
     if (pipe(fds) != 0) return -1;
     pid_t pid = fork();
@@ -115,6 +127,10 @@ static int run_helper(pam_handle_t *pamh, const struct opts *o, const char *user
         for (int fd = 3; fd < 256; fd++) close(fd);
         /* sudo runs PAM with real uid = the caller: make both uids root so the helper can read the store */
         if (geteuid() == 0 && (setgid(0) != 0 || setuid(0) != 0)) _exit(126);
+        /* a root child must not inherit the caller's environment: through setuid sudo or the
+         * polkit agent helper that is the unprivileged user's (PYTHONHOME, HOME → user site…) */
+        clearenv();
+        setenv("LANG", "C.UTF-8", 1);
         setenv("PAM_USER", user, 1);
         setenv("PAM_TYPE", "auth", 1);
         setenv("PAM_SERVICE", item_str(pamh, PAM_SERVICE), 1);
@@ -160,7 +176,11 @@ static int run_helper(pam_handle_t *pamh, const struct opts *o, const char *user
         pid_t w = waitpid(pid, &status, WNOHANG);
         if (w == pid) break;
         if (w < 0) return -1;
-        if (i == 199) { kill(pid, SIGKILL); return -1; }
+        if (i == 199) {                                             /* still exiting: kill it whole, one last reap */
+            kill(-pid, SIGKILL); kill(pid, SIGKILL);
+            usleep(10000); waitpid(pid, NULL, WNOHANG);
+            return -1;
+        }
         usleep(10000);
     }
     if (timed_out || !WIFEXITED(status)) return -1;
@@ -194,6 +214,9 @@ static void unseal_start(const struct opts *o, const char *user, struct unseal_j
         dup2(fds[1], 1); close(fds[1]);
         for (int fd = 3; fd < 256; fd++) close(fd);
         if (geteuid() == 0 && (setgid(0) != 0 || setuid(0) != 0)) _exit(126);
+        clearenv();                                             /* never the caller's environment as root */
+        setenv("LANG", "C.UTF-8", 1);
+        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
         execl(o->creds, o->creds, "decrypt", name, path, "-", (char *)NULL);
         _exit(127);
     }
@@ -225,10 +248,21 @@ static int unseal_finish(struct unseal_job *j, char *buf, size_t size) {
         if (got >= size - 1) break;
     }
     close(j->fd);
-    int status = 0;
+    j->active = 0;
+    int status = 0, reaped = 0;
     if (timed_out) kill(j->pid, SIGKILL);
-    for (int i = 0; i < 200 && waitpid(j->pid, &status, WNOHANG) == 0; i++) usleep(10000);
-    if (timed_out) { memset(buf, 0, size); return -1; }
+    for (int i = 0; i < 200; i++) {
+        pid_t w = waitpid(j->pid, &status, WNOHANG);
+        if (w == j->pid) { reaped = 1; break; }
+        if (w < 0) break;
+        usleep(10000);
+    }
+    if (!reaped) {                                              /* never read an unreaped child as success */
+        kill(j->pid, SIGKILL);
+        for (int i = 0; i < 20 && waitpid(j->pid, NULL, WNOHANG) == 0; i++) usleep(10000);
+        memset(buf, 0, size); return -1;
+    }
+    if (timed_out || got >= size - 1) { memset(buf, 0, size); return -1; }   /* a full buffer may be truncated */
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || got == 0) { memset(buf, 0, size); return -1; }
     buf[got] = '\0';
     while (got && (buf[got - 1] == '\n' || buf[got - 1] == '\r')) buf[--got] = '\0';
@@ -237,9 +271,10 @@ static int unseal_finish(struct unseal_job *j, char *buf, size_t size) {
 
 static void unseal_abort(struct unseal_job *j) {
     if (!j->active) return;
-    kill(j->pid, SIGTERM);
+    /* bounded: a decrypt wedged in the TPM driver must never hold back the password module */
+    kill(j->pid, SIGKILL);
     close(j->fd);
-    waitpid(j->pid, NULL, 0);
+    for (int i = 0; i < 50 && waitpid(j->pid, NULL, WNOHANG) == 0; i++) usleep(10000);
     j->active = 0;
 }
 

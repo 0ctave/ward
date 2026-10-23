@@ -56,8 +56,21 @@ class Privileges(unittest.TestCase):
     def test_actions_go_through_pkexec_unless_root(self):
         self.assertEqual(app.priv_cmd(["tune"], root=True)[-2:], ["faceup", "tune"])
         self.assertNotIn("pkexec", app.priv_cmd(["tune"], root=True))
-        dev = app.priv_cmd(["models", "--json"], root=False, pkg_parent="/home/x/faceup")
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FACEUP_DEV_PKEXEC": "1"}):
+            dev = app.priv_cmd(["models", "--json"], root=False, pkg_parent="/home/x/faceup")
         self.assertEqual(dev[0], "pkexec"); self.assertIn("PYTHONPATH=/home/x/faceup", dev); self.assertEqual(dev[-2:], ["models", "--json"])
+
+    def test_checkout_is_never_run_as_root_without_opt_in(self):
+        # priv-1: a user-writable checkout imported by root = root for anything that edits it
+        from unittest import mock
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FACEUP_DEV_PKEXEC", None)
+            with mock.patch("os.path.exists", return_value=True):
+                self.assertEqual(app.priv_cmd(["tune"], root=False, pkg_parent="/home/x/faceup"), ["pkexec", app.INSTALLED, "tune"])
+            with mock.patch("os.path.exists", return_value=False):
+                cmd = app.priv_cmd(["tune"], root=False, pkg_parent="/home/x/faceup")
+        self.assertNotIn("pkexec", cmd); self.assertFalse(any("PYTHONPATH" in c for c in cmd))
 
     def test_invoking_user_under_pkexec(self):
         from unittest import mock

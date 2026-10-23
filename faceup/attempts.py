@@ -51,7 +51,7 @@ def parse(line: str) -> dict | None:
 
 def read(path: Path, n: int | None = None) -> list[dict]:
     try:
-        lines = path.read_text().splitlines()
+        lines = path.read_text(errors="replace").splitlines()   # a torn multibyte write must not crash readers
     except OSError:
         return []
     rows = [r for r in (parse(ln) for ln in lines) if r]
@@ -86,7 +86,7 @@ def summary(rows: list[dict]) -> dict:
 
 def follow(path: Path, poll: float = 0.5):
     """Yield new attempt rows as they are appended (Ctrl+C to stop)."""
-    with open(path) as f:
+    with open(path, errors="replace") as f:
         f.seek(0, 2)
         while True:
             ln = f.readline()
