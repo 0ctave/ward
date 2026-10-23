@@ -8,6 +8,7 @@ Enrol once in normal light, unlock in any light; one coherent enrolment window; 
 - `packaging/build-deb.sh` builds a .deb offline with `dpkg-deb` (Depends python3, python3-opencv, python3-numpy; Recommends dlib, GTK 4/libadwaita, polkit); `packaging/faceup.spec` (RPM) and `packaging/PKGBUILD` (Arch) mirror it. All install under `/usr`, compile `pam_faceup.so` at build time, enable the resident engine on first install and never edit PAM; .deb/.rpm removal is refused while `/etc/pam.d` still references faceup.
 - `packaging/stage.sh` is the one file layout shared by `install.sh` and the packages (launchers, PAM module, desktop/polkit/icons/unit with the prefix substituted).
 - `faceup/paths.py`: the PAM line, the app's pkexec launcher and the daemon status follow the install prefix (`/usr` for a package, `/usr/local` from source) instead of hard-coding `/usr/local`.
+- `faceup pam enable` now rewrites a pam_exec line that points at the other prefix (from-source ↔ package switch) instead of keeping a path to a missing `faceup-auth` (review fix).
 
 ### Code layout (no behaviour change)
 

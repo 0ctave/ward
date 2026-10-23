@@ -115,7 +115,7 @@ def render_enabled(text: str, native: bool | None = None) -> str:
             if not _is_ours(ln):
                 out.append(ln); continue
             want = _native_line(_skip_count(lines, i + 1)) if native else LINE
-            current_ok = ("pam_faceup.so" in ln) if native else ("faceup-auth" in ln and "seteuid" in ln and "stdout" in ln)
+            current_ok = ("pam_faceup.so" in ln) if native else (ENGINE in ln and "seteuid" in ln and "stdout" in ln)
             out.append(ln if (current_ok and ("pam_faceup.so" in ln) == native and (not native or ln == want)) else want)
         return "".join(out)
     # insert before the first auth line that is a real module (pam_unix or pam_howdy)
