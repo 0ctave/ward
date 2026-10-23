@@ -126,8 +126,11 @@ def cmd_doctor(args) -> int:
     py, dlib_ok = probe.python_shadowed()
     if dlib_ok:
         ui.ok(f"`python3` on PATH ({py}) can import dlib + cv2")
-    else:
+    elif os.path.realpath(py) != os.path.realpath("/usr/bin/python3"):
         ui.fail(f"`python3` on PATH is {py} and cannot import dlib/cv2 (a pyenv/mise/conda Python shadows the system one)"); problems += 1
+    else:   # the system Python itself lacks dlib (not packaged on most distros): optional now
+        ui.warn(f"{py} cannot import dlib: the dlib recogniser is unavailable (ArcFace + YuNet still work)")
+        ui.tip(__import__("faceup.distro", fromlist=["hint"]).hint("dlib"))
     from ..engine.liveness import antispoof_cnn
     _as_ok, _ = antispoof_cnn.verify()
     if not _as_ok:
