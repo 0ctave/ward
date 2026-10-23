@@ -235,10 +235,11 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
     sec.items.append(Item("info", f"python {sys.version.split()[0]} · opencv {__import__('cv2').__version__} (YuNet {'yes' if det.yunet_available() else 'no'}) · dlib {'yes' if det.dlib is not None else 'no'}"))
     try:
         import gi; gi.require_version("Adw", "1"); from gi.repository import Adw  # noqa: F401
+        import cairo  # noqa: F401  (appui draws with pycairo)
         sec.items.append(Item("ok", "GTK 4 + libadwaita available"))
     except Exception:
         sec.items.append(Item("warn", "GTK 4 + libadwaita missing: windows fall back to text flows"))
-    sec.items.append(Item("info", f"gcc {'yes' if shutil.which('gcc') else 'no'} · TPM {'yes' if kr.has_tpm() else 'no'} · encrypted root {'yes' if kr.root_is_encrypted() else 'no'}"))
+    sec.items.append(Item("info", f"gcc {('yes' if os.path.exists('/usr/include/errno.h') else 'yes, no libc headers') if shutil.which('gcc') else 'no'} · TPM {'yes' if kr.has_tpm() else 'no'} · encrypted root {'yes' if kr.root_is_encrypted() else 'no'}"))
     return out
 
 

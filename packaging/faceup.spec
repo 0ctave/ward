@@ -14,6 +14,8 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  python3-rpm-macros
+BuildRequires:  python3
 Requires:       python3 >= 3.10
 Requires:       python3-opencv
 Requires:       python3-numpy

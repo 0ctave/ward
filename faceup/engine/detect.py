@@ -23,7 +23,26 @@ DLIB_DIRS = [
     Path("/usr/share/dlib"), Path("/usr/share/dlib-models"), Path("/usr/local/share/dlib"),
     Path("/usr/lib/howdy/dlib-data"), Path("/usr/share/howdy/dlib-data"), Path("/usr/lib/security/howdy/dlib-data"),
     Path("/usr/lib64/security/howdy/dlib-data")]
-YUNET_MODEL = Path(__file__).resolve().parents[1] / "models" / "face_detection_yunet_2022mar.onnx"
+_MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
+YUNET_2022 = _MODELS_DIR / "face_detection_yunet_2022mar.onnx"   # runs on OpenCV 4.5.4–4.7 (Ubuntu 22.04/24.04, Debian 12)
+YUNET_2023 = _MODELS_DIR / "face_detection_yunet_2023mar.onnx"   # OpenCV >= 4.8 (Fedora, Arch, Tumbleweed): the
+                                                                # 2022 graph fails there in forward() (measured 4.13, 5.0)
+
+
+def _cv_version() -> tuple[int, int]:
+    try:
+        return tuple(int(x) for x in cv2.__version__.split(".")[:2])  # type: ignore[return-value]
+    except (AttributeError, ValueError):
+        return (0, 0)
+
+
+def yunet_candidates() -> list[Path]:
+    """Bundled YuNet graphs, the one this OpenCV is expected to run first; the other is the retry."""
+    order = [YUNET_2023, YUNET_2022] if _cv_version() >= (4, 8) else [YUNET_2022, YUNET_2023]
+    return [p for p in order if p.exists()]
+
+
+YUNET_MODEL = (yunet_candidates() or [YUNET_2022])[0]
 YUNET_WIDTH = 480          # working width: 4 ms/frame on a laptop CPU, faces ≥ ~40 px
 YUNET_SCORE = 0.6          # small/far faces score lower; false positives are filtered by size and landmarks
 
@@ -71,7 +90,7 @@ class Box:
 
 
 def yunet_available() -> bool:
-    return YUNET_MODEL.exists() and hasattr(cv2, "FaceDetectorYN_create")
+    return bool(yunet_candidates()) and hasattr(cv2, "FaceDetectorYN_create")
 
 
 class Models:
@@ -85,11 +104,12 @@ class Models:
         self.accel = accel
         self.recogniser_kind = recogniser if recogniser in ("dlib", "arcface") else "dlib"
         self._arc = None
-        if dlib is None and self.recogniser_kind == "dlib":
-            raise RuntimeError("python3-dlib is not installed: install it, or `faceup recogniser install` + `recogniser use arcface`")
+        # no dlib: fail at the first dlib use (rec/sp5/sp68), not here — the detector, YuNet, ArcFace
+        # and every replay path with a patched embedder work without it (portability: Arch/SUSE/Debian)
         self._hog = dlib.get_frontal_face_detector() if dlib is not None else None
         self._yunet = None
         self._yunet_size = None
+        self._yunet_models = yunet_candidates()      # popped on a graph this OpenCV cannot run
         self._misses = 0          # consecutive full-frame misses; the 2x-upsampled search runs on every 4th
         self._cnn = None
         self._sp5 = None
@@ -126,7 +146,7 @@ class Models:
     @property
     def rec(self):
         if self._rec is None:
-            self._need_dlib("the dlib recogniser")
+            self._need_dlib("the dlib recogniser (or `faceup recogniser install` + `recogniser use arcface`)")
             self._rec = dlib.face_recognition_model_v1(str(model_path("dlib_face_recognition_resnet_model_v1.dat")))
         return self._rec
 
@@ -155,9 +175,15 @@ class Models:
         if self.recogniser_kind == "arcface":
             self.arc
             if dlib is not None:
-                self.sp5                              # only the fallback alignment (HOG/CNN boxes) needs it
-        else:
-            self.sp5; self.rec
+                try:
+                    self.sp5                          # only the fallback alignment (HOG/CNN boxes) needs it
+                except OSError:
+                    pass
+        elif dlib is not None:
+            try:
+                self.sp5; self.rec
+            except OSError:                           # dlib without its model files (Tumbleweed has no
+                pass                                  # dlib-models): the first embed raises the clear error
 
     def _yunet_detect(self, gray: np.ndarray) -> Box | None:
         H, W = gray.shape[:2]
@@ -166,7 +192,7 @@ class Models:
         if self._yunet is None:
             from .. import hw
             backend, target = hw.dnn_target(self.accel)
-            self._yunet = cv2.FaceDetectorYN_create(str(YUNET_MODEL), "", size, YUNET_SCORE, 0.3, 500, backend, target)
+            self._yunet = cv2.FaceDetectorYN_create(str(self._yunet_models[0]), "", size, YUNET_SCORE, 0.3, 500, backend, target)
             self._yunet_size = size
         elif size != self._yunet_size:
             self._yunet.setInputSize(size); self._yunet_size = size
@@ -189,6 +215,12 @@ class Models:
             try:
                 return self._yunet_detect(gray)
             except cv2.error as e:
+                if len(self._yunet_models) > 1:      # the other bundled graph (OpenCV version mismatch)
+                    self._yunet_models.pop(0); self._yunet = None
+                    try:
+                        return self._yunet_detect(gray)
+                    except cv2.error as e2:
+                        e = e2
                 # an OpenCV build whose DNN cannot run the bundled model (old 4.5.x, odd builds):
                 # use dlib's HOG for the rest of this process instead of failing every frame
                 if dlib is None:

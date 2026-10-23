@@ -4,6 +4,13 @@
 
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
+### Portability matrix (rootless podman)
+- `tests/containers/run.sh [fedora arch tumbleweed ubuntu2204 debian12]` (not part of `unittest discover`): installs the `faceup/distro.py` packages, runs the suite, `faceup doctor`, `faceup --help`, builds `pam_faceup.so` with stage.sh's flags and, on Fedora, the RPM. All five pass (Python 3.10–3.14, OpenCV 4.5.4–5.0); uses `--network=host` when neither slirp4netns nor pasta is installed.
+- **YuNet on OpenCV ≥ 4.8 (Fedora, Arch, Tumbleweed):** the bundled 2022 graph fails in `forward()` there, so every frame errored and, without dlib, no face was ever found. The 2023mar graph is now bundled too (Apache-2.0, sha256 pinned), picked by OpenCV version, with a one-time retry on the other graph. Measured 40/40 detections on recorded day IR/RGB and dark IR frames on 4.5.4, 4.6, 4.13 and 5.0.
+- **No dlib / no dlib models:** `Models()` no longer raises at construction and `preload()` tolerates missing pieces; dark/no-face outcomes come out as such and the first embedding raises the clear error (faceup-auth still fails open). The suite passes without dlib.
+- `distro.py` corrected from measurement: python3-dlib is not in Debian/Ubuntu/Fedora (Tumbleweed has it), GTK needs pycairo (`python3-gi-cairo`, `python3-gobject-cairo`, `python-cairo`), Debian needs `libc6-dev` beside gcc; numpy added. Doctor's GTK check imports cairo and its gcc line flags missing libc headers.
+- RPM spec: `BuildRequires: python3-rpm-macros` (`%py_byte_compile` was undefined on a clean Fedora). Keyring test: the ignored-SIGCHLD case no longer goes through pam_exec, which itself fails that way on Linux-PAM < 1.5.3.
+
 ### Distro packaging
 - `packaging/build-deb.sh` builds a .deb offline with `dpkg-deb` (Depends python3, python3-opencv, python3-numpy; Recommends dlib, GTK 4/libadwaita, polkit); `packaging/faceup.spec` (RPM) and `packaging/PKGBUILD` (Arch) mirror it. All install under `/usr`, compile `pam_faceup.so` at build time, enable the resident engine on first install and never edit PAM; .deb/.rpm removal is refused while `/etc/pam.d` still references faceup.
 - `packaging/stage.sh` is the one file layout shared by `install.sh` and the packages (launchers, PAM module, desktop/polkit/icons/unit with the prefix substituted).

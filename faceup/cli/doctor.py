@@ -229,11 +229,12 @@ def cmd_doctor(args) -> int:
             f" (YuNet {'yes' if _det.yunet_available() else 'no → HOG'}) · dlib {'yes' if _det.dlib is not None else 'no (ArcFace + YuNet path only)'}")
     try:
         import gi; gi.require_version("Adw", "1"); from gi.repository import Adw  # noqa
+        import cairo  # noqa: F401  (appui draws with pycairo: python3-gi-cairo / python3-gobject-cairo)
         ui.info("GTK 4 + libadwaita: yes (windows) ")
     except Exception:
         ui.warn("GTK 4 + libadwaita missing: enroll/calibrate fall back to text (--guided / --text)"); ui.tip(__import__("faceup.distro", fromlist=["hint"]).hint("gtk"))
     ui.info(f"profile: {'A (IR + RGB)' if cfg['cameras']['ir'] and cfg['cameras']['rgb'] else 'B (IR only)' if cfg['cameras']['ir'] else 'C (RGB only)'}"
-            f" · gcc {'yes' if _sh.which('gcc') else 'no (pam_exec fallback, no keyring token)'} · TPM {'yes' if _kr.has_tpm() else 'no'} · encrypted root {'yes' if _kr.root_is_encrypted() else 'no'}")
+            f" · gcc {('yes' if os.path.exists('/usr/include/errno.h') else 'yes but no libc headers (' + __import__('faceup.distro', fromlist=['hint']).hint('gcc') + ')') if _sh.which('gcc') else 'no (pam_exec fallback, no keyring token)'} · TPM {'yes' if _kr.has_tpm() else 'no'} · encrypted root {'yes' if _kr.root_is_encrypted() else 'no'}")
 
     ui.section("Attempts")
     from .. import attempts

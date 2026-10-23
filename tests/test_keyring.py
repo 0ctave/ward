@@ -106,7 +106,7 @@ class NativeModule(unittest.TestCase):
         if r.returncode != 0:
             raise unittest.SkipTest(f"module did not build: {r.stderr}")
 
-    def _pam(self, helper_exit: int, cred: str | None, body: str | None = None, opts: str = ""):
+    def _pam(self, helper_exit: int, cred: str | None, body: str | None = None, opts: str = "", consumer: bool = True):
         """A real pam_authenticate over a private config dir (pam_start_confdir, Linux-PAM ≥ 1.4):
         our module first, then pam_exec with expose_authtok as the token consumer — the same
         way pam_gnome_keyring receives it."""
@@ -121,13 +121,13 @@ class NativeModule(unittest.TestCase):
         else:
             cp.write_text(cred + "\n")
         tokfile = d / "token"; tokfile.write_text("")
-        consumer = d / "consumer.sh"; consumer.write_text(f"#!/bin/sh\ncat > {tokfile}\n"); consumer.chmod(0o755)
+        cons = d / "consumer.sh"; cons.write_text(f"#!/bin/sh\ncat > {tokfile}\n"); cons.chmod(0o755)
         conf = d / "pam.d"; conf.mkdir(exist_ok=True)
         pam_exec = next((p for p in Path("/lib/x86_64-linux-gnu/security", ).glob("pam_exec.so")), None) or Path("pam_exec.so")
         (conf / "faceup-test").write_text(
             f"auth\t[success=1 default=ignore]\t{self.so} helper={helper} creds_dir={kd} creds={creds}{opts}\n"
             f"auth\trequisite\tpam_deny.so\n"
-            f"auth\toptional\t{pam_exec} quiet expose_authtok {consumer}\n")
+            + (f"auth\toptional\t{pam_exec} quiet expose_authtok {cons}\n" if consumer else "auth\toptional\tpam_permit.so\n"))
         libpam = ctypes.CDLL("libpam.so.0", mode=ctypes.RTLD_GLOBAL)
         if not hasattr(libpam, "pam_start_confdir"):
             self.skipTest("pam_start_confdir needs Linux-PAM >= 1.4")
@@ -216,7 +216,9 @@ class NativeModule(unittest.TestCase):
         import signal as _s
         old = _s.signal(_s.SIGCHLD, _s.SIG_IGN)
         try:
-            rc, _, _ = self._pam(0, None)
+            # no pam_exec consumer here: Linux-PAM < 1.5.3's pam_exec itself fails under an ignored
+            # SIGCHLD (PAM_PERM_DENIED on Debian 12 / Ubuntu 22.04, measured) — that is not our module
+            rc, _, _ = self._pam(0, None, consumer=False)
         finally:
             _s.signal(_s.SIGCHLD, old)
         self.assertEqual(rc, 0)

@@ -2,8 +2,11 @@ face_detection_yunet_2022mar.onnx — YuNet face detector by Shiqi Yu et al. (Op
 licensed under the Apache License 2.0. Source: https://github.com/opencv/opencv_zoo
 (commit c97242ce7f2a, models/face_detection_yunet/). sha256:
 50ef07f702a31741ca46a4c0d947773b64143b9362780237bf0d427d6c79bab7
-The 2022 model is bundled because the 2023 revision requires OpenCV >= 4.8, while
-Ubuntu 24.04 ships 4.6.
+face_detection_yunet_2023mar.onnx — the 2023 revision, same source and licence (opencv_zoo main,
+commit 48b10fa505ae, fetched 2026-10-23). sha256:
+8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+Both are bundled: the 2022 graph runs on OpenCV 4.5.4-4.7 (Ubuntu 22.04/24.04, Debian 12) but
+fails in forward() on >= 4.8; the 2023 graph needs >= 4.8 (Fedora, Arch, Tumbleweed).
 
 minifasnet_v2.onnx — MiniFASNetV2 silent face anti-spoofing network (80x80, 3 classes:
 0 print, 1 real, 2 replay) by Minivision AI (https://github.com/minivision-ai/Silent-Face-Anti-Spoofing,
