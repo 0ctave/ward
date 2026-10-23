@@ -134,3 +134,69 @@ class Robustness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SdNotify(unittest.TestCase):
+    """The stdlib sd_notify / watchdog used under Type=notify (no libsystemd)."""
+
+    def listener(self, abstract=False):
+        import socket
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        if abstract:
+            name = f"faceup-test-{os.getpid()}-{id(s)}"
+            s.bind("\0" + name); addr = "@" + name
+        else:
+            addr = os.path.join(tempfile.mkdtemp(dir=os.environ["FACEUP_ETC"]), "notify"); s.bind(addr)
+        s.settimeout(2)
+        self.addCleanup(s.close)
+        return s, addr
+
+    def test_path_socket_receives_state(self):
+        s, addr = self.listener()
+        self.assertTrue(daemon.sd_notify("READY=1\nSTATUS=x", env={"NOTIFY_SOCKET": addr}))
+        self.assertEqual(s.recv(256), b"READY=1\nSTATUS=x")
+
+    def test_abstract_socket(self):
+        s, addr = self.listener(abstract=True)
+        self.assertTrue(daemon.sd_notify("WATCHDOG=1", env={"NOTIFY_SOCKET": addr}))
+        self.assertEqual(s.recv(64), b"WATCHDOG=1")
+
+    def test_absent_or_broken_socket_is_a_noop(self):
+        self.assertFalse(daemon.sd_notify("READY=1", env={}))
+        self.assertFalse(daemon.sd_notify("READY=1", env={"NOTIFY_SOCKET": "relative"}))
+        self.assertFalse(daemon.sd_notify("READY=1", env={"NOTIFY_SOCKET": "/nonexistent/faceup/notify"}))
+
+    def test_watchdog_interval(self):
+        me = str(os.getpid())
+        self.assertEqual(daemon.watchdog_interval({"WATCHDOG_USEC": "30000000", "WATCHDOG_PID": me}), 15.0)
+        self.assertEqual(daemon.watchdog_interval({"WATCHDOG_USEC": "4000000"}), 2.0)
+        self.assertIsNone(daemon.watchdog_interval({}))
+        self.assertIsNone(daemon.watchdog_interval({"WATCHDOG_USEC": "junk"}))
+        self.assertIsNone(daemon.watchdog_interval({"WATCHDOG_USEC": "0"}))
+        self.assertIsNone(daemon.watchdog_interval({"WATCHDOG_USEC": "30000000", "WATCHDOG_PID": "1"}))
+
+    def test_wedged_attempt_silences_the_watchdog(self):
+        import time
+        res = daemon.Resident.__new__(daemon.Resident)
+        res.started, res.budget_s = 0.0, 8.0
+        self.assertFalse(res.wedged())
+        res.started = time.monotonic()
+        self.assertFalse(res.wedged())                                   # running, within its deadline
+        self.assertTrue(res.wedged(res.started + 8.0 + daemon.STUCK_MARGIN_S + 1))
+        pings, stop = [], threading.Event()
+
+        def run(wedge_at):
+            pings.clear(); stop.clear()
+            res.started = time.monotonic() - (100 if wedge_at else 0)
+            t = threading.Thread(target=daemon.watchdog_loop, args=(res, 0.01, stop, pings.append))
+            t.start(); time.sleep(0.08); stop.set(); t.join(1)
+            return list(pings)
+        self.assertGreaterEqual(len(run(False)), 2)
+        self.assertTrue(all(p == "WATCHDOG=1" for p in pings))
+        self.assertEqual(run(True), [])                                  # wedged: no ping → systemd restarts us
+
+    def test_unit_file_declares_notify_and_watchdog(self):
+        unit = open(os.path.join(os.path.dirname(__file__), "..", "data", "faceup.service")).read()
+        for line in ("Type=notify", "WatchdogSec=", "CapabilityBoundingSet=\n", "DevicePolicy=closed",
+                     "DeviceAllow=char-video4linux rw", "RestrictAddressFamilies=AF_UNIX", "MemoryMax="):
+            self.assertIn(line, unit)
