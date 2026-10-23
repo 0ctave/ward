@@ -525,8 +525,8 @@ def derive_from_holdout(dist_by_spectrum: dict) -> Result:
             res.w_threshold[sp] = thr
             res.w_p95[sp] = percentile([r[1] for r in rows if r[1] is not None], 95)
     for sp, cond in res.conditions.items():
-        if "dim" not in cond and "bright" not in cond and "dark" not in cond:
-            res.warnings.append(f"{sp}: only good light seen; night/bright rely on the whitened path and learning until seen")
+        if sp == "rgb" and "dim" not in cond and "bright" not in cond and "dark" not in cond:
+            res.warnings.append("rgb: registered in good light only — in a dark room the IR camera carries the unlock; learning adapts to the rest")
     return res
 
 

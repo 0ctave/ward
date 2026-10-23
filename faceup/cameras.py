@@ -33,7 +33,6 @@ class _FrmSize(ctypes.Structure):
 
 
 GREY_FORMATS = {"GREY", "Y8  ", "Y10 ", "Y12 ", "Y16 ", "Y10B", "Y16B"}
-COLOUR_FORMATS = {"MJPG", "YUYV", "UYVY", "NV12", "NV21", "RGB3", "BGR3", "YU12", "YV12", "H264"}
 IR_NAME_HINTS = ("ir cam", "ir camera", "infrared", " ir ", "ircam", "ir-", "depth")
 GENERIC_SERIALS = {"", "0", "01.00.00", "00000000", "1", "n/a", "none", "default"}
 

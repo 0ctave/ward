@@ -43,7 +43,8 @@ def profile_of(cfg: dict) -> str:
 
 def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: bool = False) -> dict:
     cfg = cfg or cfgmod.load()
-    user = user or os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
+    from .manage import invoking_user
+    user = user or invoking_user()
     out: dict = {"user": user, "profile": profile_of(cfg), "sections": [], "identities": [], "conditions": [],
                  "policy": "", "calibrated": None, "attempts": {}, "root": os.geteuid() == 0}
     S = out["sections"]
@@ -185,7 +186,10 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
     dis = kr.disabled_keyring_lines()
     if dis:
         sec.items.append(Item("fail", "keyring PAM lines were commented out by an earlier experiment", ["keyring", "repair"], "Repair"))
-    if ps.get("native") and ks["enrolled"]:
+    if ps.get("native") and ks["enrolled"] and ks.get("kind") == "tpm2" and kr.root_is_encrypted():
+        sec.items.append(Item("warn", "keyring password sealed with the TPM: 2–4 s per unlock (and it fails after firmware updates) — the encrypted disk's host key is instant",
+                              ["keyring", "enable"], "Re-seal"))
+    elif ps.get("native") and ks["enrolled"]:
         sec.items.append(Item("ok", "a face login unlocks the keyring"))
     elif ks["enrolled"] is None:
         sec.items.append(Item("info", "keyring credential: state needs root"))
@@ -195,6 +199,17 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
         sec.items.append(Item("info", "first login uses the password (skip_login)"))
     else:
         sec.items.append(Item("warn", "after a face login the keyring stays locked until first use", ["keyring", "enable"], "Unlock keyring by face"))
+
+    # ---- resident engine (speed)
+    try:
+        from .cli import daemon_state
+        ds = daemon_state()
+        if ds["active"]:
+            sec.items.append(Item("ok", "resident engine running: unlocks skip start-up and model loading"))
+        elif ds["installed"]:
+            sec.items.append(Item("warn", "resident engine stopped: each unlock loads everything first (~1 s slower)", ["daemon", "enable"], "Start"))
+    except Exception:
+        pass
 
     # ---- attempts
     sec = Section("attempts", "Attempts"); S.append(sec)

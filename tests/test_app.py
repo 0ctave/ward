@@ -52,5 +52,98 @@ class Health(unittest.TestCase):
         self.assertTrue(any("recognition alone" in it.text for it in eng.items))
 
 
+class Privileges(unittest.TestCase):
+    def test_actions_go_through_pkexec_unless_root(self):
+        self.assertEqual(app.priv_cmd(["tune"], root=True)[-2:], ["faceup", "tune"])
+        self.assertNotIn("pkexec", app.priv_cmd(["tune"], root=True))
+        dev = app.priv_cmd(["models", "--json"], root=False, pkg_parent="/home/x/faceup")
+        self.assertEqual(dev[0], "pkexec"); self.assertIn("PYTHONPATH=/home/x/faceup", dev); self.assertEqual(dev[-2:], ["models", "--json"])
+
+    def test_invoking_user_under_pkexec(self):
+        from unittest import mock
+        from faceup import manage
+        with mock.patch.dict(os.environ, {"PKEXEC_UID": str(os.getuid()), "USER": "root"}, clear=False):
+            os.environ.pop("SUDO_USER", None)
+            import pwd
+            self.assertEqual(manage.invoking_user(), pwd.getpwuid(os.getuid()).pw_name)
+        with mock.patch.dict(os.environ, {"SUDO_USER": "alice"}):
+            self.assertEqual(manage.invoking_user(), "alice")
+
+
+class OneWindow(unittest.TestCase):
+    """Registration and calibration draw inside the manager: snapshots cross a pipe as JSON lines."""
+
+    def test_snapshot_roundtrip(self):
+        import numpy as np
+        from faceup import display
+        fr = np.zeros((36, 64, 3), np.uint8); fr[:, :32] = (200, 40, 40)
+        line = display.encode_snapshot({"phase": "run", "frame": fr, "box": (1, 2, 3, 4), "progress": np.float32(0.5), "target": (-20.0, 0.0)})
+        self.assertNotIn("\n", line)
+        s = display.decode_snapshot(line)
+        self.assertEqual(s["phase"], "run"); self.assertEqual(s["box"], [1, 2, 3, 4]); self.assertAlmostEqual(s["progress"], 0.5)
+        self.assertEqual(s["frame"].shape, (36, 64, 3)); self.assertGreater(int(s["frame"][10, 5, 0]), 150)   # colour order kept
+        self.assertIsNone(display.decode_snapshot("not json"))
+
+    def test_camera_commands_are_streamed(self):
+        self.assertIn("enroll", app.CAMERA_CMDS); self.assertIn("calibrate", app.CAMERA_CMDS)
+        from faceup import cli
+        for cmd in (["enroll", "--stream-ui"], ["calibrate", "--stream-ui"]):
+            with self.assertRaises(SystemExit) as cm:
+                cli.main(cmd + ["--help"])
+            self.assertEqual(cm.exception.code, 0)
+
+
+class ModelsJson(unittest.TestCase):
+    def test_models_json_for_the_app(self):
+        import io, json
+        from contextlib import redirect_stdout
+        from faceup import cli
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cli.main(["models", "--json", "-U", "nobody-json"])
+        self.assertEqual(rc, 0)
+        data = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertEqual(data["user"], "nobody-json"); self.assertEqual(data["people"], [])
+
+
+class Manage(unittest.TestCase):
+    def _row(self, ok, reason="accept", who="", dark=False, ms=900, service=""):
+        return {"accepted": ok, "reason": reason, "result": reason, "who": who, "dark": dark, "ms": ms, "service": service, "time": "2026-10-23T10:00:00"}
+
+    def test_names(self):
+        from faceup import manage
+        self.assertEqual(manage.valid_name("Alice"), "")
+        for bad in ("", "-rf", "a" * 40, "x/y", "--identity"):
+            self.assertTrue(manage.valid_name(bad), bad)
+        self.assertIn("owner", manage.valid_name("octave", owner="octave"))
+
+    def test_people_from_store_and_log(self):
+        import numpy as np
+        from faceup import manage
+        from faceup.engine import store
+        st = store.Store(user="u")
+        e = np.ones(128) / np.sqrt(128)
+        st.add("C", "ir", e, 1.0); st.add("C", "rgb", e, 1.0)
+        st.add("C", "ir", e, 1.0, identity="Alice"); st.add("L", "ir", e, 1.0, condition="glasses")
+        rows = [self._row(True), self._row(True, who="Alice"), self._row(False, "no-match")]
+        ppl = manage.people(st, "u", rows)
+        self.assertEqual([p["name"] for p in ppl], ["u", "Alice"])
+        self.assertTrue(ppl[0]["owner"]); self.assertEqual(ppl[0]["models"], {"ir": 2, "rgb": 1})
+        self.assertEqual(ppl[0]["conditions"], ["glasses"]); self.assertEqual(ppl[1]["accepts"], 1)
+
+    def test_reliability_verdicts_and_advice(self):
+        from faceup import manage
+        self.assertEqual(manage.reliability([])["verdict"], "unknown")
+        good = manage.reliability([self._row(True)] * 20)
+        self.assertEqual(good["verdict"], "good"); self.assertEqual(good["overall"]["rate"], 1.0)
+        bad = manage.reliability([self._row(True)] * 5 + [self._row(False, "no-match")] * 5 + [self._row(False, "liveness")] * 4)
+        self.assertEqual(bad["verdict"], "poor")
+        argvs = [a for _, a in bad["advice"] if a]
+        self.assertIn(["enroll", "--fresh", "--selfcheck"], argvs); self.assertIn(["emitter", "toggle-bench"], argvs)
+        night = manage.reliability([self._row(True)] * 10 + [self._row(False, "no-match", dark=True)] * 4)
+        self.assertEqual(night["night"]["attempts"], 4); self.assertIn(["emitter", "probe"], [a for _, a in night["advice"]])
+        self.assertEqual(manage.reliability([self._row(False, "no-match")] * 80 + [self._row(True)] * 50)["overall"]["rate"], 1.0)   # last 50 only
+
+
 if __name__ == "__main__":
     unittest.main()

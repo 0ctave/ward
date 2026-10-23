@@ -186,5 +186,40 @@ class WatchdogTest(unittest.TestCase):
                 cap.close()
 
 
+class OpenOrder(unittest.TestCase):
+    """IR opens first and alone; the slow light read runs meanwhile and only decides RGB."""
+
+    def test_ir_first_light_read_in_parallel(self):
+        import threading, time
+        from unittest import mock
+        from faceup.engine import capture
+        order, ev = [], threading.Event()
+
+        def fake_open(sp, path):
+            order.append((sp, ev.is_set())); return mock.Mock()
+
+        def slow_light(devs, threshold=0):
+            time.sleep(0.2); return {"ir": devs["ir"]}, "dark room (1.0 lux): IR only"
+        devs = {"rgb": "/dev/video0", "ir": "/dev/video2"}
+        with mock.patch.object(capture, "_open_one", fake_open), mock.patch.object(capture.ambient, "for_light", slow_light):
+            notes = []
+            t = time.monotonic()
+            out = capture._open_all(devs, ev, capture._light_filter(devs, notes))
+        self.assertEqual(order, [("ir", False)])            # IR before the light answer; RGB dropped in the dark
+        self.assertEqual(list(out), ["ir"]); self.assertTrue(ev.is_set()); self.assertIn("IR only", notes[0])
+        self.assertLess(time.monotonic() - t, 1.0)
+
+    def test_light_answer_too_late_keeps_rgb(self):
+        import time
+        from unittest import mock
+        from faceup.engine import capture
+        devs = {"ir": "/dev/video2", "rgb": "/dev/video0"}
+        with mock.patch.object(capture, "_open_one", lambda sp, p: mock.Mock()), \
+             mock.patch.object(capture.ambient, "for_light", lambda d, threshold=0: (time.sleep(0.5), ({"ir": d["ir"]}, "dark"))[1]), \
+             mock.patch.object(capture, "LUX_WAIT_S", 0.05):
+            out = capture._open_all(devs, None, capture._light_filter(devs, []))
+        self.assertEqual(sorted(out), ["ir", "rgb"])          # fail open: no answer = both cameras
+
+
 if __name__ == "__main__":
     unittest.main()

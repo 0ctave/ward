@@ -29,8 +29,6 @@ RIGID_IDX = [36, 39, 42, 45, 27, 28, 29, 30, 31, 33, 35, 48, 54]
 _GENERIC = {36: (-225.0, 170.0, -135.0), 45: (225.0, 170.0, -135.0), 30: (0.0, 0.0, 0.0),
             48: (-150.0, -150.0, -125.0), 54: (150.0, -150.0, -125.0)}
 MIN_FRAMES = 40
-MIN_YAW_SPREAD = 25.0     # degrees of yaw range needed for a well-conditioned solve
-MIN_PITCH_SPREAD = 12.0
 
 
 class CalibrationError(Exception):
@@ -128,13 +126,6 @@ def personal_model(tracks: np.ndarray) -> tuple[np.ndarray, float]:
     S = fix_chirality(S)
     s, R, t = procrustes_rotation_only(S[idx], gen)
     return (s * (R @ S.T)).T + t, rms
-
-
-def pose_spread(poses: list[tuple[float, float]]) -> tuple[float, float]:
-    if not poses:
-        return 0.0, 0.0
-    ys = [p[0] for p in poses]; ps = [p[1] for p in poses]
-    return max(ys) - min(ys), max(ps) - min(ps)
 
 
 def calibrate(tracks68: np.ndarray, frame_w: int, frame_h: int, fast_poses: list[tuple[float, float]] | None = None) -> Calibration:

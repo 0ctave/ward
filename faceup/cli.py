@@ -6,9 +6,7 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
-import urllib.request
 
 from . import __version__, cameras, howdy, probe, ui
 from .engine import config as cfgmod
@@ -28,7 +26,7 @@ POSES = [
     ("close",      "Lean in close, like reading small text."),
 ]
 OPTIONAL_POSES = [
-    ("glasses", "Wearing your glasses (or without them, if you enrolled with them on)."),
+    ("glasses", "Wearing your glasses (or without them, if you registered with them on)."),
     ("headset", "Wearing headphones / a headset."),
     ("dark",    "Lights OFF — verifies the IR emitter is doing the work."),
 ]
@@ -42,7 +40,8 @@ def need_root(what: str) -> None:
 
 
 def real_user(args) -> str:
-    return getattr(args, "user", None) or os.environ.get("PAM_USER") or os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
+    from .manage import invoking_user
+    return getattr(args, "user", None) or os.environ.get("PAM_USER") or invoking_user()
 
 
 # ----------------------------------------------------------------- doctor ----
@@ -220,7 +219,7 @@ def cmd_doctor(args) -> int:
     try:
         st = storemod.load(user, recognise.DLIB_NAME if rk != "arcface" else f"arcface:{recognise.installed_variant() or 'unknown'}")
         if not st.models:
-            ui.fail(f"no models enrolled for {user}"); ui.tip("sudo faceup enroll"); problems += 1
+            ui.fail(f"no face registered for {user}"); ui.tip("sudo faceup enroll"); problems += 1
         else:
             by = {s: [m.label for m in st.by_spectrum(s)] for s in sorted(st.spectra())}
             for s, labels in by.items():
@@ -229,7 +228,7 @@ def cmd_doctor(args) -> int:
                     ui.tip("one pose ≈ one working angle — `sudo faceup enroll` adds more"); problems += 1
             missing = [s for s in ("ir", "rgb") if cfg["cameras"][s] and s not in st.spectra()]
             if missing:
-                ui.warn(f"camera(s) configured but not enrolled: {', '.join(missing)} — re-enroll"); problems += 1
+                ui.warn(f"camera(s) configured but not registered: {', '.join(missing)} — register again"); problems += 1
             from .engine import calibration as cal
             c = st.calib.get("calibration")
             if c:
@@ -245,7 +244,7 @@ def cmd_doctor(args) -> int:
                 ui.info(adv)
             learned = [m for m in st.models if m.learned]; enrolled = [m for m in st.models if not m.learned]
             if learned and len(learned) >= len(enrolled):
-                ui.warn(f"{len(learned)} learned models vs {len(enrolled)} enrolled — online learning is churning")
+                ui.warn(f"{len(learned)} learned models vs {len(enrolled)} registered — online learning is churning")
                 ui.tip("sudo faceup models --forget-learned   (novelty bar is now 0.25; old stores learned on every accept)"); problems += 1
             elif learned:
                 ui.info(f"{len(learned)} learned model(s) from use (night, glasses…)")
@@ -393,13 +392,22 @@ def cmd_tune(args) -> int:
 
 # ----------------------------------------------------------------- enroll ----
 def _display_available() -> bool:
-    """A graphical session the enrolment window can open on (directly or via the sudo/pkexec user's socket)."""
+    """A graphical session the registration window can open on (directly or via the sudo/pkexec user's socket)."""
     from . import display
-    return bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY") or display.user_wayland_env())
+    return bool(os.environ.get(display.STREAM_ENV) or os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY") or display.user_wayland_env())
+
+
+def _stream_ui(args) -> None:
+    """--stream-ui: the manager app draws the window; snapshots go to stdout (display.StreamDisplay)."""
+    if getattr(args, "stream_ui", False):
+        from . import display
+        os.environ[display.STREAM_ENV] = "1"
+        display.stream_out()                     # take stdout now: every message goes to the app's console
 
 
 def cmd_enroll(args) -> int:
     need_root("enroll")
+    _stream_ui(args)
     for k in ("fresh", "all", "selfcheck", "guided", "profile"):
         if not hasattr(args, k):
             setattr(args, k, False)
@@ -440,7 +448,7 @@ def cmd_enroll(args) -> int:
         ui.info(f"adding condition {condition!r} for {identity or user}: a short sweep, existing models stay")
     elif st.models:
         who = sorted({m.identity or user for m in st.models})
-        ui.info(f"already enrolled: {', '.join(who)}" + (f" · conditions: {', '.join(st.conditions())}" if st.conditions() else ""))
+        ui.info(f"already registered: {', '.join(who)}" + (f" · conditions: {', '.join(st.conditions())}" if st.conditions() else ""))
         if identity and identity not in {m.identity for m in st.models}:
             ui.info(f"registering a new identity: {identity}")
         elif args.fresh or (not window and ui.confirm(f"Delete {identity or user}'s models and start clean? (required after changing cameras)", default=False)):
@@ -451,9 +459,9 @@ def cmd_enroll(args) -> int:
         elif window:
             # the window asks nothing in the terminal: each pose it captures replaces that pose's
             # models; learned models, conditions and other people stay (`--fresh` wipes instead)
-            ui.info("re-enrolling: captured poses replace their old models (--fresh starts clean)")
+            ui.info("registering again: captured poses replace their old models (--fresh starts clean)")
     if window and not sys.stdin.isatty() and not _display_available():
-        ui.fail("no display for the enrolment window and no terminal to fall back to")
+        ui.fail("no display for the registration window and no terminal to fall back to")
         ui.tip("run `sudo faceup enroll --guided` in a terminal, or start it from the faceup app on your desktop")
         return 1
     poses = list(POSES)
@@ -476,8 +484,9 @@ def cmd_enroll(args) -> int:
         if not args.guided and not getattr(args, "classic", False):
             # ONE window: enroll + calibrate in a single guided sweep (the fused setup)
             from . import gui
-            ui.info("A window opens. Follow the arrow to bring your face into each target ring; it enrols")
-            ui.info("and tunes the gate in one pass. Enter skips a pose, Esc cancels.")
+            if not getattr(args, "stream_ui", False):
+                ui.info("A window opens. Follow the arrow to bring your face into each target ring; it registers")
+                ui.info("your face and tunes the gate in one pass. Enter skips a pose, Esc cancels.")
             try:
                 ui_models = models if cfg["recognition"]["detector"] != "cnn" else Models("yunet", 320, recogniser=models.recogniser_kind)
                 from .engine import calibration as cal
@@ -524,7 +533,7 @@ def cmd_enroll(args) -> int:
         existing = {m.label for m in st.models}
         for label, instruction in poses:
             if label in existing:
-                ui.info(f"{label}: already enrolled, skipping"); continue
+                ui.info(f"{label}: already registered, skipping"); continue
             print(); ui.info(f"{ui.bold(label)} — {instruction}")
             if ui.ask("Press Enter to capture, or s to skip", "").lower().startswith("s"):
                 continue
@@ -566,6 +575,7 @@ def cmd_calibrate(args) -> int:
     """session (default): measure the user's real distances and derive the gate + whitening
     threshold · refresh: re-derive from recent accepts · pose: rebuild the personal 3D model."""
     need_root("calibrate")
+    _stream_ui(args)
     action = getattr(args, "action", None) or "session"
     if action == "pose":
         return calibrate_pose(args)
@@ -763,13 +773,61 @@ def cmd_auth(args) -> int:
     eng = Engine(cfg, verbose=args.verbose)
     eng.events = fb.event
     out = eng.authenticate(user)
-    svc = os.environ.get("PAM_SERVICE")
-    if svc:
-        out.detail = f"via {svc}" + (f"; {out.detail}" if out.detail else "")
     fb.finish(out)
     if args.verbose:
         (ui.ok if out.accepted else ui.fail)(out.logline())
     return 0 if out.accepted else 1
+
+
+# ----------------------------------------------------------------- daemon ----
+UNIT = "faceup.service"
+
+
+def daemon_state() -> dict:
+    """{'installed', 'enabled', 'active', 'answers'} — answers needs root (the socket is 0600)."""
+    import shutil
+    import subprocess
+    st = {"installed": os.path.exists(f"/etc/systemd/system/{UNIT}"), "enabled": False, "active": False, "answers": None}
+    if shutil.which("systemctl"):
+        for k, verb in (("enabled", "is-enabled"), ("active", "is-active")):
+            try:
+                st[k] = subprocess.run(["systemctl", verb, "--quiet", UNIT], timeout=3).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    if os.geteuid() == 0:
+        from . import client
+        s = client.connect()
+        st["answers"] = s is not None
+        if s is not None:
+            s.close()
+    return st
+
+
+def cmd_daemon(args) -> int:
+    """run (what systemd starts) | status | enable | disable — the resident engine (faceup/daemon.py)."""
+    import subprocess
+    if args.action == "run":
+        need_root("daemon run")
+        from . import daemon
+        return daemon.serve()
+    if args.action == "status":
+        st = daemon_state()
+        if st["active"]:
+            ui.ok("resident engine running — unlocks skip Python start-up and model loading" + ("" if st["answers"] is not False else " (but the socket does not answer)"))
+        elif st["installed"]:
+            ui.warn("resident engine installed but not running: unlocks load everything from scratch (~1 s slower)")
+            ui.tip("sudo faceup daemon enable")
+        else:
+            ui.info("resident engine not installed (re-run install.sh)")
+        return 0 if st["active"] else 1
+    need_root(f"daemon {args.action}")
+    if args.action == "enable":
+        rc = subprocess.run(["systemctl", "enable", "--now", UNIT]).returncode
+        (ui.ok if rc == 0 else ui.fail)("resident engine " + ("enabled and started (~150 MB of RAM for the loaded models)" if rc == 0 else "could not be started: journalctl -u faceup"))
+        return rc
+    rc = subprocess.run(["systemctl", "disable", "--now", UNIT]).returncode
+    (ui.ok if rc == 0 else ui.fail)("resident engine stopped; unlocks run the engine from scratch" if rc == 0 else "could not stop faceup.service")
+    return rc
 
 
 # -------------------------------------------------------------------- pam ----
@@ -877,20 +935,27 @@ def cmd_models(args) -> int:
     if args.remove:
         n = st.remove_label(args.remove); st.save()
         ui.ok(f"removed {n} model(s) labelled {args.remove}"); return 0
-    if getattr(args, "remove_identity", None):
+    if getattr(args, "remove_identity", None) is not None:
         n = st.remove_identity(args.remove_identity)
         for sp in st.spectra(): st.fit_whitening(sp)
         st.save(); ui.ok(f"removed {n} model(s) of identity {args.remove_identity!r}"); return 0
     if getattr(args, "remove_condition", None):
-        n = st.remove_condition(args.remove_condition)
+        n = st.remove_condition(args.remove_condition, args.identity if args.identity is not None else None)
         for sp in st.spectra(): st.fit_whitening(sp)
         st.save(); ui.ok(f"removed {n} model(s) of condition {args.remove_condition!r}"); return 0
     if args.forget_learned:
-        n = len([m for m in st.models if m.learned])
-        st.models = [m for m in st.models if not m.learned]
+        drop = [m for m in st.models if m.learned and (args.identity is None or m.identity == args.identity)]
+        n = len(drop)
+        st.models = [m for m in st.models if m not in drop]
         for sp in st.spectra():
             st.fit_whitening(sp)
         st.save(); ui.ok(f"forgot {n} learned model(s)"); return 0
+    if getattr(args, "json", False):
+        import json
+        from . import attempts, manage
+        print(json.dumps({"user": user, "people": manage.people(st, user, attempts.read(cfgmod.LOG_PATH, 500)),
+                          "calibrated": (st.calib.get("calibration") or {}).get("date", "")[:10]}))
+        return 0
     if not st.models:
         ui.warn(f"no models for {user}"); return 1
     ui.info(f"{user}: {len(st.models)} models · identities: {', '.join(i or user for i in st.identities())}"
@@ -962,7 +1027,7 @@ def cmd_lab(args) -> int:
 
 # -------------------------------------------------------------------- app ----
 def cmd_app(args) -> int:
-    """The GTK application: every step of the chain from one window (root for setup actions)."""
+    """The manager window. Runs as the user; changes go through pkexec (see app.py)."""
     try:
         from . import app
         return app.main([sys.argv[0]] + (["--selftest"] if getattr(args, "selftest", False) else []))
@@ -1087,7 +1152,7 @@ def cmd_recogniser(args) -> int:
 
 # ------------------------------------------------------------------ setup ----
 def cmd_setup(args) -> int:
-    """The whole chain in one go: cameras → emitter → recogniser → enrol (window) → keyring → PAM → self-check."""
+    """The whole chain in one go: cameras → emitter → recogniser → register (window) → keyring → PAM → self-check."""
     need_root("setup")
     ui.banner(f"faceup {__version__} · setup", "guided and reversible — config is rewritten, models are yours, PAM is backed up")
     cfg = cfgmod.load()
@@ -1157,8 +1222,8 @@ def cmd_setup(args) -> int:
     cfgmod.save(cfg)
     ui.ok(f"config written to {cfgmod.CONFIG_PATH}")
 
-    ui.section(f"4/{steps} Enrol")
-    if ui.confirm("Enrol your face now? (one guided window: it enrols and tunes the gate in a single sweep)", default=True):
+    ui.section(f"4/{steps} Register")
+    if ui.confirm("Register your face now? (one guided window: it registers and tunes the gate in a single sweep)", default=True):
         for k, v in (("fresh", False), ("all", False), ("selfcheck", True), ("guided", False), ("profile", False), ("classic", False), ("identity", ""), ("add", "")):
             setattr(args, k, getattr(args, k, v))
         cmd_enroll(args)
@@ -1199,6 +1264,8 @@ def antispoof_available() -> bool:
 
 # ---------------------------------------------------------------- emitter ----
 def emitter_install() -> None:
+    import tempfile
+    import urllib.request
     ui.info("Fetching the latest linux-enable-ir-emitter release…")
     with urllib.request.urlopen(f"https://api.github.com/repos/{EMITTER_REPO}/releases/latest", timeout=30) as r:
         rel = json.load(r)
@@ -1332,7 +1399,7 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("doctor", help="diagnose cameras, emitter, engine, models, PAM"); d.add_argument("-U", "--user"); d.set_defaults(fn=cmd_doctor)
-    s = sub.add_parser("setup", help="the whole chain: cameras → emitter → recogniser → enrol → keyring → PAM → policy (root)")
+    s = sub.add_parser("setup", help="the whole chain: cameras → emitter → recogniser → register → keyring → PAM → policy (root)")
     s.add_argument("-U", "--user"); s.add_argument("--cameras-only", action="store_true", help="detect and write the camera pair, nothing else"); s.set_defaults(fn=cmd_setup)
     ap = sub.add_parser("app", help="the GTK application — every step from one window (sudo for setup actions)")
     ap.add_argument("--selftest", action="store_true", help="render every page once and exit (CI smoke test)"); ap.set_defaults(fn=cmd_app)
@@ -1342,10 +1409,11 @@ def main(argv=None) -> int:
     e.add_argument("--all", action="store_true", help="include optional poses without asking")
     e.add_argument("--selfcheck", action="store_true", help="run the self-check without asking")
     e.add_argument("--guided", action="store_true", help="scripted 8-pose text flow instead of the window")
-    e.add_argument("--classic", action="store_true", help="old free-move coverage-map enrolment + a separate calibration step")
+    e.add_argument("--classic", action="store_true", help="old free-move coverage-map registration + a separate calibration step")
     e.add_argument("--identity", metavar="NAME", help="register another person on this login under NAME (any registered face unlocks)")
     e.add_argument("--add", metavar="CONDITION", help="short sweep that adds a condition to the existing models: glasses, headset, night, …")
     e.add_argument("--profile", action="store_true", help="print per-stage timings once a second (diagnose a laggy preview)")
+    e.add_argument("--stream-ui", action="store_true", help=argparse.SUPPRESS)   # used by `faceup app`
     e.set_defaults(fn=cmd_enroll)
 
     t = sub.add_parser("tune", help="show config, or set section.key VALUE (root)")
@@ -1383,12 +1451,18 @@ def main(argv=None) -> int:
     cb = sub.add_parser("calibrate", help="session (default): measure your real distances and set the gate + whitening threshold · refresh: from recent accepts · pose: rebuild the 3D face model (root)")
     cb.add_argument("action", nargs="?", choices=["session", "refresh", "pose"], default="session")
     cb.add_argument("-U", "--user"); cb.add_argument("--seconds", type=float, default=None, help="max seconds per pass")
-    cb.add_argument("--text", action="store_true", help="text prompts instead of the window"); cb.set_defaults(fn=cmd_calibrate)
+    cb.add_argument("--text", action="store_true", help="text prompts instead of the window")
+    cb.add_argument("--stream-ui", action="store_true", help=argparse.SUPPRESS); cb.set_defaults(fn=cmd_calibrate)
 
-    m = sub.add_parser("models", help="list or remove enrolled models (root)")
+    dm = sub.add_parser("daemon", help="run | status | enable | disable — the resident engine that keeps the models loaded (fast unlock)")
+    dm.add_argument("action", choices=["run", "status", "enable", "disable"]); dm.set_defaults(fn=cmd_daemon)
+
+    m = sub.add_parser("models", help="list or remove registered models (root)")
     m.add_argument("-U", "--user"); m.add_argument("--remove", metavar="LABEL")
     m.add_argument("--forget-learned", action="store_true", help="drop models added by online adaptation")
     m.add_argument("--remove-identity", metavar="NAME"); m.add_argument("--remove-condition", metavar="CONDITION")
+    m.add_argument("--identity", metavar="NAME", help="with --remove-condition / --forget-learned: only this person's (default: everyone's)")
+    m.add_argument("--json", action="store_true", help="people on this login as JSON (used by the app)")
     m.set_defaults(fn=cmd_models)
 
     em = sub.add_parser("emitter", help="IR emitter: probe (find the LED control by measurement) | toggle-bench (switch speed → shadow test) | check | test | install | configure")

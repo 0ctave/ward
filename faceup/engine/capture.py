@@ -136,20 +136,39 @@ class Capture:
             raise CaptureError("no camera configured")
         self.notes: list[str] = []
         if _opened is None:
-            wanted, note = ambient.for_light(wanted)
-            if note:
-                self.notes.append(note)
-        self.devices = {s: p for s, p in wanted.items() if _opened is None or s in _opened}
+            _opened = _open_all(wanted, decide=_light_filter(wanted, self.notes))
+        self.devices = {s: p for s, p in wanted.items() if s in _opened}
         self._starved = 0
+        self._dropped_rgb = False
         self.lost = ""                     # set when the watchdog could not reopen IR
-        self.caps = _opened if _opened is not None else _open_all(wanted)
+        self.caps = {}
         self.exposure: dict[str, brightness.Exposure] = {}
-        for spectrum, cap in self.caps.items():
-            self.exposure[spectrum] = brightness.Exposure(cap, spectrum)
-            r = _Reader(spectrum, cap)
-            r.start()
-            self.readers[spectrum] = r
-            self._seen[spectrum] = -1
+        self._late = None                  # a PendingCapture still opening the secondary camera
+        for spectrum, cap in _opened.items():
+            self._attach(spectrum, wanted[spectrum], cap)
+
+    def _attach(self, spectrum: str, path: str, cap) -> None:
+        self.caps[spectrum] = cap; self.devices[spectrum] = path
+        self.exposure[spectrum] = brightness.Exposure(cap, spectrum)
+        r = _Reader(spectrum, cap)
+        r.start()
+        self.readers[spectrum] = r
+        self._seen[spectrum] = -1
+
+    def _absorb_late(self) -> None:
+        """Attach the secondary camera once its background open finished (main thread only, so
+        the reader dict never changes under an iteration). After a starvation fallback it is
+        released instead: the room is dark and RGB would starve IR again."""
+        late = self._late
+        if late is None or late._thread.is_alive():
+            return
+        self._late = None
+        self.notes.extend(late.notes)
+        for s, c in late.late.items():
+            if s in self.caps or self._dropped_rgb:
+                c.release()
+            else:
+                self._attach(s, late.devices[s], c)
 
     @classmethod
     def open_async(cls, devices: dict[str, str]) -> "PendingCapture":
@@ -164,6 +183,7 @@ class Capture:
         dropped to the newer one if they are more than SYNC_TOLERANCE_MS apart."""
         if self.lost:
             raise CaptureError(self.lost)      # no camera left: the caller ends the attempt (fail open)
+        self._absorb_late()
         out: dict[str, Frame] = {}
         first = True
         for spectrum, r in self.readers.items():
@@ -216,6 +236,7 @@ class Capture:
         if self._starved < self.STARVED_FRAMES:
             return False
         self._starved = 0
+        self._dropped_rgb = True
         try:
             self._release("rgb")
             self._release("ir")
@@ -260,6 +281,11 @@ class Capture:
                 r.latest(r.seq, 0.1)
 
     def close(self) -> None:
+        late, self._late = self._late, None
+        if late is not None:                   # still opening the secondary camera: wait, then release it
+            late._thread.join(timeout=4.0)
+            for c in late.late.values():
+                c.release()
         for r in self.readers.values():
             r.stop = True
         for r in self.readers.values():
@@ -277,8 +303,38 @@ class Capture:
         self.close()
 
 
-def _open_all(wanted: dict[str, str]) -> dict[str, cv2.VideoCapture]:
-    """Open every device in its own thread; the first error wins and the others are released."""
+LUX_WAIT_S = 2.5          # the ambient-light read may wake a sleeping sensor hub (~2 s measured)
+
+
+def _light_filter(wanted: dict[str, str], notes: list[str]):
+    """Start the ambient-light decision (ambient.for_light) in the background and return a
+    function that, given the devices still to open, drops RGB when the room is dark. The light
+    read can take ~2 s on a cold sensor hub, so IR opens meanwhile instead of waiting for it; an
+    answer that does not come in time keeps RGB (the starvation watchdog still covers the dark)."""
+    if not (wanted.get("ir") and wanted.get("rgb")):
+        return None
+    box: dict = {}
+    t = threading.Thread(target=lambda: box.update(r=ambient.for_light(dict(wanted))), name="faceup-lux", daemon=True)
+    t.start()
+
+    def decide(rest: dict[str, str]) -> dict[str, str]:
+        t.join(LUX_WAIT_S)
+        if "r" not in box:
+            return rest
+        keep, note = box["r"]
+        if note:
+            notes.append(note)
+        return {s: p for s, p in rest.items() if s in keep}
+    return decide
+
+
+def _open_all(wanted: dict[str, str], primary_open: threading.Event | None = None, decide=None) -> dict[str, cv2.VideoCapture]:
+    """Open every device; the first error wins and the others are released. IR opens FIRST and
+    alone: both nodes of a Windows-Hello module sit behind one USB device whose driver serialises
+    the opens, and a racing RGB open delayed the IR stream — the one that lights the LEDs — by
+    ~0.4 s (measured: IR's first frame 0.6 s alone, 1.0 s racing RGB). `primary_open` is set as
+    soon as the first device streams, so the caller can start its own work behind it. `decide`
+    (see _light_filter) may drop devices from the rest once the first is open."""
     results: dict[str, cv2.VideoCapture] = {}
     errors: dict[str, CaptureError] = {}
 
@@ -288,11 +344,19 @@ def _open_all(wanted: dict[str, str]) -> dict[str, cv2.VideoCapture]:
         except CaptureError as e:
             errors[spectrum] = e
 
-    threads = [threading.Thread(target=work, args=(s, p), name=f"faceup-open-{s}", daemon=True) for s, p in wanted.items()]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    order = sorted(wanted, key=lambda s: s != "ir")
+    work(order[0], wanted[order[0]])
+    if primary_open is not None:
+        primary_open.set()
+    rest = {s: wanted[s] for s in order[1:]}
+    if decide is not None and not errors:
+        rest = decide(rest)
+    if not errors:
+        threads = [threading.Thread(target=work, args=(s, p), name=f"faceup-open-{s}", daemon=True) for s, p in rest.items()]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
     if errors:
         for cap in results.values():
             cap.release()
@@ -301,14 +365,19 @@ def _open_all(wanted: dict[str, str]) -> dict[str, cv2.VideoCapture]:
 
 
 class PendingCapture:
-    """A Capture being opened in the background. `.result()` blocks until the devices are open
-    (or raises CaptureError) and returns the Capture with its reader threads running."""
+    """A Capture being opened in the background. `.result()` blocks until every device is open;
+    `.result_primary()` returns as soon as the first (IR) camera streams and the Capture picks the
+    secondary up on a later read — so recognition starts ~2 s earlier when the light read is slow.
+    A secondary that fails to open is only noted: the primary carries the attempt (fail soft)."""
 
     def __init__(self, devices: dict[str, str]):
-        self.devices, note = ambient.for_light({s: p for s, p in devices.items() if p})
-        self.notes = [note] if note else []
-        self._caps: dict[str, cv2.VideoCapture] | None = None
+        self.devices = {s: p for s, p in devices.items() if p}
+        self.notes: list[str] = []
+        self.primary = ""
+        self._caps: dict[str, cv2.VideoCapture] = {}
+        self.late: dict[str, cv2.VideoCapture] = {}
         self._error: CaptureError | None = None
+        self.primary_open = threading.Event()        # the first (IR) device is streaming, or failed
         self._thread = threading.Thread(target=self._run, name="faceup-open", daemon=True)
         self._thread.start()
 
@@ -316,9 +385,36 @@ class PendingCapture:
         try:
             if not self.devices:
                 raise CaptureError("no camera configured")
-            self._caps = _open_all(self.devices)
+            order = sorted(self.devices, key=lambda s: s != "ir")
+            self.primary = order[0]
+            decide = _light_filter(self.devices, self.notes)
+            self._caps[self.primary] = _open_one(self.primary, self.devices[self.primary])
         except CaptureError as e:
             self._error = e
+            return
+        finally:
+            self.primary_open.set()
+        rest = {s: self.devices[s] for s in order[1:]}
+        if decide is not None:
+            rest = decide(rest)
+        for s, p in rest.items():                    # one secondary at most (RGB)
+            try:
+                self.late[s] = _open_one(s, p)
+            except CaptureError as e:
+                self.notes.append(f"{e} — continuing with {self.primary.upper()} alone")
+
+    def wait_primary(self, timeout: float) -> None:
+        """Block until the first device streams (or failed), at most `timeout` s."""
+        self.primary_open.wait(timeout)
+
+    def result_primary(self, timeout: float | None = None) -> Capture:
+        if not self.primary_open.wait(timeout):
+            raise CaptureError("camera open timed out")
+        if self._error is not None:
+            raise self._error
+        cap = Capture(self.devices, _opened=dict(self._caps))
+        cap._late = self
+        return cap
 
     def result(self, timeout: float | None = None) -> Capture:
         self._thread.join(timeout)
@@ -326,12 +422,12 @@ class PendingCapture:
             raise CaptureError("camera open timed out")
         if self._error is not None:
             raise self._error
-        cap = Capture(self.devices, _opened=self._caps)
+        cap = Capture(self.devices, _opened={**self._caps, **self.late})
         cap.notes[:0] = self.notes
         return cap
 
     def cancel(self) -> None:
         """Release the devices if nobody will use them."""
         self._thread.join()
-        for cap in (self._caps or {}).values():
+        for cap in list(self._caps.values()) + list(self.late.values()):
             cap.release()
