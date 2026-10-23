@@ -1,23 +1,27 @@
 """Per-distro package names for install hints (install.sh, doctor): one table, so no command
 tells a Fedora or Arch user to run apt. Logical names: opencv, dlib, dlib-models, gtk (GTK 4 +
-libadwaita introspection), gcc. Package names are best knowledge, not verified on every release —
-the hint says so when a piece is not packaged."""
+libadwaita introspection), gcc, numpy. Verified 2026-10-23 by tests/containers/run.sh (podman) on Fedora 44,
+Arch, openSUSE Tumbleweed, Ubuntu 22.04 and Debian 12: python3-dlib is NOT in the Debian/Ubuntu
+archives (Ubuntu users get it from a PPA such as Howdy's) nor in Fedora, and Arch's `dlib` has no
+Python bindings; Debian's libdlib-data carries only the 68-point model, so dlib-models stays a note.
+Tumbleweed's python3-dlib resolves to python3XX-dlib through its provides."""
 from __future__ import annotations
 
 
 PACKAGES = {
-    "debian": {"cmd": "apt install", "opencv": "python3-opencv", "dlib": "python3-dlib", "dlib-models": "dlib-models",
-               "gtk": "python3-gi gir1.2-adw-1", "gcc": "gcc"},
-    "fedora": {"cmd": "dnf install", "opencv": "python3-opencv", "dlib": "python3-dlib", "dlib-models": "",
+    "debian": {"cmd": "apt install", "opencv": "python3-opencv", "numpy": "python3-numpy", "dlib": "", "dlib-models": "",
+               "gtk": "python3-gi python3-gi-cairo gir1.2-adw-1", "gcc": "gcc libc6-dev"},
+    "fedora": {"cmd": "dnf install", "opencv": "python3-opencv", "numpy": "python3-numpy", "dlib": "", "dlib-models": "",
                "gtk": "python3-gobject libadwaita", "gcc": "gcc"},
-    "arch": {"cmd": "pacman -S", "opencv": "python-opencv", "dlib": "", "dlib-models": "",
-             "gtk": "python-gobject libadwaita", "gcc": "gcc"},
-    "suse": {"cmd": "zypper install", "opencv": "python3-opencv", "dlib": "", "dlib-models": "",
-             "gtk": "python3-gobject typelib-1_0-Adw-1", "gcc": "gcc"},
+    "arch": {"cmd": "pacman -S", "opencv": "python-opencv", "numpy": "python-numpy", "dlib": "", "dlib-models": "",
+             "gtk": "python-gobject python-cairo libadwaita", "gcc": "gcc"},
+    "suse": {"cmd": "zypper install", "opencv": "python3-opencv", "numpy": "python3-numpy", "dlib": "python3-dlib", "dlib-models": "",
+             "gtk": "python3-gobject python3-gobject-cairo typelib-1_0-Adw-1", "gcc": "gcc"},
 }
 
 NOT_PACKAGED = {
-    "dlib": "dlib is not packaged here: use the ArcFace recogniser (`faceup recogniser install`) or build dlib from the AUR/source",
+    "dlib": "python3-dlib is not packaged here: use the ArcFace recogniser (`faceup recogniser install`), "
+            "or get dlib from a PPA (Ubuntu), the AUR (python-dlib) or source",
     "dlib-models": "download shape_predictor_5_face_landmarks.dat, shape_predictor_68_face_landmarks.dat and "
                    "dlib_face_recognition_resnet_model_v1.dat (dlib.net/files) into /usr/share/dlib",
 }

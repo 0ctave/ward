@@ -31,6 +31,13 @@ class Distro(unittest.TestCase):
         h = distro.hint("dlib", "dlib-models", os_release=ARCH)
         self.assertIn("ArcFace", h); self.assertIn("dlib.net", h); self.assertNotIn("pacman", h)
 
+    def test_dlib_only_where_packaged(self):
+        # measured in podman (tests/containers/run.sh): only Tumbleweed ships Python dlib bindings
+        self.assertIn("zypper install python3-dlib", distro.hint("dlib", os_release=TUMBLEWEED))
+        for rel in (UBUNTU, FEDORA, ARCH):
+            h = distro.hint("dlib", os_release=rel)
+            self.assertNotIn("install python3-dlib", h); self.assertIn("ArcFace", h)
+
     def test_unknown_distro(self):
         self.assertIn("package manager", distro.hint("opencv", os_release="ID=nixos\n"))
 

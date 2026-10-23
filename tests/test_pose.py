@@ -201,6 +201,27 @@ class YuNetTests(unittest.TestCase):
         blank = np.full((360, 640), 120, np.uint8)
         self.assertIsNone(m.detect(blank))            # no face → None, and the net initialises fine
 
+    def test_model_per_opencv_version_and_pinned(self):
+        import hashlib
+        from unittest import mock
+        from faceup.engine import detect
+        pins = {detect.YUNET_2022: "50ef07f702a31741ca46a4c0d947773b64143b9362780237bf0d427d6c79bab7",
+                detect.YUNET_2023: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"}
+        for p, h in pins.items():
+            self.assertEqual(hashlib.sha256(p.read_bytes()).hexdigest(), h, p.name)
+        for ver, first in (("4.5.4", detect.YUNET_2022), ("4.6.0", detect.YUNET_2022),
+                           ("4.13.0", detect.YUNET_2023), ("5.0.0", detect.YUNET_2023)):
+            with mock.patch.object(detect.cv2, "__version__", ver):
+                self.assertEqual(detect.yunet_candidates()[0], first, ver)
+
+    def test_unrunnable_graph_retries_the_other_one(self):
+        from faceup.engine import detect
+        m = detect.Models()
+        good = m._yunet_models[0]
+        m._yunet_models = [detect._MODELS_DIR / "LICENSE-Apache-2.0.txt", good]   # not a graph → cv2.error
+        self.assertIsNone(m.detect(np.full((360, 640), 120, np.uint8)))
+        self.assertEqual(m._yunet_models, [good]); self.assertEqual(m.detector_kind, "yunet")
+
 
 
 class OneEuroTests(unittest.TestCase):

@@ -89,7 +89,11 @@ if __name__ == "__main__":
 
 class ModuleLayoutTests(unittest.TestCase):
     def test_terminal_ui_and_app_ui_are_separate_modules(self):
-        from faceup import appui, ui
+        from faceup import ui
         for name in ("ok", "warn", "fail", "banner", "section", "confirm", "ask"):
             self.assertTrue(hasattr(ui, name), f"faceup.ui lost {name}")
+        try:
+            from faceup import appui
+        except (ImportError, ValueError) as e:       # no GTK 4/libadwaita/pycairo (minimal containers)
+            self.skipTest(f"GTK stack incomplete: {e}")
         self.assertTrue(hasattr(appui, "EnrollWindow") and hasattr(appui, "EmitterWindow"))

@@ -113,7 +113,7 @@ Components (one Python module each, `faceup/engine/`):
 
 - `capture.py` — opens the selected devices with OpenCV/V4L2, produces time-stamped frames; pairs frames whose timestamps differ by < 40 ms.
 - `quality.py` — brightness (mean, p5/p95), sharpness (variance of Laplacian), face size; drops frames below thresholds *before* spending CPU on detection.
-- `detect.py` — **YuNet** (OpenCV DNN, bundled `face_detection_yunet_2022mar.onnx`, Apache-2.0) by default: ~4 ms per frame at 480 px and trained on turned/tilted faces; dlib HOG (`"hog"`, frontal only) and dlib CNN (`"cnn"`, ~700 ms) remain selectable. YuNet boxes are re-squared to HOG-style boxes before dlib's landmark predictors run. 5-point landmarks for alignment, 68-point for pose and motion (loaded lazily).
+- `detect.py` — **YuNet** (OpenCV DNN, bundled `face_detection_yunet_2022mar.onnx` for OpenCV 4.5.4–4.7 and `face_detection_yunet_2023mar.onnx` for ≥ 4.8, chosen by version, Apache-2.0) by default: ~4 ms per frame at 480 px and trained on turned/tilted faces; dlib HOG (`"hog"`, frontal only) and dlib CNN (`"cnn"`, ~700 ms) remain selectable. YuNet boxes are re-squared to HOG-style boxes before dlib's landmark predictors run. 5-point landmarks for alignment, 68-point for pose and motion (loaded lazily).
 - `recognise.py` — dlib ResNet embeddings; fusion; matching against the store.
 - `liveness/` — `cross_spectrum.py`, `antispoof_cnn.py`, `shadow.py`, `motion.py`; a common `Vote` result: `PASS | FAIL | ABSTAIN` + reason + metric.
 - `decide.py` — the decision rule (§6.5), timing budget, log line.
