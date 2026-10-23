@@ -705,6 +705,9 @@ def main(argv=None) -> int:
             self._row(g, "Recogniser", f"{rk} · switching requires registering everyone again", None,
                       "Use ArcFace" if rk == "dlib" else "Use dlib", lambda: self.confirm("Switch recogniser?", "Every face must be registered again afterwards.", "Switch",
                                                                                         lambda: self.run_cmd(["recogniser", "use", "arcface" if rk == "dlib" else "dlib"]), destructive=False))
+            on = bool(cfg["liveness"].get("antispoof_cnn", True))
+            self._row(g, "Anti-spoof CNN", ("on" if on else "off") + " · daylight liveness on the colour camera (bundled MiniFASNetV2; abstains when unsure)", None,
+                      "Turn off" if on else "Turn on", lambda: self.run_cmd(["antispoof", "off" if on else "on"]))
             g = self._group(p, "Lab")
             self._row(g, "Open the lab", "live evaluation bench", "utilities-system-monitor-symbolic", "Open", lambda: self.run_cmd(["lab"], then_refresh=False))
             frames = os.path.join(os.environ.get("FACEUP_ETC", "/etc/faceup"), "lab", "frames")

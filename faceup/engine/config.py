@@ -18,7 +18,8 @@ ETC = Path(os.environ.get("FACEUP_ETC", "/etc/faceup"))
 CONFIG_PATH = ETC / "config.toml"
 MODELS_DIR = ETC / "models"
 LOG_PATH = Path(os.environ.get("FACEUP_LOG", "/var/log/faceup.log"))
-ANTISPOOF_MODEL = ETC / "antispoof.onnx"
+# bundled (Apache-2.0, 1.7 MB): MiniFASNetV2 — see faceup/models/NOTICE and liveness/antispoof_cnn.py
+ANTISPOOF_MODEL = Path(__file__).resolve().parents[1] / "models" / "minifasnet_v2.onnx"
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     "cameras": {"ir": "", "rgb": "", "ir_dark_threshold": 25, "rgb_dark_threshold": 40, "force_roles": False},

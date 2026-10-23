@@ -45,6 +45,11 @@ class Health(unittest.TestCase):
         rep = health.collect(user="nobody-here", cfg=cfg)
         self.assertEqual(rep["profile"], "C")
         eng = next(s for s in rep["sections"] if s.key == "engine")
+        self.assertTrue(any(it.level == "ok" and "anti-spoof CNN" in it.text for it in eng.items))   # bundled voter
+        cfg["liveness"]["antispoof_cnn"] = False
+        rep = health.collect(user="nobody-here", cfg=cfg)
+        eng = next(s for s in rep["sections"] if s.key == "engine")
+        self.assertTrue(any(it.fix == ["antispoof", "on"] for it in eng.items))
         self.assertTrue(any("still face" in it.text and it.fix and it.fix[0] == "tune" for it in eng.items))
         cfg["liveness"]["require_liveness_when_available"] = False
         rep = health.collect(user="nobody-here", cfg=cfg)

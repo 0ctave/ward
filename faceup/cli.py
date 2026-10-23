@@ -163,10 +163,13 @@ def cmd_doctor(args) -> int:
     else:
         ui.fail(f"`python3` on PATH is {py} and cannot import dlib/cv2 (a pyenv/mise/conda Python shadows the system one)"); problems += 1
     from .engine.liveness import antispoof_cnn
-    if antispoof_cnn.available():
-        ui.ok(f"anti-spoof model present ({cfgmod.ANTISPOOF_MODEL})")
+    _as_ok, _ = antispoof_cnn.verify()
+    if not _as_ok:
+        ui.fail(f"anti-spoof CNN model missing or corrupt ({cfgmod.ANTISPOOF_MODEL}) — reinstall faceup (sudo ./install.sh)"); problems += 1
+    elif not cfg["liveness"]["antispoof_cnn"]:
+        ui.warn("anti-spoof CNN (bundled MiniFASNetV2, daylight liveness) is switched off"); ui.tip("sudo faceup antispoof on")
     else:
-        ui.info("anti-spoof CNN model not installed — that voter is disabled (`sudo faceup setup` can fetch it)")
+        ui.ok(f"anti-spoof CNN: MiniFASNetV2 bundled, checksum ok ({cfgmod.ANTISPOOF_MODEL.name})")
     rec, live = cfg["recognition"], cfg["liveness"]
     from .engine import recognise
     rk = rec.get("recogniser", "dlib")
@@ -1150,6 +1153,49 @@ def cmd_recogniser(args) -> int:
     return 1
 
 
+def cmd_antispoof(args) -> int:
+    """status | on | off | test DIR — the bundled anti-spoof CNN voter (liveness/antispoof_cnn.py)."""
+    from .engine.liveness import antispoof_cnn as asc
+    cfg = cfgmod.load()
+    ok, got = asc.verify()
+    if args.action == "status":
+        (ui.ok if ok else ui.fail)(f"model {cfgmod.ANTISPOOF_MODEL}: " + ("sha256 ok" if ok else ("missing" if not got else f"checksum mismatch {got[:12]}…")))
+        ui.info(f"voter: {'on' if cfg['liveness']['antispoof_cnn'] else 'off'} · PASS at p_real ≥ {asc.PASS_P} · FAIL only when {asc.FAIL_MIN_FRAMES}+ frames all ≤ {asc.FAIL_P} · else abstain")
+        ui.info("runs on lit colour frames only (an IR or grey frame abstains)")
+        return 0 if ok else 1
+    if args.action == "test":
+        import glob
+        import cv2
+        import numpy as np
+        from .engine.detect import Models
+        if not args.dir:
+            ui.fail("usage: faceup antispoof test DIR   (a folder of colour PNG frames, e.g. a lab recording)"); return 1
+        files = sorted(glob.glob(os.path.join(args.dir, "**", "*.png"), recursive=True))
+        m = Models("yunet")
+        scores = []
+        for f in files:
+            img = cv2.imread(f)
+            if img is None or img.ndim != 3:
+                continue
+            box = m.detect(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+            sc = asc.score(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), box) if box is not None else None
+            if sc is not None:
+                scores.append(sc)
+        if not scores:
+            ui.fail(f"no scorable colour face in {len(files)} frames"); return 1
+        a = np.array(scores)
+        ui.info(f"{len(a)} faces: p_real min {a.min():.3f} · p5 {np.percentile(a, 5):.3f} · median {np.median(a):.3f} · "
+                f"PASS {np.mean(a >= asc.PASS_P):.0%} · FAIL-level {np.mean(a <= asc.FAIL_P):.0%}")
+        return 0
+    need_root("antispoof")
+    if args.action == "on" and not ok:
+        ui.fail("the bundled model is missing or corrupt — reinstall faceup"); return 1
+    cfg["liveness"]["antispoof_cnn"] = args.action == "on"
+    cfgmod.save(cfg)
+    ui.ok(f"liveness.antispoof_cnn = {cfg['liveness']['antispoof_cnn']}")
+    return 0
+
+
 # ------------------------------------------------------------------ setup ----
 def cmd_setup(args) -> int:
     """The whole chain in one go: cameras → emitter → recogniser → register (window) → keyring → PAM → self-check."""
@@ -1176,7 +1222,9 @@ def cmd_setup(args) -> int:
         cfgmod.save(cfg); ui.ok(f"cameras written to {cfgmod.CONFIG_PATH}"); return 0
     if not ir_cam and rgb_cam:
         ui.warn("RGB only: no infrared, so darkness and photo spoofs are handled by the colour camera alone.")
-        if not antispoof_available() and ui.confirm("Without the anti-spoof model a still face cannot prove liveness. Accept recognition alone (convenience-grade)?", default=True):
+        if antispoof_available() and cfg["liveness"]["antispoof_cnn"]:
+            ui.ok("anti-spoof CNN (bundled) proves liveness for a still face in daylight")
+        elif not antispoof_available() and ui.confirm("Without the anti-spoof model a still face cannot prove liveness. Accept recognition alone (convenience-grade)?", default=True):
             cfg["liveness"]["require_liveness_when_available"] = False
 
     ui.section(f"2/{steps} IR emitter")
@@ -1219,6 +1267,13 @@ def cmd_setup(args) -> int:
                 cfg["recognition"]["recogniser"] = "arcface"; ui.ok("recogniser = arcface")
             except Exception as e:
                 ui.warn(f"install failed ({e}); staying on dlib")
+    if cfg["cameras"]["rgb"]:
+        if not antispoof_available():
+            ui.warn("anti-spoof CNN model missing — reinstall faceup to restore the daylight liveness voter")
+        elif cfg["liveness"]["antispoof_cnn"]:
+            ui.ok("anti-spoof CNN (MiniFASNetV2, bundled): a second liveness voter on the colour camera")
+        elif ui.confirm("The anti-spoof CNN is off. Turn it on (abstains when unsure, never blocks a real face)?", default=True):
+            cfg["liveness"]["antispoof_cnn"] = True; ui.ok("liveness.antispoof_cnn = true")
     cfgmod.save(cfg)
     ui.ok(f"config written to {cfgmod.CONFIG_PATH}")
 
@@ -1439,6 +1494,10 @@ def main(argv=None) -> int:
     kr.add_argument("--force-host-key", action="store_true"); kr.add_argument("--tpm", action="store_true", help="force TPM2 sealing (stronger, but adds 2–4 s per login on a firmware TPM)")
     kr.add_argument("--password-stdin", action="store_true", help="read the login password from stdin (used by the app)")
     kr.add_argument("--dry-run", action="store_true"); kr.set_defaults(fn=cmd_keyring)
+
+    asp = sub.add_parser("antispoof", help="status | on | off | test DIR — the bundled anti-spoof CNN liveness voter (root for on/off)")
+    asp.add_argument("action", choices=["status", "on", "off", "test"]); asp.add_argument("dir", nargs="?", default="")
+    asp.set_defaults(fn=cmd_antispoof)
 
     rg = sub.add_parser("recogniser", help="status | install [mbf|r50] | use dlib|arcface — the embedding network (root for install/use)")
     rg.add_argument("action", choices=["status", "install", "use"]); rg.add_argument("variant", nargs="?", default="mbf")

@@ -593,7 +593,7 @@ class Engine:
                 li.box, lr.box, li.dark, lr.dark, st.calib,
                 (li.frame.gray.shape[1], li.frame.gray.shape[0]), (lr.frame.gray.shape[1], lr.frame.gray.shape[0])))
         if live["antispoof_cnn"] and "rgb" in devices and antispoof_cnn.available():
-            votes.append(antispoof_cnn.vote(lr.frame.rgb if lr else None, lr.box if lr else None, lr.dark if lr else True))
+            votes.append(antispoof_cnn.vote_frames([(o.frame.rgb, o.box, o.dark) for o in rgb[-antispoof_cnn.MAX_FRAMES:]]))
         if self._shadow_enabled(live) and "ir" in devices:
             votes.append(self._shadow_vote(li))
         if live["motion"]:
