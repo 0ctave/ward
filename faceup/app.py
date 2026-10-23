@@ -21,7 +21,7 @@ import sys
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 CONDITIONS = ("glasses", "sunglasses", "headset", "hat", "beard")   # night needs none: IR covers the dark
-INSTALLED = "/usr/local/bin/faceup"
+from .paths import BIN as INSTALLED, LIB as INSTALLED_LIB
 PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENROL = ["enroll", "--fresh", "--selfcheck"]
 CAMERA_CMDS = ("enroll", "calibrate")       # drawn inside the app (display.StreamDisplay), not in a second window
@@ -44,7 +44,7 @@ def priv_cmd(argv: list[str], root: bool | None = None, pkg_parent: str = PKG_PA
     with FACEUP_DEV_PKEXEC=1; without an install the command just explains what to do."""
     if root if root is not None else os.geteuid() == 0:
         return faceup_cmd(argv)
-    if os.environ.get("FACEUP_DEV_PKEXEC") == "1" and pkg_parent != "/usr/local/lib/faceup":
+    if os.environ.get("FACEUP_DEV_PKEXEC") == "1" and pkg_parent not in ("/usr/local/lib/faceup", "/usr/lib/faceup", INSTALLED_LIB):
         return ["pkexec", "env", f"PYTHONPATH={pkg_parent}", "NO_COLOR=1", sys.executable, "-m", "faceup", *argv]
     if os.path.exists(INSTALLED):
         return ["pkexec", INSTALLED, *argv]

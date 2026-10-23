@@ -153,6 +153,27 @@ Requirements: Linux, `python3-opencv`, `python3-dlib`, `dlib-models` (Ubuntu 24.
 all in the archive). Howdy is no longer required, but coexists.
 Uninstall: `sudo faceup pam disable && sudo ./install.sh --uninstall`.
 
+### Distro packages (built offline from this repo)
+
+`install.sh` stays the from-source path (`/usr/local`). The packages install the same files under
+`/usr` (`/usr/bin/faceup{,-auth}`, `/usr/lib/faceup`, `/usr/lib/security/pam_faceup.so`, the unit in
+`/usr/lib/systemd/system`); both share `packaging/stage.sh`. `pam_faceup.so` is compiled at package
+build time, so the target needs no gcc.
+
+```bash
+packaging/build-deb.sh                     # Debian/Ubuntu → dist/faceup_0.3.0-1_<arch>.deb (dpkg-deb only)
+sudo apt install ./dist/faceup_*.deb
+git archive --prefix=faceup-0.3.0/ -o ~/rpmbuild/SOURCES/faceup-0.3.0.tar.gz HEAD
+rpmbuild -ba packaging/faceup.spec         # Fedora/openSUSE
+(cd packaging && makepkg -si)              # Arch
+```
+
+Installing enables the resident engine on first install (like `install.sh`) and **never edits
+PAM**: run `sudo faceup setup` (or `sudo faceup pam enable`) afterwards. Removing the .deb/.rpm is
+refused while `/etc/pam.d` still references faceup (`sudo faceup pam disable` first); pacman cannot
+refuse, so it warns. Purging the .deb deletes `/etc/faceup` (models, config, keyring credential).
+Pick one install method: a from-source unit in `/etc/systemd/system` overrides the packaged one.
+
 Tests (no camera needed): `python3 -m unittest discover tests`.
 
 ---
