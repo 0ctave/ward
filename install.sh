@@ -25,41 +25,13 @@ hint() { PYTHONPATH="$here" /usr/bin/python3 -m faceup.distro "$@" 2>/dev/null |
 /usr/bin/python3 -c 'import dlib' 2>/dev/null || echo "note: dlib missing (the ArcFace recogniser works without it) — $(hint dlib dlib-models)"
 /usr/bin/python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1")' 2>/dev/null \
   || echo "note: GTK 4 + libadwaita bindings missing: windows fall back to text — $(hint gtk)"
-rm -rf "$LIB"; mkdir -p "$LIB"
-cp -r "$here/faceup" "$LIB/"
-find "$LIB" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+first=0; [[ -e /etc/systemd/system/faceup.service ]] || first=1
+# the file layout is shared with the distro packages (packaging/): package, launchers, PAM module,
+# desktop entry, polkit action, icons, unit
+"$here/packaging/stage.sh" / /usr/local /etc/systemd/system
+[[ -e /usr/local/lib/security/pam_faceup.so ]] || echo "note: no native PAM module (keyring unlock) — $(hint gcc) and re-run"
 # byte-compile now so the first faceup-auth on the PAM path doesn't pay for it
 /usr/bin/python3 -m compileall -q -j0 "$LIB" >/dev/null 2>&1 || true
-# Both launchers run as root (sudo, pkexec, PAM): python3 -I ignores every PYTHON* variable, the
-# user's site-packages and the cwd, so nothing in the caller's environment can load code; the
-# package path is set inside instead of through PYTHONPATH.
-launcher() {
-  cat <<EOF
-#!/bin/sh
-exec /usr/bin/python3 -I -c 'import runpy, sys; sys.path.insert(0, "$LIB"); sys.argv[0] = "$2"; runpy.run_module("$1", run_name="__main__")' "\$@"
-EOF
-}
-launcher faceup faceup > "$BIN"
-launcher faceup.client faceup-auth > "$AUTH"
-chmod 755 "$BIN" "$AUTH"
-# native PAM module (keyring token + conversation messages); pam_exec stays the fallback
-if command -v gcc >/dev/null 2>&1; then
-  mkdir -p /usr/local/lib/security
-  if gcc -Os -s -fPIC -shared -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--as-needed -o /usr/local/lib/security/pam_faceup.so.tmp "$here/data/pam_faceup.c" 2>/tmp/pam_faceup.build.log; then
-    chmod 644 /usr/local/lib/security/pam_faceup.so.tmp
-    mv /usr/local/lib/security/pam_faceup.so.tmp /usr/local/lib/security/pam_faceup.so
-    echo "built /usr/local/lib/security/pam_faceup.so (native PAM module)"
-  else
-    rm -f /usr/local/lib/security/pam_faceup.so.tmp; echo "warning: pam_faceup.so did not build (see /tmp/pam_faceup.build.log); pam_exec line stays"
-  fi
-else
-  echo "note: gcc not found — the native PAM module (keyring unlock) was not built; $(hint gcc) and re-run"
-fi
-# desktop entry + icons: notifications get the app name and icon, the DE can group them (roadmap U7)
-install -Dm644 "$here/data/faceup.desktop" /usr/share/applications/faceup.desktop
-install -Dm644 "$here/data/org.faceup.policy" /usr/share/polkit-1/actions/org.faceup.policy   # launcher → pkexec faceup app
-install -Dm644 "$here/data/faceup.svg" /usr/share/icons/hicolor/scalable/apps/faceup.svg
-install -Dm644 "$here/data/faceup-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/faceup-symbolic.svg
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q /usr/share/icons/hicolor || true
 command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
 mkdir -p /etc/faceup/models; chmod 700 /etc/faceup/models
@@ -73,8 +45,6 @@ fi
 # resident engine (faceup/daemon.py): models stay loaded, an unlock skips ~1 s of start-up.
 # On by default on first install; `sudo faceup daemon disable` turns it off and stays off.
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-  first=0; [[ -e /etc/systemd/system/faceup.service ]] || first=1
-  install -Dm644 "$here/data/faceup.service" /etc/systemd/system/faceup.service
   systemctl daemon-reload
   systemd-analyze verify /etc/systemd/system/faceup.service 2>&1 | grep -v '^$' || true
   # Type=notify: start/restart return only once the models are warm (READY=1), so a sandbox the

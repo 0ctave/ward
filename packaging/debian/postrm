@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+case "$1" in
+  remove)
+    [ -d /run/systemd/system ] && systemctl daemon-reload 2>/dev/null || true
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q /usr/share/icons/hicolor || true
+    ;;
+  purge)
+    # enrolled face models, config, sealed keyring credential and the attempt log
+    rm -rf /etc/faceup; rm -f /var/log/faceup.log /var/log/faceup.log.*
+    ;;
+esac
+exit 0

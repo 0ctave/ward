@@ -51,7 +51,7 @@ def _write(path: Path, text: str) -> None:
     except OSError:
         os.chmod(tmp, 0o644)
     os.replace(tmp, real)
-ENGINE = "/usr/local/bin/faceup-auth"
+from ..paths import AUTH as ENGINE, PAM_MODULE as MODULE  # /usr/local (install.sh) or /usr (package)
 # seteuid: pam_exec runs the helper with the REAL uid of the PAM application by default — for
 # sudo that is the invoking user, who cannot read the root-only model store (observed: exit 1 in
 # milliseconds, no log line). With seteuid it runs with the effective uid, i.e. root.
@@ -62,7 +62,6 @@ LINE = f"auth\tsufficient\t\t\tpam_exec.so quiet stdout seteuid {ENGINE}\t# face
 # keyring credential. It is inserted with a `[success=N default=ignore]` jump to the stack's
 # pam_permit line — like pam_unix — instead of `sufficient`, so the caller's own lines after the
 # @include (pam_gnome_keyring, pam_kwallet) still run and receive the token.
-MODULE = "/usr/local/lib/security/pam_faceup.so"
 
 
 def native_available() -> bool:

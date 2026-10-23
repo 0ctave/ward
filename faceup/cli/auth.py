@@ -51,7 +51,8 @@ def daemon_state() -> dict:
     """{'installed', 'enabled', 'active', 'answers'} — answers needs root (the socket is 0600)."""
     import shutil
     import subprocess
-    st = {"installed": os.path.exists(f"/etc/systemd/system/{UNIT}"), "enabled": False, "active": False, "answers": None}
+    from ..paths import unit_installed
+    st = {"installed": unit_installed(), "enabled": False, "active": False, "answers": None}
     if shutil.which("systemctl"):
         for k, verb in (("enabled", "is-enabled"), ("active", "is-active")):
             try:
@@ -82,7 +83,7 @@ def cmd_daemon(args) -> int:
             ui.warn("resident engine installed but not running: unlocks load everything from scratch (~1 s slower)")
             ui.tip("sudo faceup daemon enable")
         else:
-            ui.info("resident engine not installed (re-run install.sh)")
+            ui.info("resident engine not installed (re-run install.sh or reinstall the package)")
         return 0 if st["active"] else 1
     need_root(f"daemon {args.action}")
     if args.action == "enable":
