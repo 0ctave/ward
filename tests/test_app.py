@@ -165,3 +165,20 @@ class Manage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModuleLayout(unittest.TestCase):
+    """The split of cli.py into a package and of app.main's closure into app_window keeps the surface."""
+
+    def test_cli_package_reexports(self):
+        from faceup import cli
+        for name in ("main", "daemon_state", "cmd_doctor", "cmd_enroll", "cmd_auth", "cmd_setup", "cmd_emitter",
+                     "need_root", "real_user", "POSES", "UNIT", "format_attempt", "run_calibration_session"):
+            self.assertTrue(hasattr(cli, name), name)
+
+    def test_app_imports_without_gtk(self):
+        import subprocess
+        code = "import sys; sys.modules['gi'] = None; import faceup.app as a; assert callable(a.main); assert 'faceup.app_window' not in sys.modules"
+        r = subprocess.run([sys.executable, "-c", code], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)

@@ -4,6 +4,11 @@
 
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
+### Code layout (no behaviour change)
+
+- `faceup/cli.py` (1538 lines) is now the package `faceup/cli/` split by command group (`common`, `doctor`, `enroll`, `auth`, `manage`, `setup`); `cli/__init__.py` keeps `main`, the argparse surface (every `--help` output byte-identical) and re-exports every former attribute. `python3 -m faceup.cli` works too.
+- `faceup/app.py`: the window classes left the `main()` closure for module-level code in `faceup/app_window.py`; `faceup.app` still imports without GTK.
+
 ### Anti-spoof CNN voter (active)
 - **MiniFASNetV2 bundled** (`faceup/models/minifasnet_v2.onnx`, Apache-2.0, 1.7 MB, sha256 pinned and checked at load, licence in `models/LICENSE-Apache-2.0.txt`): a second independent liveness PASS in daylight. Reference preprocessing (box ×2.7, shifted back inside the frame at an edge rather than clipped — review fix, as in the reference `_get_new_box`; 80×80, BGR, raw). Measured on recorded daylight RGB: p_real min 0.994 (80/80 PASS).
 - Conservative because a FAIL is sticky: PASS at median p_real ≥ 0.90; FAIL only when ≥ 2 RGB frames all score ≤ 0.02; else ABSTAIN. Grey/IR or dark frames, tiny faces and a broken model abstain.
