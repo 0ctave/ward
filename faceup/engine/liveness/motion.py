@@ -21,7 +21,7 @@ FAIL_MIN_DISPLACEMENT_F = 0.043 # a FAIL needs real motion: a small shift of a l
 PASS_RMS_F = 0.0057             # homography residual ≥ this × face width → non-rigid → PASS
 FAIL_RMS_F = 0.0021             # ≤ this → moved like a plane → FAIL
 MIN_POINTS = 25
-REF_FACE_PX = 140.0             # documentation only: the face width the fractions were tuned on
+# REF_FACE_PX = 140.0             # documentation only: the face width the fractions were tuned on
 
 
 def _track(g0: np.ndarray, g1: np.ndarray, box: Box):

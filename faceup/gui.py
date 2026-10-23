@@ -27,10 +27,8 @@ WIN = "faceup"
 SAMPLES_PER_CELL = 3
 SAMPLES_PER_POSE = 6          # guided window: frames per pose model, spread over the pass (review A9: 3 → p95 0.34, 6 → 0.23)
 CELL_DONE = 2                 # samples of the primary spectrum that mark a cell as filled
-STABLE_DEG = 4.0              # pose must move less than this between frames to be sampled
 SAMPLE_EVERY_MS = 120         # embeddings are computed at most this often
 MAX_TRACKS = 900              # landmark frames kept for the post-calibration (≈30 s)
-COL_OK = (90, 190, 90); COL_REQ = (255, 140, 60); COL_OPT = (110, 110, 110); COL_CUR = (60, 220, 255)
 COL_TXT = (235, 235, 235)
 
 
@@ -104,7 +102,6 @@ class Cell:
         del lst[SAMPLES_PER_CELL:]
 
 
-_LUT_DARK = np.array([255 * (i / 255) ** 2.2 for i in range(256)], np.uint8)
 _LUT_BRIGHT = np.array([255 * (i / 255) ** 0.45 for i in range(256)], np.uint8)
 
 

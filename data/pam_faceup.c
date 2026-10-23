@@ -171,7 +171,10 @@ static int run_helper(pam_handle_t *pamh, const struct opts *o, const char *user
  * firmware TPM) overlaps face recognition instead of adding to it. `unseal_start` forks
  * systemd-creds and returns its pid + read fd; `unseal_finish` collects the plaintext. */
 #define UNSEAL_TIMEOUT_MS 5000
-struct unseal_job { pid_t pid; int fd; int active; };
+/* once the face is accepted the login waits for the keyring at most this much longer: a slow or
+ * failing decrypt (a TPM seal after a firmware update) must not stall an unlock that already passed */
+#define UNSEAL_GRACE_MS 1000
+struct unseal_job { pid_t pid; int fd; int active; struct timespec t0; };
 
 static void unseal_start(const struct opts *o, const char *user, struct unseal_job *j) {
     j->pid = -1; j->fd = -1; j->active = 0;
@@ -196,6 +199,7 @@ static void unseal_start(const struct opts *o, const char *user, struct unseal_j
     }
     close(fds[1]);
     j->pid = pid; j->fd = fds[0]; j->active = 1;
+    clock_gettime(CLOCK_MONOTONIC, &j->t0);
 }
 
 static int unseal_finish(struct unseal_job *j, char *buf, size_t size) {
@@ -203,10 +207,12 @@ static int unseal_finish(struct unseal_job *j, char *buf, size_t size) {
     /* bounded like the helper: a stuck TPM decrypt must not hang a login that the face already
      * passed — on timeout the keyring simply falls back to its own prompt */
     size_t got = 0; int timed_out = 0;
-    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    struct timespec t0 = j->t0, accepted; clock_gettime(CLOCK_MONOTONIC, &accepted);
+    long budget = (accepted.tv_sec - t0.tv_sec) * 1000 + (accepted.tv_nsec - t0.tv_nsec) / 1000000 + UNSEAL_GRACE_MS;
+    if (budget > UNSEAL_TIMEOUT_MS) budget = UNSEAL_TIMEOUT_MS;
     for (;;) {
         struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
-        long left = UNSEAL_TIMEOUT_MS - ((now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000);
+        long left = budget - ((now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000);
         if (left <= 0) { timed_out = 1; break; }
         struct pollfd pfd = { j->fd, POLLIN, 0 };
         int pr = poll(&pfd, 1, (int)left);

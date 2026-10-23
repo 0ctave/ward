@@ -4,6 +4,58 @@
 
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
+### Cleanup
+- Removed dead code (unused pose/sfm helpers, howdy `set_many`/`pam_enabled`, `ambient.is_dark`,
+  `appui.cue_angle`, unused constants and an import-time gamma LUT in gui).
+- App: turning face unlock off from the Overview switch now confirms (the duplicate Advanced row
+  is gone); "Forget learned models" acts on that person only (`models --forget-learned --identity`)
+  and confirms; dialogs name people by display name; keyring shows only the action that applies;
+  policy dropdowns use words ("Same as overall", "Password only"); attempt distances and votes moved
+  to a tooltip; failure reasons show a tip instead of a code; one Lab entry; plain subtitles
+  instead of CLI jargon; suffix buttons carry an accessible label and rows activate them; config
+  is read off the GTK thread. "Register" is the user-facing word in the app and CLI messages.
+- Size/speed: `urllib`/`tempfile` imported only by the emitter download; install.sh byte-compiles
+  the installed package (no compile on the first PAM attempt) and builds `pam_faceup.so` with
+  `-Os -s` + section GC (21 KB → 19 KB, `pam_sm_*` still exported).
+
+### Faster start (LEDs on ~2 s sooner)
+- The ambient-light read (≈2 s on a sleeping sensor hub) no longer blocks the camera open: IR opens
+  at once, the light answer only decides RGB (no answer in 2.5 s → RGB opens, as before).
+- IR opens first and alone (the module's driver serialises opens; a racing RGB delayed IR ~0.4 s),
+  and the dlib models load only once IR streams (their load held the GIL and stalled the open).
+  Log `ph=` gains `ir:` = ms until the IR stream is up.
+- Recognition starts on IR as soon as it streams; RGB joins on a later frame once open (and a
+  failed RGB open no longer fails the attempt — IR carries it).
+
+### Resident engine (unlock ~1 s sooner)
+- `faceup.service` (faceup/daemon.py) keeps Python, OpenCV, dlib and the models loaded and warmed
+  (first YuNet inference done at start). `faceup-auth` is now a stdlib-only client
+  (faceup/client.py, ~30 ms to start) that asks it over a root-only socket and relays feedback; with
+  no daemon it runs the in-process engine as before. On by default from install.sh;
+  `faceup daemon status|enable|disable`, a doctor item and a Settings switch ("Keep face unlock ready").
+
+### Smoother unlock
+- The native PAM module waits for the keyring decrypt at most 1 s after the face is accepted
+  (was up to 5 s from the start): a slow or failing TPM unseal no longer stalls an unlock.
+- doctor/app warn when the keyring password is TPM-sealed on an encrypted disk and offer to
+  re-seal with the instant host key; every attempt now logs its caller (`via gdm-password`, …).
+
+### Manager app (`faceup app`)
+- Runs as the logged-in user; every change goes through `pkexec` (polkit `org.faceup.app`,
+  remembered for a few minutes) — no GTK as root. The launcher no longer wraps the app in pkexec.
+- Pages: Overview (on/off switch, reliability verdict, test unlock, things to fix), People (each
+  identity with its cameras, conditions, last unlock; register, re-enrol, add/remove a condition,
+  remove a person or your own models — destructive steps confirm first; names are validated),
+  Reliability (last 50 attempts by light, service and person, failure reasons in words, next steps
+  with a one-click action), Settings (policy and per-service dropdowns, behaviour switches,
+  keyring), Advanced (setup steps, recogniser, lab, doctor, turn off everywhere).
+- One window: registering, adding a condition and calibrating run INSIDE the manager — the
+  privileged `faceup enroll|calibrate --stream-ui` sends its window state as JSON lines (frame as
+  JPEG) and takes the buttons back on stdin (`display.StreamDisplay`); messages go to the console.
+- `faceup models --json` (people on this login, for the app), `--remove-condition C --identity N`;
+  commands run through pkexec resolve the real user from `PKEXEC_UID`. `faceup/manage.py` holds the
+  app's data layer (tested without GTK).
+
 ### Enrolment window, second pass
 - Headless test harness for the whole window (`tests/enroll_harness.py`): virtual clock, scripted
   user, fake camera/sampler — every pass, key, timeout and failure is a unit test.

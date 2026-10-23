@@ -471,11 +471,6 @@ def cue_direction(cue, pose=None, target=None, prev=None):
     return None
 
 
-def cue_angle(cue, pose=None, target=None, prev=None):
-    d = cue_direction(cue, pose, target, prev)
-    return None if d is None else ARROW_ANGLE[d]
-
-
 def _set_pill(lbl: Gtk.Label, text: str, cls: str) -> None:
     lbl.set_label(text)
     lbl.set_visible(bool(text))           # a pill hidden by one state must come back in the next (review A7)
@@ -1166,6 +1161,7 @@ class CalibrateWindow(_Shell):
         self.btn_glasses.set_hexpand(True)
         actions.append(self.btn_cancel); actions.append(self.btn_glasses); actions.append(self.btn_next)
         outer.append(actions)
+        self.body = outer                   # the manager app re-parents this into its own window
         self._phase = None; self._pass_done_t = 0.0
         self.win.connect("realize", lambda *_: setattr(self.preview, "accent", _rgba(self.win)))
 

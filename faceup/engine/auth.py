@@ -79,6 +79,9 @@ class Outcome:
 
 
 def log(outcome: Outcome) -> None:
+    svc = os.environ.get("PAM_SERVICE", "")
+    if svc and not outcome.detail.startswith("via "):        # which caller: sudo, gdm-password, polkit-1…
+        outcome.detail = f"via {svc}" + (f"; {outcome.detail}" if outcome.detail else "")
     try:
         with open(config.LOG_PATH, "a") as f:
             f.write(outcome.logline() + "\n")
@@ -179,10 +182,18 @@ class Engine:
         # (roadmap R1; each V4L2 open blocks 150–500 ms in the driver and releases the GIL)
         pending = replaymod.PendingReplay(replay_dir) if replay_dir else Capture.open_async(devices)
         ph = self._phases = {}
+        # Let the IR camera reach streaming BEFORE loading the dlib models: their load holds the GIL
+        # for 1–2.5 s and stalled the open thread behind it, so the LEDs came on ~3 s into the
+        # attempt. IR open alone is ~0.4 s; the LED ramp and auto-exposure then settle during the load.
+        if hasattr(pending, "wait_primary"):
+            pending.wait_primary(min(1.5, timing["hard_timeout_ms"] / 1000))
+            ph["ir"] = int((time.monotonic() - t0) * 1000)
         self.models.preload()
         ph["models"] = int((time.monotonic() - t0) * 1000)
         try:
-            cap = pending.result(timeout=timing["hard_timeout_ms"] / 1000)
+            # start on the primary (IR) camera; RGB joins on a later read once open (light read ~2 s)
+            get = getattr(pending, "result_primary", pending.result)
+            cap = get(timeout=timing["hard_timeout_ms"] / 1000)
         except CaptureError as e:
             if self._emitter is not None:
                 self._emitter.close(); self._emitter = None
@@ -190,6 +201,7 @@ class Engine:
         self._cap = cap
         ph["cams"] = int((time.monotonic() - t0) * 1000)
         self._notes_seen = 0
+        wanted = dict(devices)
         devices = self._follow_cameras(cap, devices)
 
         camera_lost = ""
@@ -210,8 +222,10 @@ class Engine:
                 except CaptureError as e:
                     self.say(str(e)); camera_lost = str(e); break      # fail open: the password follows
                 if set(getattr(cap, "spectra", devices)) != set(devices):
-                    devices = self._follow_cameras(cap, devices)     # RGB dropped mid-attempt (dark room)
+                    devices = self._follow_cameras(cap, wanted)      # RGB joined late, or dropped (dark room)
                     primary = "ir" if "ir" in devices else primary
+                    for s in devices:
+                        obs.setdefault(s, [])
                 if not fs:
                     continue
                 n_sets += 1

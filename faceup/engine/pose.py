@@ -27,7 +27,6 @@ YAW_NAMES = ["L3", "L2", "L1", "C", "R1", "R2", "R3"]
 PITCH_NAMES = ["down", "level", "up"]
 NY, NP = len(YAW_NAMES), len(PITCH_NAMES)
 ALL_CELLS = [(y, p) for p in range(NP) for y in range(NY)]
-CENTRE = (NY // 2, 1)
 # Coverage requirement is continuous (see Coverage): an ellipse in (yaw, pitch) around the
 # neutral pose. Corners such as far-left + up are not required — physically awkward at a
 # laptop and covered by interpolation anyway.
@@ -157,12 +156,6 @@ class Coverage:
         return float(self.yaws[j]), float(self.pitches[i])
 
 
-def cell_centre(cell: tuple[int, int]) -> tuple[float, float]:
-    y = (YAW_EDGES[cell[0]] + YAW_EDGES[cell[0] + 1]) / 2
-    p = (PITCH_EDGES[cell[1]] + PITCH_EDGES[cell[1] + 1]) / 2
-    return y, p
-
-
 def neighbours(cell: tuple[int, int]) -> list[tuple[int, int]]:
     y, p = cell
     out = []
@@ -176,31 +169,6 @@ def neighbours(cell: tuple[int, int]) -> list[tuple[int, int]]:
 # Vertical geometry of the generic model used by the pitch proxy (mm): eye line y=+170 z=-135,
 # nose tip y=0 z=0, mouth line y=-150 z=-125.
 _EYE_Y, _EYE_Z, _MOUTH_Y, _MOUTH_Z = 170.0, -135.0, -150.0, -125.0
-
-
-def pitch_from_ratio(landmarks68: np.ndarray, roll_deg: float) -> float | None:
-    """Pitch from where the nose tip sits between the eye line and the mouth line.
-
-    The nose protrudes ~135 mm in front of the eye/mouth plane, so head pitch moves its projected
-    tip up/down relative to eyes and mouth: r = (eyes_y − nose_y) / (eyes_y − mouth_y). Unlike PnP
-    this ignores the chin (dlib's noisiest landmark), is independent of distance and of where the
-    face sits in the frame, and averages 12 eye + 4 mouth points. Inverted in closed form:
-        r·(ΔY·c + ΔZ·s) = EYE_Y·c − EYE_Z·s   with c=cos θ, s=sin θ  →  tan θ = (EYE_Y − r·ΔY)/(r·ΔZ − EYE_Z)
-    """
-    lm = landmarks68
-    eyes = np.vstack([lm[36:42], lm[42:48]]).mean(axis=0)
-    mouth = lm[[48, 54, 51, 57]].mean(axis=0)
-    nose = lm[30]
-    # remove roll so "vertical" is the face's own vertical
-    th = np.deg2rad(-roll_deg)
-    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
-    e, m, n = (R @ (v - eyes) for v in (eyes, mouth, nose))
-    span = m[1] - e[1]
-    if abs(span) < 1e-3:
-        return None
-    r = (n[1] - e[1]) / span
-    dy, dz = _EYE_Y - _MOUTH_Y, _EYE_Z - _MOUTH_Z
-    return float(np.degrees(np.arctan2(_EYE_Y - r * dy, r * dz - _EYE_Z)))
 
 
 def roll_from_eyes(landmarks68: np.ndarray) -> float:
@@ -275,11 +243,6 @@ def angles_from_ratios(r: dict[str, float], neutral: "Neutral | None" = None) ->
     if neutral is not None and "pitch" in neutral.r:
         pr = pr - neutral.r["pitch"] + _PITCH_R0
     return Pose(yaw, _pitch_from_r(pr), 0.0)
-
-
-def yaw_from_ratio(landmarks68: np.ndarray, roll_deg: float) -> float | None:
-    p = angles_from_ratios(ratios(landmarks68, roll_deg))
-    return p.yaw if p else None
 
 
 YAW_GAIN = 1.2

@@ -193,11 +193,124 @@ class Cv2Display:
             cv2.destroyAllWindows(); cv2.waitKey(1)
 
 
+# ---------------------------------------------------------------- stream ----
+STREAM_ENV = "FACEUP_UI_STREAM"
+_stream_out = None
+
+
+def stream_out():
+    """The pipe the manager app reads snapshots from: the process's original stdout. Taken once;
+    from then on fd 1 points at stderr so every print (CLI messages, library noise) goes to the
+    app's console instead of corrupting the snapshot stream."""
+    global _stream_out
+    if _stream_out is None:
+        import sys
+        sys.stdout.flush()
+        _stream_out = os.fdopen(os.dup(1), "w", buffering=1)
+        os.dup2(2, 1)
+    return _stream_out
+
+
+def encode_snapshot(snap: dict, quality: int = 72) -> str:
+    """One JSON line: the window's snapshot dict with the camera frame as a base64 JPEG."""
+    import base64
+    import json
+
+    import cv2
+    out = {k: v for k, v in snap.items() if k != "frame"}
+    fr = snap.get("frame")
+    if fr is not None:
+        ok, buf = cv2.imencode(".jpg", cv2.cvtColor(fr, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if ok:
+            out["jpg"] = base64.b64encode(buf.tobytes()).decode()
+
+    def conv(o):
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        if isinstance(o, np.generic):
+            return o.item()
+        return str(o)
+    return json.dumps(out, default=conv)
+
+
+def decode_snapshot(line: str) -> dict | None:
+    """The inverse, in the manager app: the dict back, the frame as an RGB array."""
+    import base64
+    import json
+
+    import cv2
+    try:
+        snap = json.loads(line)
+    except ValueError:
+        return None
+    jpg = snap.pop("jpg", None)
+    if jpg:
+        img = cv2.imdecode(np.frombuffer(base64.b64decode(jpg), np.uint8), cv2.IMREAD_COLOR)
+        snap["frame"] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img is not None else None
+    return snap
+
+
+class StreamDisplay:
+    """No window: the snapshots go to the manager app (`faceup app`), which draws them inside its
+    own window, and its buttons come back as key lines on stdin. This keeps the camera and the
+    0600 face store in the privileged process while the user sees one application."""
+    name = "stream"
+    snapshot = True
+    MAX_FPS = 24
+
+    def __init__(self, title: str, width: int, height: int):
+        self.title, self.backend = title, "stream"
+        self.out = stream_out()
+        self._keys: queue.Queue = queue.Queue()
+        threading.Thread(target=self._read_keys, daemon=True, name="faceup-ui-keys").start()
+
+    def _read_keys(self) -> None:
+        import sys
+        for line in sys.stdin:
+            k = line.strip()
+            if k:
+                self._keys.put(k)
+        self._keys.put(KEY_ESC)                 # the app went away: cancel, never hang
+
+    def keys(self) -> list[str]:
+        out = []
+        while True:
+            try:
+                out.append(self._keys.get_nowait())
+            except queue.Empty:
+                return out
+
+    def push_key(self, k: str) -> None:
+        self._keys.put(k)
+
+    def run(self, step) -> None:
+        import time
+        last, last_phase = 0.0, None
+        while True:
+            snap = step()
+            if snap is None:
+                break
+            now = time.monotonic()
+            if now - last < 1.0 / self.MAX_FPS and snap.get("phase") == last_phase:
+                continue                         # throttle the pipe, but never drop a phase change
+            last, last_phase = now, snap.get("phase")
+            try:
+                self.out.write(encode_snapshot(snap) + "\n")
+            except (BrokenPipeError, OSError):
+                self._keys.put(KEY_ESC)
+        try:
+            self.out.write('{"phase": "closed"}\n')
+        except OSError:
+            pass
+
+
 def open_display(title: str, width: int, height: int, prefer: str = "gtk", kind: str = "raw", canvas=None, **kw):
     """Open a window. kind="enroll" / "emitter" / "lab" / "calibrate": the libadwaita application windows (faceup.appui),
     which consume snapshot dicts (`screen.snapshot` is True); kind="raw" or any fallback: a
     canvas display (GTK4 picture, then OpenCV HighGUI). Raises DisplayUnavailable if nothing works."""
     errors = []
+    if os.environ.get(STREAM_ENV) and kind == "calibrate":
+        return StreamDisplay(title, width, height)
     if kind in ("enroll", "emitter", "lab", "calibrate") and prefer == "gtk":
         try:
             from . import appui

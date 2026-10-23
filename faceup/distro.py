@@ -4,7 +4,6 @@ libadwaita introspection), gcc. Package names are best knowledge, not verified o
 the hint says so when a piece is not packaged."""
 from __future__ import annotations
 
-FAMILIES = ("debian", "fedora", "arch", "suse")
 
 PACKAGES = {
     "debian": {"cmd": "apt install", "opencv": "python3-opencv", "dlib": "python3-dlib", "dlib-models": "dlib-models",

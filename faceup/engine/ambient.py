@@ -79,11 +79,6 @@ def same_module(a: str, b: str) -> bool:
     return bool(ua) and ua == ub and "/usb" in ua
 
 
-def is_dark(threshold: float = DARK_LUX) -> bool | None:
-    v = lux()
-    return None if v is None else v < threshold
-
-
 def for_light(devices: dict[str, str], threshold: float = DARK_LUX) -> tuple[dict[str, str], str]:
     """The cameras worth opening in this light: IR alone when the room is dark (see module doc).
     Returns (devices, note); note is '' when nothing was dropped."""

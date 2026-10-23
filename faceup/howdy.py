@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 CONFIG = Path("/etc/howdy/config.ini")
@@ -25,28 +24,6 @@ def get(key: str, default: str | None = None) -> str | None:
         return default
     m = re.search(rf"^\s*{re.escape(key)}\s*=\s*(.*?)\s*$", text, re.M)
     return m.group(1) if m else default
-
-
-def set_many(values: dict[str, str], backup: bool = True) -> list[str]:
-    """Replace `key = value` lines in place, keeping comments/order. Returns changed keys."""
-    text = CONFIG.read_text()
-    changed = []
-    for key, val in values.items():
-        pat = re.compile(rf"^(\s*{re.escape(key)}\s*=\s*)(.*?)\s*$", re.M)
-        m = pat.search(text)
-        if m and m.group(2) == val:
-            continue
-        if m:
-            text = pat.sub(lambda mm: mm.group(1) + val, text, count=1)
-        else:
-            # append under [video] if the key is unknown to this Howdy version
-            text = text.replace("[video]", f"[video]\n{key} = {val}", 1)
-        changed.append(key)
-    if changed:
-        if backup:
-            shutil.copy2(CONFIG, CONFIG.with_suffix(f".ini.bak-{time.strftime('%Y%m%d-%H%M%S')}"))
-        CONFIG.write_text(text)
-    return changed
 
 
 def models(user: str) -> list[str]:
@@ -78,16 +55,6 @@ def run(*args: str, user: str | None = None, yes: bool = False) -> int:
         cmd.append("-y")
     cmd += list(args)
     return subprocess.call(cmd)
-
-
-def pam_enabled() -> bool:
-    for f in ("/etc/pam.d/common-auth", "/etc/pam.d/sudo", "/etc/pam.d/system-auth"):
-        try:
-            if "pam_howdy" in open(f).read():
-                return True
-        except OSError:
-            pass
-    return False
 
 
 def real_user() -> str:

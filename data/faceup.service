@@ -1,0 +1,22 @@
+[Unit]
+Description=faceup resident face engine (keeps the models loaded for fast face unlock)
+Documentation=file:///usr/local/lib/faceup/README.md
+After=systemd-udevd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/faceup daemon run
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+# hardening: needs the cameras, /etc/faceup (store, learning), /var/log/faceup.log and /run/faceup
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/etc/faceup /var/log
+RuntimeDirectory=faceup
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

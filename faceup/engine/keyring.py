@@ -187,7 +187,8 @@ def status(user: str) -> dict:
     except PermissionError:
         enrolled = None                      # the directory is 0700 root: unknown without root
     return {"file": str(p), "enrolled": enrolled, "tpm": has_tpm(), "encrypted_root": root_is_encrypted(),
-            "systemd_creds": os.path.exists(CREDS_BIN), "recommended_key": choose_key()}
+            "systemd_creds": os.path.exists(CREDS_BIN), "recommended_key": choose_key(),
+            "kind": enrolled_key(user) if enrolled else None}
 
 
 # -- PAM lines pam_gnome_keyring / pam_kwallet need ------------------------------------------
