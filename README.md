@@ -13,6 +13,14 @@ and it always fails open to your password. Free and open source (MIT). [Install]
 [How it works](#the-guide-why-face-unlock-fails-on-linux-and-how-to-make-it-reliable) ·
 [Security](SECURITY.md) · [Honest limits](#honest-limits)
 
+<!-- Hero demo (face-free terminal screencast): run docs/assets/record_demo.sh, then uncomment -->
+<!-- ![Ward unlocking a sudo prompt by face](docs/demo.gif) -->
+
+<p align="center">
+  <img src="docs/assets/app-overview.png" width="420" alt="Ward app — Overview: on/off, reliability, people">
+  <img src="docs/assets/app-reliability.png" width="420" alt="Ward app — Reliability: rates by light, service and person">
+</p>
+
 [Howdy](https://github.com/boltgolt/howdy) gives Linux Windows-Hello-style face
 authentication for login, `sudo` and polkit. Out of the box it is unreliable for
 reasons that have nothing to do with face recognition: it picks the wrong camera,
