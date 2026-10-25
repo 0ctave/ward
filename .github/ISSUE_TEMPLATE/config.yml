@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Security vulnerability (report privately)
+    url: https://github.com/0ctave/ward/security/advisories/new
+    about: Do NOT open a public issue for a security bug. Report it privately here. See SECURITY.md for the threat model.
+  - name: 📷 Run `ward doctor` first
+    url: https://github.com/0ctave/ward#troubleshooting
+    about: Most install and camera problems are diagnosed (with a fix command) by `ward doctor` and the Troubleshooting table.

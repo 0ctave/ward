@@ -1,6 +1,6 @@
 # Contributing to faceup
 
-Thanks for helping make face unlock on Linux reliable. The most valuable contributions are
+Thanks for helping make face unlock on Linux reliable. By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). The most valuable contributions are
 **camera quirks from other laptops** and **portability fixes** — faceup is developed on one machine
 and every new module teaches it something.
 

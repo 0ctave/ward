@@ -1,0 +1,47 @@
+name: "🐞 Bug report"
+description: Something in Ward behaves incorrectly (not a camera/hardware or security issue).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For **camera or recognition** problems use the *Camera / hardware* template instead.
+        For **security vulnerabilities**, do not open an issue — see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Ward version
+      description: Output of `ward --version`.
+      placeholder: "ward 0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Distro, Python, OpenCV
+      placeholder: "e.g. Arch, Python 3.13, OpenCV 5.0 — from `ward doctor`"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `ward …`
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected vs. what happened
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Command output, `ward log -n 5`, or a traceback. (Ward must always fall back to the password — if it ever locked you out, say so clearly, that's the most serious kind of bug.)
+      render: text
+    validations:
+      required: false
