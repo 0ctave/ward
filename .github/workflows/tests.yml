@@ -8,7 +8,9 @@ jobs:
       - name: Distro dependencies (the only ones ward uses — no pip)
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-opencv python3-dlib dlib-models python3-numpy gcc libpam0g
+          sudo apt-get install -y python3-opencv python3-numpy gcc libpam0g
+          # dlib isn't in the Ubuntu archive; the suite runs without it (mocked detectors), so best-effort:
+          sudo apt-get install -y python3-dlib dlib-models || echo 'python3-dlib not available — suite runs without it'
       - name: Unit tests (no camera, no root)
         run: python3 -m unittest discover -s tests -v
       - name: Native PAM module builds

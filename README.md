@@ -131,8 +131,9 @@ sudo -k && sudo true       # unlocks by face; ward log shows every attempt
 
 ### Runs on
 
-Any Linux with `python3-opencv` (≥ 4.6) and `python3-dlib` (`dlib-models`) — Debian, Ubuntu,
-Fedora, Arch (AUR). Python 3.10 to 3.13. Profiles: **A** IR + RGB (Windows-Hello modules),
+Any Linux with `python3-opencv` (≥ 4.6) and a face recogniser — dlib (`python3-dlib`, from the
+distro / PPA / AUR / source) or Ward's downloaded ArcFace (no dlib). Tested on Debian, Ubuntu,
+Fedora, Arch and openSUSE. Python 3.10 to 3.13. Profiles: **A** IR + RGB (Windows-Hello modules),
 **B** IR only, **C** RGB only (recognition alone unless the anti-spoof model is present; setup
 asks). Any frame size. Without a TPM the keyring credential uses the host key on an encrypted
 disk; without gcc the PAM line falls back to `pam_exec` (no keyring token); without
@@ -164,19 +165,71 @@ pipeline on recorded frames across these profiles, in CI, without a camera.
 
 ## Install
 
-`ward` deliberately uses the **distro Python** — the one that has `python3-dlib`
-and `python3-opencv`. A virtualenv would not see them.
+### Prerequisites
+
+- A laptop or webcam running Linux. Ward is at its best with a **Windows Hello infrared camera**
+  (most 2019-and-later business/premium laptops) — infrared is what lets it work in the dark and
+  reject phone-screen photos. A plain colour webcam also works (recognition + the anti-spoof CNN),
+  just without IR liveness and night unlock.
+- Your **distro's** Python 3.10–3.13 with OpenCV. Ward never uses pip or a virtualenv — the system
+  OpenCV and dlib aren't visible inside one.
+
+### 1. Install dependencies
+
+Ward needs **OpenCV**, the **GTK 4 / libadwaita** bindings (for the app; it falls back to text
+without them), **gcc** (to build the small PAM module), and a **face recogniser** — either dlib
+(the default) or Ward's downloaded ArcFace model (no dlib needed).
+
+| Distro | Command |
+|---|---|
+| Debian / Ubuntu / Mint / Pop!_OS | `sudo apt install python3-opencv python3-gi python3-gi-cairo gir1.2-adw-1 gcc libc6-dev` |
+| Fedora / RHEL | `sudo dnf install python3-opencv python3-gobject libadwaita gcc` |
+| Arch / Manjaro | `sudo pacman -S python-opencv python-gobject python-cairo libadwaita gcc` |
+| openSUSE Tumbleweed | `sudo zypper install python3-opencv python3-gobject python3-gobject-cairo typelib-1_0-Adw-1 gcc python3-dlib` |
+
+**The recogniser — pick one:**
+
+- **dlib** (default). Packaged as `python3-dlib` only on openSUSE Tumbleweed (included above). On
+  **Ubuntu/Debian** it comes from Howdy's PPA, on **Arch** from the AUR (`python-dlib`), elsewhere
+  build it from source. You also need the model files in `/usr/share/dlib` (package `dlib-models`,
+  or download the `shape_predictor_*` and `dlib_face_recognition_resnet_model_v1.dat` files from
+  [dlib.net/files](http://dlib.net/files/)).
+- **ArcFace** (no dlib). Simplest when dlib isn't packaged for you: after installing Ward below,
+  run `sudo ward recogniser install && sudo ward recogniser use arcface`. Ward then uses its
+  bundled YuNet detector and a downloaded ArcFace model, both through OpenCV.
+
+Not sure what you have? Install Ward and run `ward doctor` — it checks every dependency and prints
+the exact command for anything missing.
+
+### 2. Install Ward
 
 ```bash
 git clone https://github.com/0ctave/ward && cd ward
-sudo ./install.sh          # /usr/local/lib/ward + /usr/local/bin/{ward,ward-auth}
-ward doctor
-sudo ward setup          # ends with: sudo -k && sudo true  → unlocks by face
+sudo ./install.sh          # → /usr/local/lib/ward + /usr/local/bin/{ward,ward-auth}
+ward doctor                # run this first: it diagnoses cameras, emitter, recogniser, PAM
+sudo ward setup            # guided setup — or open the Ward app and click "Run the full setup"
 ```
 
-Requirements: Linux, `python3-opencv`, `python3-dlib`, `dlib-models` (Ubuntu 24.04:
-all in the archive). Howdy is no longer required, but coexists.
+`setup` is a guided, reversible chain (cameras → emitter → recogniser → register → keyring → PAM)
+and the app does the same thing graphically, step by step, inside its window. It finishes by
+testing a real unlock (`sudo -k && sudo true`). Howdy is not required and coexists.
+
 Uninstall: `sudo ward pam disable && sudo ./install.sh --uninstall`.
+
+### Troubleshooting
+
+`ward doctor` is the first stop for anything — it diagnoses every part and prints the fix command.
+The usual ones:
+
+| Symptom (or what `doctor` says) | Fix |
+|---|---|
+| `dlib missing`, or recognition errors on first use | install dlib (above), or `sudo ward recogniser use arcface` |
+| Works in daylight, fails in the dark | the IR emitter isn't firing: `sudo ward emitter probe` |
+| `no IR camera` but the laptop has one | it may stream as YUYV — set `cameras.ir` and `cameras.force_roles true` (doctor shows the id) |
+| Face unlock never triggers | `ward pam status`; turn it on with `sudo ward pam enable` (or the app's switch) |
+| Keyring stays locked after a face login | `sudo ward keyring enable` (and `sudo ward keyring repair` if an old config disabled it) |
+| The app windows are plain text | GTK 4 + libadwaita bindings are missing — install them (above) |
+| Unlock feels slow | `sudo ward daemon enable` (keeps the models loaded), and check you're not on the power-saver profile |
 
 ### Distro packages (built offline from this repo)
 
