@@ -9,7 +9,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from faceup.engine import emitter
+from ward.engine import emitter
 
 TOOL_FILE = """- status: start
   unit: 4

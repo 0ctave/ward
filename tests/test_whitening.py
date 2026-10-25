@@ -7,12 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from faceup.engine import store  # noqa: E402
+from ward.engine import store  # noqa: E402
 
 
 def unit(v):

@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from faceup.engine import pose, store  # noqa: E402
+from ward.engine import pose, store  # noqa: E402
 
 
 def synth_landmarks(yaw_deg: float, pitch_deg: float, w=640, h=360) -> np.ndarray:
@@ -96,7 +96,7 @@ class PoseTests(unittest.TestCase):
         self.assertGreater(abs(p0.pitch) + abs(p0.yaw), 4)
 
     def test_display_space_is_applied_exactly_once(self):
-        from faceup import gui
+        from ward import gui
         cam = pose.Pose(-20.0, -5.0, 3.0)                    # user turned to THEIR right (nose camera-left)
         d = gui.to_display(cam, -1.0)
         self.assertEqual((d.yaw, d.pitch, d.roll), (20.0, -5.0, -3.0))   # → right of centre on the panel
@@ -135,7 +135,7 @@ class PoseTests(unittest.TestCase):
 
     def test_gui_uses_only_existing_pose_api(self):
         import re
-        from faceup import gui
+        from ward import gui
         src = open(gui.__file__).read()
         for name in set(re.findall(r"posemod\.([A-Za-z_]+)", src)):
             self.assertTrue(hasattr(pose, name), f"gui.py references pose.{name} which does not exist")
@@ -183,7 +183,7 @@ class InterpolationTests(unittest.TestCase):
 
 class EmitterVerdictTests(unittest.TestCase):
     def test_inference_from_rgb_vs_ir(self):
-        from faceup.gui import emitter_verdict
+        from ward.gui import emitter_verdict
         self.assertEqual(emitter_verdict(80, True, 120)[0], "inconclusive")   # lights on: can't tell
         self.assertEqual(emitter_verdict(70, True, 20)[0], "ok")              # dark room, IR sees a face
         self.assertEqual(emitter_verdict(12, False, 20)[0], "dead")           # dark room, IR dark too
@@ -193,7 +193,7 @@ class EmitterVerdictTests(unittest.TestCase):
 
 class YuNetTests(unittest.TestCase):
     def test_bundled_model_loads_and_is_default(self):
-        from faceup.engine import detect
+        from ward.engine import detect
         self.assertTrue(detect.YUNET_MODEL.exists(), detect.YUNET_MODEL)
         self.assertTrue(detect.yunet_available())
         m = detect.Models()
@@ -204,7 +204,7 @@ class YuNetTests(unittest.TestCase):
     def test_model_per_opencv_version_and_pinned(self):
         import hashlib
         from unittest import mock
-        from faceup.engine import detect
+        from ward.engine import detect
         pins = {detect.YUNET_2022: "50ef07f702a31741ca46a4c0d947773b64143b9362780237bf0d427d6c79bab7",
                 detect.YUNET_2023: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"}
         for p, h in pins.items():
@@ -215,7 +215,7 @@ class YuNetTests(unittest.TestCase):
                 self.assertEqual(detect.yunet_candidates()[0], first, ver)
 
     def test_unrunnable_graph_retries_the_other_one(self):
-        from faceup.engine import detect
+        from ward.engine import detect
         m = detect.Models()
         good = m._yunet_models[0]
         m._yunet_models = [detect._MODELS_DIR / "LICENSE-Apache-2.0.txt", good]   # not a graph → cv2.error

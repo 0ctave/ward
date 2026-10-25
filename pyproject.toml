@@ -3,15 +3,21 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "faceup"
+name = "ward"
 version = "0.3.0"
 description = "Face unlock for Linux that actually works: dual-spectrum (IR+RGB) recognition with liveness voters, fail-open PAM integration."
 readme = "README.md"
 license = { text = "MIT" }
+authors = [{ name = "octave" }]
 requires-python = ">=3.10"
-keywords = ["howdy", "face-unlock", "pam", "linux", "infrared", "biometrics"]
+keywords = ["howdy", "face-unlock", "pam", "linux", "infrared", "biometrics", "liveness", "anti-spoofing", "wayland"]
 classifiers = [
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
+  "Environment :: X11 Applications :: GTK",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Security",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Topic :: System :: Systems Administration",
@@ -21,13 +27,16 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
-faceup = "faceup.cli:main"
+ward = "ward.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/<you>/faceup"
+Homepage = "https://github.com/0ctave/ward"
+Repository = "https://github.com/0ctave/ward"
+Issues = "https://github.com/0ctave/ward/issues"
+Changelog = "https://github.com/0ctave/ward/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
-include = ["faceup*"]
+include = ["ward*"]
 
 [tool.setuptools.package-data]
-faceup = ["models/*"]
+ward = ["models/*"]

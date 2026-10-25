@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from faceup import cameras  # noqa: E402
+from ward import cameras  # noqa: E402
 
 
 def cam(path, fmts, iface, vid="30c9", pid="0057"):
@@ -89,11 +89,11 @@ if __name__ == "__main__":
 
 class ModuleLayoutTests(unittest.TestCase):
     def test_terminal_ui_and_app_ui_are_separate_modules(self):
-        from faceup import ui
+        from ward import ui
         for name in ("ok", "warn", "fail", "banner", "section", "confirm", "ask"):
-            self.assertTrue(hasattr(ui, name), f"faceup.ui lost {name}")
+            self.assertTrue(hasattr(ui, name), f"ward.ui lost {name}")
         try:
-            from faceup import appui
+            from ward import appui
         except (ImportError, ValueError) as e:       # no GTK 4/libadwaita/pycairo (minimal containers)
             self.skipTest(f"GTK stack incomplete: {e}")
         self.assertTrue(hasattr(appui, "EnrollWindow") and hasattr(appui, "EmitterWindow"))

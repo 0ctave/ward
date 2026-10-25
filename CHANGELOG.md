@@ -2,10 +2,10 @@
 
 ## Unreleased — 2026-10-22
 
-### Accuracy benchmarks (`faceup benchmark …`)
-- `faceup/lfw.py` (impostor/genuine FMR-FNMR, EER, AUC on LFW — recogniser), `faceup/celeba_spoof.py`
-  (APCER/BPCER/ACER on CelebA-Spoof — anti-spoof CNN, per-attack-type breakdown), `faceup/ir_pad.py`
-  (cross-spectrum PAD on paired colour+IR, CASIA-SURF/WMCA), `faceup/redteam.py` (digital attacks on
+### Accuracy benchmarks (`ward benchmark …`)
+- `ward/lfw.py` (impostor/genuine FMR-FNMR, EER, AUC on LFW — recogniser), `ward/celeba_spoof.py`
+  (APCER/BPCER/ACER on CelebA-Spoof — anti-spoof CNN, per-attack-type breakdown), `ward/ir_pad.py`
+  (cross-spectrum PAD on paired colour+IR, CASIA-SURF/WMCA), `ward/redteam.py` (digital attacks on
   your own frames: recognition robustness + whether the RGB CNN alone is fooled). Wired as the
   `benchmark {lfw,spoof,ir,redteam}` command group (forwards to each module's argparse). Datasets are
   research-only and never bundled; tests use mocks (no dataset, no camera).
@@ -16,40 +16,40 @@
 Enrol once in normal light, unlock in any light; one coherent enrolment window; safer PAM; other distros.
 
 ### Portability matrix (rootless podman)
-- `tests/containers/run.sh [fedora arch tumbleweed ubuntu2204 debian12]` (not part of `unittest discover`): installs the `faceup/distro.py` packages, runs the suite, `faceup doctor`, `faceup --help`, builds `pam_faceup.so` with stage.sh's flags and, on Fedora, the RPM. All five pass (Python 3.10–3.14, OpenCV 4.5.4–5.0); uses `--network=host` when neither slirp4netns nor pasta is installed.
+- `tests/containers/run.sh [fedora arch tumbleweed ubuntu2204 debian12]` (not part of `unittest discover`): installs the `ward/distro.py` packages, runs the suite, `ward doctor`, `ward --help`, builds `pam_ward.so` with stage.sh's flags and, on Fedora, the RPM. All five pass (Python 3.10–3.14, OpenCV 4.5.4–5.0); uses `--network=host` when neither slirp4netns nor pasta is installed.
 - **YuNet on OpenCV ≥ 4.8 (Fedora, Arch, Tumbleweed):** the bundled 2022 graph fails in `forward()` there, so every frame errored and, without dlib, no face was ever found. The 2023mar graph is now bundled too (Apache-2.0, sha256 pinned), picked by OpenCV version, with a one-time retry on the other graph. Measured 40/40 detections on recorded day IR/RGB and dark IR frames on 4.5.4, 4.6, 4.13 and 5.0.
-- **No dlib / no dlib models:** `Models()` no longer raises at construction and `preload()` tolerates missing pieces; dark/no-face outcomes come out as such and the first embedding raises the clear error (faceup-auth still fails open). The suite passes without dlib.
+- **No dlib / no dlib models:** `Models()` no longer raises at construction and `preload()` tolerates missing pieces; dark/no-face outcomes come out as such and the first embedding raises the clear error (ward-auth still fails open). The suite passes without dlib.
 - `distro.py` corrected from measurement: python3-dlib is not in Debian/Ubuntu/Fedora (Tumbleweed has it), GTK needs pycairo (`python3-gi-cairo`, `python3-gobject-cairo`, `python-cairo`), Debian needs `libc6-dev` beside gcc; numpy added. Doctor's GTK check imports cairo and its gcc line flags missing libc headers.
 - RPM spec: `BuildRequires: python3-rpm-macros` (`%py_byte_compile` was undefined on a clean Fedora). Keyring test: the ignored-SIGCHLD case no longer goes through pam_exec, which itself fails that way on Linux-PAM < 1.5.3.
 - Doctor no longer blames a "shadowing pyenv/conda Python" when `/usr/bin/python3` itself simply lacks dlib (the case on every distro but Tumbleweed): a warning plus the distro hint instead of a failure.
 
 ### Distro packaging
-- `packaging/build-deb.sh` builds a .deb offline with `dpkg-deb` (Depends python3, python3-opencv, python3-numpy; Recommends dlib, GTK 4/libadwaita, polkit); `packaging/faceup.spec` (RPM) and `packaging/PKGBUILD` (Arch) mirror it. All install under `/usr`, compile `pam_faceup.so` at build time, enable the resident engine on first install and never edit PAM; .deb/.rpm removal is refused while `/etc/pam.d` still references faceup.
+- `packaging/build-deb.sh` builds a .deb offline with `dpkg-deb` (Depends python3, python3-opencv, python3-numpy; Recommends dlib, GTK 4/libadwaita, polkit); `packaging/ward.spec` (RPM) and `packaging/PKGBUILD` (Arch) mirror it. All install under `/usr`, compile `pam_ward.so` at build time, enable the resident engine on first install and never edit PAM; .deb/.rpm removal is refused while `/etc/pam.d` still references ward.
 - `packaging/stage.sh` is the one file layout shared by `install.sh` and the packages (launchers, PAM module, desktop/polkit/icons/unit with the prefix substituted).
-- `faceup/paths.py`: the PAM line, the app's pkexec launcher and the daemon status follow the install prefix (`/usr` for a package, `/usr/local` from source) instead of hard-coding `/usr/local`.
-- `faceup pam enable` now rewrites a pam_exec line that points at the other prefix (from-source ↔ package switch) instead of keeping a path to a missing `faceup-auth` (review fix).
+- `ward/paths.py`: the PAM line, the app's pkexec launcher and the daemon status follow the install prefix (`/usr` for a package, `/usr/local` from source) instead of hard-coding `/usr/local`.
+- `ward pam enable` now rewrites a pam_exec line that points at the other prefix (from-source ↔ package switch) instead of keeping a path to a missing `ward-auth` (review fix).
 
 ### Code layout (no behaviour change)
 
-- `faceup/cli.py` (1538 lines) is now the package `faceup/cli/` split by command group (`common`, `doctor`, `enroll`, `auth`, `manage`, `setup`); `cli/__init__.py` keeps `main`, the argparse surface (every `--help` output byte-identical) and re-exports every former attribute. `python3 -m faceup.cli` works too.
-- `faceup/app.py`: the window classes left the `main()` closure for module-level code in `faceup/app_window.py`; `faceup.app` still imports without GTK.
+- `ward/cli.py` (1538 lines) is now the package `ward/cli/` split by command group (`common`, `doctor`, `enroll`, `auth`, `manage`, `setup`); `cli/__init__.py` keeps `main`, the argparse surface (every `--help` output byte-identical) and re-exports every former attribute. `python3 -m ward.cli` works too.
+- `ward/app.py`: the window classes left the `main()` closure for module-level code in `ward/app_window.py`; `ward.app` still imports without GTK.
 
 ### Anti-spoof CNN voter (active)
-- **MiniFASNetV2 bundled** (`faceup/models/minifasnet_v2.onnx`, Apache-2.0, 1.7 MB, sha256 pinned and checked at load, licence in `models/LICENSE-Apache-2.0.txt`): a second independent liveness PASS in daylight. Reference preprocessing (box ×2.7, shifted back inside the frame at an edge rather than clipped — review fix, as in the reference `_get_new_box`; 80×80, BGR, raw). Measured on recorded daylight RGB: p_real min 0.994 (80/80 PASS).
+- **MiniFASNetV2 bundled** (`ward/models/minifasnet_v2.onnx`, Apache-2.0, 1.7 MB, sha256 pinned and checked at load, licence in `models/LICENSE-Apache-2.0.txt`): a second independent liveness PASS in daylight. Reference preprocessing (box ×2.7, shifted back inside the frame at an edge rather than clipped — review fix, as in the reference `_get_new_box`; 80×80, BGR, raw). Measured on recorded daylight RGB: p_real min 0.994 (80/80 PASS).
 - Conservative because a FAIL is sticky: PASS at median p_real ≥ 0.90; FAIL only when ≥ 2 RGB frames all score ≤ 0.02; else ABSTAIN. Grey/IR or dark frames, tiny faces and a broken model abstain.
-- `faceup antispoof status|on|off|test DIR`; doctor/health item (fix: turn on / reinstall), setup step 3, app Advanced row.
+- `ward antispoof status|on|off|test DIR`; doctor/health item (fix: turn on / reinstall), setup step 3, app Advanced row.
 
 ### Resident engine hardening
-- **systemd sandbox** (`data/faceup.service`): no capabilities at all (`CapabilityBoundingSet=`), `DevicePolicy=closed` + `char-video4linux rw` only, `ProtectSystem=strict` with `/etc/faceup` + `/var/log` writable, `PrivateNetwork`, `RestrictAddressFamilies=AF_UNIX`, kernel/cgroup/clock/hostname protection, `RestrictNamespaces`, `LockPersonality`, `MemoryDenyWriteExecute` (numpy, OpenCV YuNet/dnn and dlib verified working under W^X), `@system-service` syscall filter, `MemoryHigh=768M`/`MemoryMax=1G` (512M would OOM-kill an ArcFace r50 reload; the stuck-attempt clock starts after a model reload). `systemd-analyze security` exposure 8.7 → 0.9.
+- **systemd sandbox** (`data/ward.service`): no capabilities at all (`CapabilityBoundingSet=`), `DevicePolicy=closed` + `char-video4linux rw` only, `ProtectSystem=strict` with `/etc/ward` + `/var/log` writable, `PrivateNetwork`, `RestrictAddressFamilies=AF_UNIX`, kernel/cgroup/clock/hostname protection, `RestrictNamespaces`, `LockPersonality`, `MemoryDenyWriteExecute` (numpy, OpenCV YuNet/dnn and dlib verified working under W^X), `@system-service` syscall filter, `MemoryHigh=768M`/`MemoryMax=1G` (512M would OOM-kill an ArcFace r50 reload; the stuck-attempt clock starts after a model reload). `systemd-analyze security` exposure 8.7 → 0.9.
 - **Watchdog:** `Type=notify` + `WatchdogSec=30`; a stdlib `sd_notify` (no libsystemd) sends READY=1 once the models are warm and WATCHDOG=1 from a thread that stops pinging while an attempt is wedged past its deadline, so systemd restarts a stuck daemon even with no new request. No-op without `$NOTIFY_SOCKET`. install.sh reports a daemon that fails to start (unlock still falls back in-process).
 - Memory measured: ~195 MB RSS warm, flat at ~203 MB over 200 replayed attempts (no growth, no thread/fd leak).
 
 ### Security audit
-- **PAM helper environment (critical):** `pam_faceup.so` now `clearenv()`s both root children (the faceup-auth helper and the systemd-creds unseal) and sets only PATH, LANG and PAM_*; through setuid sudo / the polkit agent the inherited environment was the unprivileged caller's (PYTHONHOME, HOME → user site-packages = root code before the password). Both launchers run `python3 -I` with the package path set inside, ignoring every PYTHON* variable and the user site (`faceup` no longer appends the caller's PYTHONPATH).
+- **PAM helper environment (critical):** `pam_ward.so` now `clearenv()`s both root children (the ward-auth helper and the systemd-creds unseal) and sets only PATH, LANG and PAM_*; through setuid sudo / the polkit agent the inherited environment was the unprivileged caller's (PYTHONHOME, HOME → user site-packages = root code before the password). Both launchers run `python3 -I` with the package path set inside, ignoring every PYTHON* variable and the user site (`ward` no longer appends the caller's PYTHONPATH).
 - **Fail open in the PAM module:** the unseal abort kills and reaps with a bound (a decrypt wedged in the TPM no longer holds back the password module); an unreaped or buffer-filling unseal is never read as a good secret; SIGCHLD is defaulted around the helper (pam_exec-style) and a give-up kills the whole group.
 - **Resident engine:** a queued request waits ≤ 1 s for the cameras then answers `busy` (no phantom attempts for clients that left, no handler pile-up); an attempt far past its hard timeout makes the daemon exit for a systemd restart; writes time out; the user name is validated before the cameras. The client falls back to the in-process engine on any daemon error before the attempt starts.
 - **Liveness:** a FAIL from cross-spectrum, shadow or the CNN is sticky — the attempt ends as `spoof:*` (counted by the lockout) instead of waiting for a frame that slips through; motion stays soft. The lockout reads a 1 MB time-filtered tail instead of 400 shared lines. Online learning needs a cross/shadow/CNN PASS (never motion alone) and `learn_max_dist` is clamped to gate − 0.10.
-- **Privileges:** the app never runs a user-writable checkout as root through pkexec (installed launcher, or opt in with `FACEUP_DEV_PKEXEC=1`); the polkit action is `auth_admin` (not remembered — another process of the session could reuse a kept grant for any subcommand).
+- **Privileges:** the app never runs a user-writable checkout as root through pkexec (installed launcher, or opt in with `WARD_DEV_PKEXEC=1`); the polkit action is `auth_admin` (not remembered — another process of the session could reuse a kept grant for any subcommand).
 - **Robustness:** a late camera open after `close()` or a failed attempt start (open timeout, model load error) is released by a non-blocking cancel; the log readers survive invalid UTF-8; the People page ignores an unexpected `models --json` reply.
 
 ### Cleanup
@@ -63,7 +63,7 @@ Enrol once in normal light, unlock in any light; one coherent enrolment window; 
   instead of CLI jargon; suffix buttons carry an accessible label and rows activate them; config
   is read off the GTK thread. "Register" is the user-facing word in the app and CLI messages.
 - Size/speed: `urllib`/`tempfile` imported only by the emitter download; install.sh byte-compiles
-  the installed package (no compile on the first PAM attempt) and builds `pam_faceup.so` with
+  the installed package (no compile on the first PAM attempt) and builds `pam_ward.so` with
   `-Os -s` + section GC (21 KB → 19 KB, `pam_sm_*` still exported).
 
 ### Faster start (LEDs on ~2 s sooner)
@@ -76,11 +76,11 @@ Enrol once in normal light, unlock in any light; one coherent enrolment window; 
   failed RGB open no longer fails the attempt — IR carries it).
 
 ### Resident engine (unlock ~1 s sooner)
-- `faceup.service` (faceup/daemon.py) keeps Python, OpenCV, dlib and the models loaded and warmed
-  (first YuNet inference done at start). `faceup-auth` is now a stdlib-only client
-  (faceup/client.py, ~30 ms to start) that asks it over a root-only socket and relays feedback; with
+- `ward.service` (ward/daemon.py) keeps Python, OpenCV, dlib and the models loaded and warmed
+  (first YuNet inference done at start). `ward-auth` is now a stdlib-only client
+  (ward/client.py, ~30 ms to start) that asks it over a root-only socket and relays feedback; with
   no daemon it runs the in-process engine as before. On by default from install.sh;
-  `faceup daemon status|enable|disable`, a doctor item and a Settings switch ("Keep face unlock ready").
+  `ward daemon status|enable|disable`, a doctor item and a Settings switch ("Keep face unlock ready").
 
 ### Smoother unlock
 - The native PAM module waits for the keyring decrypt at most 1 s after the face is accepted
@@ -88,8 +88,8 @@ Enrol once in normal light, unlock in any light; one coherent enrolment window; 
 - doctor/app warn when the keyring password is TPM-sealed on an encrypted disk and offer to
   re-seal with the instant host key; every attempt now logs its caller (`via gdm-password`, …).
 
-### Manager app (`faceup app`)
-- Runs as the logged-in user; every change goes through `pkexec` (polkit `org.faceup.app`,
+### Manager app (`ward app`)
+- Runs as the logged-in user; every change goes through `pkexec` (polkit `org.ward.app`,
   remembered for a few minutes) — no GTK as root. The launcher no longer wraps the app in pkexec.
 - Pages: Overview (on/off switch, reliability verdict, test unlock, things to fix), People (each
   identity with its cameras, conditions, last unlock; register, re-enrol, add/remove a condition,
@@ -98,10 +98,10 @@ Enrol once in normal light, unlock in any light; one coherent enrolment window; 
   with a one-click action), Settings (policy and per-service dropdowns, behaviour switches,
   keyring), Advanced (setup steps, recogniser, lab, doctor, turn off everywhere).
 - One window: registering, adding a condition and calibrating run INSIDE the manager — the
-  privileged `faceup enroll|calibrate --stream-ui` sends its window state as JSON lines (frame as
+  privileged `ward enroll|calibrate --stream-ui` sends its window state as JSON lines (frame as
   JPEG) and takes the buttons back on stdin (`display.StreamDisplay`); messages go to the console.
-- `faceup models --json` (people on this login, for the app), `--remove-condition C --identity N`;
-  commands run through pkexec resolve the real user from `PKEXEC_UID`. `faceup/manage.py` holds the
+- `ward models --json` (people on this login, for the app), `--remove-condition C --identity N`;
+  commands run through pkexec resolve the real user from `PKEXEC_UID`. `ward/manage.py` holds the
   app's data layer (tested without GTK).
 
 ### Enrolment window, second pass
@@ -145,13 +145,13 @@ Enrol once in normal light, unlock in any light; one coherent enrolment window; 
   timings `ph=models,cams,face` in every log line.
 
 ### Fail-open and portability
-- `pam_faceup.so` enforces its timeout with `poll()` and kills the helper's process group (a silent
-  hung helper used to block the login); `faceup-auth` has a kernel `SIGALRM` backstop.
+- `pam_ward.so` enforces its timeout with `poll()` and kills the helper's process group (a silent
+  hung helper used to block the login); `ward-auth` has a kernel `SIGALRM` backstop.
 - PAM: `common-auth` or `system-auth`, symlink-preserving atomic writes, authselect-managed stacks
   refused with instructions. `install.sh`: distro-aware hints (apt/dnf/pacman/zypper via
-  `faceup/distro.py`), uninstall checks every PAM file, SELinux relabel.
+  `ward/distro.py`), uninstall checks every PAM file, SELinux relabel.
 - libadwaita < 1.3 fallbacks, X11 under sudo (XAUTHORITY), any Wayland socket, YuNet → HOG
-  fallback, `FACEUP_DLIB_DIR` and more model paths, 16-bit IR frames, libcrypt on minimal/musl.
+  fallback, `WARD_DLIB_DIR` and more model paths, 16-bit IR frames, libcrypt on minimal/musl.
 
 ## 0.3.0 — 2026-09-09
 
@@ -159,24 +159,24 @@ The "it just opens, and it's yours" release: one guided setup, honest thresholds
 liveness voter, keyring unlock, and a compatibility matrix so it runs on other machines.
 
 ### The app
-- `faceup app`: one GTK 4 / libadwaita window — Status with a Fix button per check, Setup (seven steps), Faces (people and conditions), Attempts, Lab, Settings. A driver over the CLI: every button runs the matching command and shows its output; `pkexec` launcher entry; read-only without root.
+- `ward app`: one GTK 4 / libadwaita window — Status with a Fix button per check, Setup (seven steps), Faces (people and conditions), Attempts, Lab, Settings. A driver over the CLI: every button runs the matching command and shows its output; `pkexec` launcher entry; read-only without root.
 
 ### Setup and enrolment
-- `faceup enroll` is ONE guided window that enrols **and** calibrates in a single sweep: a ring
+- `ward enroll` is ONE guided window that enrols **and** calibrates in a single sweep: a ring
   frames your face, an arrow points the way, the ring fills as you hold each pose. The gate is
   derived from held-out frames of the same sweep (real fresh-frame distances), so it is honest
   and no longer capped by transition frames. `--classic` keeps the old free-move map.
 - Named **identities**: several people can be registered on one login (`enroll --identity "Alice"`),
   and **conditions** (glasses, headset, night) are added with a short sweep (`enroll --add glasses`).
-- `faceup calibrate` re-derives the gate and the whitening threshold on demand; the whitening
+- `ward calibrate` re-derives the gate and the whitening threshold on demand; the whitening
   threshold then follows your real unlocks within bounds (rolling refresh).
 - The IR emitter is found by measurement in any lighting (`emitter probe`), its switch speed
   benchmarked (`emitter toggle-bench`), and it is turned on before the cameras open.
 
 ### Unlock
-- Native PAM module `pam_faceup.so` (built with plain gcc, no -dev headers): forwards the
+- Native PAM module `pam_ward.so` (built with plain gcc, no -dev headers): forwards the
   helper's messages to GDM/SDDM/KDE/polkit, and hands PAM a **sealed keyring credential** so
-  GNOME Keyring / KWallet unlock after a face login (`faceup keyring enable`). Host-key sealing
+  GNOME Keyring / KWallet unlock after a face login (`ward keyring enable`). Host-key sealing
   on encrypted disks (instant), TPM2 optional; the decrypt runs in parallel with recognition.
 - Feedback on every surface: PAM info lines, a terminal spinner for sudo, transient notifications.
 - Faster: cameras open in parallel with model loading, no probes on the auth path, early reject
@@ -185,7 +185,7 @@ liveness voter, keyring unlock, and a compatibility matrix so it runs on other m
   resolution-independent; honest `liveness` failure reason with per-camera light states.
 
 ### Engine
-- Pluggable recogniser: dlib (default) or **ArcFace** via OpenCV DNN (`faceup recogniser install`);
+- Pluggable recogniser: dlib (default) or **ArcFace** via OpenCV DNN (`ward recogniser install`);
   dlib is optional on the ArcFace + YuNet path.
 - Replay harness: `lab --record-frames`, `auth --replay` — the whole pipeline in CI without hardware.
 
@@ -195,7 +195,7 @@ liveness voter, keyring unlock, and a compatibility matrix so it runs on other m
   no libadwaita all fall back with a clear message. `tests/test_compat.py` is the matrix.
 
 ### Security policy
-- `faceup tune policy convenience|balanced|strict` presets; spoof lockout after repeated
+- `ward tune policy convenience|balanced|strict` presets; spoof lockout after repeated
   liveness FAILs (password always available); per-service overrides.
 
 ## 0.2.0 — 2026-08-31

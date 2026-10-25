@@ -10,10 +10,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 
-from faceup.engine import keyring as kr
+from ward.engine import keyring as kr
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,7 +45,7 @@ class Sealing(unittest.TestCase):
             kr.cred_path("../etc")
 
     def test_key_choice_prefers_fast_host_key_on_fde(self):
-        import faceup.engine.keyring as k
+        import ward.engine.keyring as k
         orig_tpm, orig_fde = k.has_tpm, k.root_is_encrypted
         try:
             # FDE present → host key (fast), even when a TPM exists, unless forced
@@ -64,18 +64,18 @@ class Sealing(unittest.TestCase):
 
     def test_verify_password_without_shadow_access_is_none(self):
         # unprivileged: no shadow → None (caller asks the user); never a false True
-        self.assertIn(kr.verify_password("no-such-user-faceup", "x"), (None, False))
+        self.assertIn(kr.verify_password("no-such-user-ward", "x"), (None, False))
 
 
 class PamRepair(unittest.TestCase):
     def test_tagged_comments_are_restored(self):
         d = Path(tempfile.mkdtemp())
         (d / "gdm-password").write_text("auth\trequisite\tpam_nologin.so\n"
-                                        "# auth    optional        pam_gnome_keyring.so  # faceup-keyring\n"
+                                        "# auth    optional        pam_gnome_keyring.so  # ward-keyring\n"
                                         "@include common-auth\n"
                                         "session optional        pam_gnome_keyring.so auto_start\n")
-        (d / "common-password").write_text("# password\toptional\tpam_gnome_keyring.so   # faceup-keyring\n")
-        (d / "gdm-password.faceup-bak").write_text("auth    optional        pam_gnome_keyring.so\n")
+        (d / "common-password").write_text("# password\toptional\tpam_gnome_keyring.so   # ward-keyring\n")
+        (d / "gdm-password.ward-bak").write_text("auth    optional        pam_gnome_keyring.so\n")
         found = kr.disabled_keyring_lines(d)
         self.assertEqual(sorted(p.name for p, _ in found), ["common-password", "gdm-password"])
         self.assertEqual(sorted(Path(x).name for x in kr.repair_pam_lines(d, dry_run=True)), ["common-password", "gdm-password"])
@@ -84,12 +84,12 @@ class PamRepair(unittest.TestCase):
         self.assertEqual(kr.disabled_keyring_lines(d), [])
         text = (d / "gdm-password").read_text()
         self.assertIn("\nauth    optional        pam_gnome_keyring.so\n", text)
-        self.assertNotIn("faceup-keyring", text)
+        self.assertNotIn("ward-keyring", text)
         self.assertEqual((d / "common-password").read_text(), "password\toptional\tpam_gnome_keyring.so\n")
 
 
 class NativeModule(unittest.TestCase):
-    """Build data/pam_faceup.c and drive pam_sm_authenticate through the real libpam."""
+    """Build data/pam_ward.c and drive pam_sm_authenticate through the real libpam."""
 
     @classmethod
     def setUpClass(cls):
@@ -100,8 +100,8 @@ class NativeModule(unittest.TestCase):
         except OSError:
             raise unittest.SkipTest("libpam.so.0 not available")
         cls.dir = Path(tempfile.mkdtemp())
-        cls.so = cls.dir / "pam_faceup.so"
-        r = subprocess.run(["gcc", "-O2", "-Wall", "-fPIC", "-shared", "-o", str(cls.so), str(ROOT / "data" / "pam_faceup.c")],
+        cls.so = cls.dir / "pam_ward.so"
+        r = subprocess.run(["gcc", "-O2", "-Wall", "-fPIC", "-shared", "-o", str(cls.so), str(ROOT / "data" / "pam_ward.c")],
                            capture_output=True, text=True)
         if r.returncode != 0:
             raise unittest.SkipTest(f"module did not build: {r.stderr}")
@@ -124,7 +124,7 @@ class NativeModule(unittest.TestCase):
         cons = d / "consumer.sh"; cons.write_text(f"#!/bin/sh\ncat > {tokfile}\n"); cons.chmod(0o755)
         conf = d / "pam.d"; conf.mkdir(exist_ok=True)
         pam_exec = next((p for p in Path("/lib/x86_64-linux-gnu/security", ).glob("pam_exec.so")), None) or Path("pam_exec.so")
-        (conf / "faceup-test").write_text(
+        (conf / "ward-test").write_text(
             f"auth\t[success=1 default=ignore]\t{self.so} helper={helper} creds_dir={kd} creds={creds}{opts}\n"
             f"auth\trequisite\tpam_deny.so\n"
             + (f"auth\toptional\t{pam_exec} quiet expose_authtok {cons}\n" if consumer else "auth\toptional\tpam_permit.so\n"))
@@ -151,7 +151,7 @@ class NativeModule(unittest.TestCase):
             resp[0] = ctypes.cast(libc.calloc(n, ctypes.sizeof(Resp)), ctypes.POINTER(Resp)); return 0
         cv = Conv(CONV(conv), None)
         pamh = ctypes.c_void_p()
-        self.assertEqual(libpam.pam_start_confdir(b"faceup-test", b"tester", ctypes.byref(cv), str(conf).encode(), ctypes.byref(pamh)), 0)
+        self.assertEqual(libpam.pam_start_confdir(b"ward-test", b"tester", ctypes.byref(cv), str(conf).encode(), ctypes.byref(pamh)), 0)
         rc = libpam.pam_authenticate(pamh, 0)
         libpam.pam_end(pamh, 0)
         tok = tokfile.read_bytes().rstrip(b"\n") or None
@@ -161,7 +161,7 @@ class NativeModule(unittest.TestCase):
         rc, seen, tok = self._pam(0, "s3cret")
         self.assertEqual(rc, 0)
         self.assertEqual([m for _, m in seen][0], "Looking for your face…")
-        self.assertIn("svc=faceup-test user=tester type=auth", [m for _, m in seen][1])   # env the helper's feedback needs
+        self.assertIn("svc=ward-test user=tester type=auth", [m for _, m in seen][1])   # env the helper's feedback needs
         self.assertTrue(all(style == 4 for style, _ in seen))                       # PAM_TEXT_INFO
         self.assertEqual(tok, b"s3cret")
 
@@ -193,11 +193,11 @@ class NativeModule(unittest.TestCase):
     def test_helper_gets_a_scrubbed_environment(self):
         # PAM-1: through setuid sudo / polkit the caller's environment is the unprivileged user's;
         # the root helper must not inherit PYTHONHOME, HOME (user site-packages) or the like
-        os.environ["PYTHONHOME"] = "/tmp/evil"; os.environ["FACEUP_CANARY"] = "x"
+        os.environ["PYTHONHOME"] = "/tmp/evil"; os.environ["WARD_CANARY"] = "x"
         try:
-            rc, seen, _ = self._pam(0, None, body="#!/bin/sh\necho \"home=${PYTHONHOME:-unset} canary=${FACEUP_CANARY:-unset} user=$PAM_USER\"\nexit 0\n")
+            rc, seen, _ = self._pam(0, None, body="#!/bin/sh\necho \"home=${PYTHONHOME:-unset} canary=${WARD_CANARY:-unset} user=$PAM_USER\"\nexit 0\n")
         finally:
-            os.environ.pop("PYTHONHOME", None); os.environ.pop("FACEUP_CANARY", None)
+            os.environ.pop("PYTHONHOME", None); os.environ.pop("WARD_CANARY", None)
         self.assertEqual(rc, 0)
         self.assertIn("home=unset canary=unset user=tester", [m for _, m in seen])
 

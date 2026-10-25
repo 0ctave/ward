@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from faceup.engine import pose, sfm  # noqa: E402
+from ward.engine import pose, sfm  # noqa: E402
 
 # A plausible personal face (mm) for the 13 rigid landmarks, in the generic frame but with
 # individual proportions: longer nose, narrower eyes than the generic model.

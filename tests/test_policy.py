@@ -9,10 +9,10 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 
-from faceup.engine import config, policy, store
+from ward.engine import config, policy, store
 
 
 def _cfg(**sec):
@@ -115,7 +115,7 @@ class Identities(unittest.TestCase):
         finally:
             os.environ.pop("PAM_SERVICE", None)
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
-        with open(os.environ["FACEUP_LOG"], "a") as f:
+        with open(os.environ["WARD_LOG"], "a") as f:
             for _ in range(3):
                 f.write(f"{now} user=pol result=spoof:motion ir=0.2 frames=4 t=900ms\n")
         out = run_auth("pol", frames_dir(), {"security": {"lockout_failures": 3}})
