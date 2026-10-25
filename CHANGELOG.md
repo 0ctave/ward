@@ -2,6 +2,15 @@
 
 ## Unreleased — 2026-10-22
 
+### In-app setup wizard
+- `ward app` → Advanced → *Run the full setup* is now a real graphical wizard drawn **inside** the
+  window, not a shell-out to the terminal flow. It steps through cameras → IR emitter → anti-spoof →
+  register → keyring → turn-on, each reversible, with Skip for the optional ones and Back/Leave; the
+  register step uses the in-app camera page and keyring asks for the password in a dialog (the old
+  button ran `ward setup` with no stdin, so every choice silently took its default and enrolment
+  popped a separate window). Step list is `app.setup_steps(report)` (GTK-free, unit-tested); the
+  emitter step only appears with an IR camera.
+
 ### Accuracy benchmarks (`ward benchmark …`)
 - `ward/lfw.py` (impostor/genuine FMR-FNMR, EER, AUC on LFW — recogniser), `ward/celeba_spoof.py`
   (APCER/BPCER/ACER on CelebA-Spoof — anti-spoof CNN, per-attack-type breakdown), `ward/ir_pad.py`
