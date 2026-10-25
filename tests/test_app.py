@@ -163,6 +163,33 @@ class Manage(unittest.TestCase):
         self.assertEqual(manage.reliability([self._row(False, "no-match")] * 80 + [self._row(True)] * 50)["overall"]["rate"], 1.0)   # last 50 only
 
 
+class SetupWizard(unittest.TestCase):
+    """The in-app setup wizard's step list (GTK-free logic in app.setup_steps)."""
+
+    def test_order_and_essentials(self):
+        from ward.app import ENROL, setup_steps
+        steps = setup_steps({"profile": "A"})
+        keys = [s["key"] for s in steps]
+        self.assertEqual(keys[0], "cameras"); self.assertEqual(keys[-1], "pam")
+        self.assertEqual(keys, ["cameras", "emitter", "antispoof", "register", "keyring", "pam"])
+        reg = next(s for s in steps if s["key"] == "register")
+        self.assertEqual(reg["camera"], ENROL)                 # register draws in-app
+        self.assertTrue(next(s for s in steps if s["key"] == "keyring")["keyring"])
+        self.assertTrue(next(s for s in steps if s["key"] == "emitter").get("then_argv"))
+
+    def test_emitter_only_with_ir(self):
+        from ward.app import setup_steps
+        self.assertNotIn("emitter", [s["key"] for s in setup_steps({"profile": "C"})])
+        self.assertIn("emitter", [s["key"] for s in setup_steps({"profile": "B"})])
+
+    def test_optional_and_labels(self):
+        from ward.app import setup_steps
+        for s in setup_steps({"profile": "A"}):
+            self.assertTrue(s["title"] and s["desc"] and s["run_label"])
+        optional = {s["key"] for s in setup_steps({"profile": "A"}) if s.get("optional")}
+        self.assertEqual(optional, {"emitter", "antispoof", "keyring"})   # the essentials aren't skippable
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -19,7 +19,7 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from . import appui, attempts as att, health, manage  # noqa: E402,F401
 from .app import (  # noqa: E402,F401
-    CAMERA_CMDS, CONDITIONS, ENROL, PROFILE_TEXT, child_env, describe_stats, ward_cmd, priv_cmd, strip_ansi,
+    CAMERA_CMDS, CONDITIONS, ENROL, PROFILE_TEXT, child_env, describe_stats, setup_steps, ward_cmd, priv_cmd, strip_ansi,
 )
 from .engine import config as cfgmod, pam as pammod, policy as polmod  # noqa: E402,F401
 
@@ -191,7 +191,7 @@ class App(Adw.Application):
         self.console = Console()
         self.runner = Runner(self.console, on_start=lambda: self.console_btn.set_active(True))
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        header = Adw.HeaderBar(); header.set_title_widget(Adw.WindowTitle(title="ward", subtitle="face unlock"))
+        header = Adw.HeaderBar(); header.set_title_widget(Adw.WindowTitle(title="Ward", subtitle="face unlock"))
         refresh = Gtk.Button(icon_name="view-refresh-symbolic"); refresh.set_tooltip_text("Refresh"); refresh.connect("clicked", lambda *_: self.refresh(people=self.people is not None))
         header.pack_end(refresh)
         self.console_btn = Gtk.ToggleButton(icon_name="utilities-terminal-symbolic"); self.console_btn.set_tooltip_text("Show the command output")
@@ -385,6 +385,13 @@ class App(Adw.Application):
         if rc in (126, 127) and not ROOT:
             self.console.write("administrator authorisation was cancelled or refused\n")
         appui._set_pill(self.console.state, "done" if rc == 0 else f"exit {rc}", "ok" if rc == 0 else "warn")
+        then = getattr(self, "_cam_then", None)
+        if then is not None:                      # a wizard step drove the camera: go back to it and report
+            self._cam_then = None
+            self.stack.set_visible_child_name(getattr(self, "_back_page", "setup"))
+            self.refresh(people=True)
+            then(rc)
+            return False
         if rc == 0 or not seen:
             self.stack.set_visible_child_name(getattr(self, "_back_page", "people"))
         else:                                     # it failed with the window up: keep the card, offer the way back
@@ -392,6 +399,99 @@ class App(Adw.Application):
             self.cam.btn_next.set_label("Back"); self.cam.btn_cancel.set_visible(False)
         self.refresh(people=True)
         return False
+
+    # ---- in-app setup wizard -------------------------------------------------
+    def start_setup_wizard(self):
+        if getattr(self, "cam_proc", None) is not None or self.runner.busy:
+            self.console.write("… finish the current action first\n"); return
+        self._wiz = {"steps": setup_steps(self.report), "i": 0, "status": {}}
+        if getattr(self, "wiz_page", None) is None:
+            self.wiz_page = Adw.PreferencesPage()
+            self.stack.add_named(self.wiz_page, "setup")
+            self._groups[self.wiz_page] = []
+        self.stack.set_visible_child_name("setup")
+        self._wiz_render()
+
+    def _wiz_render(self):
+        w = self._wiz
+        p = self.wiz_page; self._clear(p)
+        n, i = len(w["steps"]), w["i"]
+        if i >= n:
+            g = self._group(p, "Face unlock is set up", "You can change any of this later from the other pages.")
+            self._row(g, "Test unlock", "run one attempt exactly like sudo would", "camera-web-symbolic",
+                      "Test", self.test_unlock, style="suggested-action")
+            self._row(g, "Done", "back to the overview", "emblem-ok-symbolic", "Finish",
+                      lambda: (self.stack.set_visible_child_name("overview"), self.refresh(people=True)), style="flat")
+            return
+        step = w["steps"][i]
+        status = w["status"].get(step["key"], "")
+        g = self._group(p, f"Set up Ward — step {i + 1} of {n}", "Each step is reversible; your password always works.")
+        icon = {"ok": "emblem-ok-symbolic", "failed": "dialog-error-symbolic",
+                "skipped": "action-unavailable-symbolic"}.get(status, "")
+        row = Adw.ActionRow(title=GLib.markup_escape_text(step["title"]),
+                            subtitle=GLib.markup_escape_text(step["desc"]))
+        row.set_subtitle_lines(4) if hasattr(row, "set_subtitle_lines") else None
+        if icon:
+            row.add_prefix(Gtk.Image.new_from_icon_name(icon))
+        if status == "running":
+            sp = Gtk.Spinner(); sp.start(); sp.set_valign(Gtk.Align.CENTER); row.add_suffix(sp)
+        g.add(row)
+        nav = self._group(p, "")
+        done = status in ("ok", "skipped")
+        last = i == n - 1
+        if status != "running":
+            if not done:
+                nav.add(self._nav_row(step["run_label"], self._wiz_run, "suggested-action"))
+                if step.get("optional"):
+                    nav.add(self._nav_row("Skip this step", lambda: self._wiz_skip(), "flat"))
+            else:
+                nav.add(self._nav_row("Finish" if last else "Next step",
+                                      lambda: self._wiz_advance(), "suggested-action"))
+            if i > 0:
+                nav.add(self._nav_row("Back", lambda: self._wiz_back(), "flat"))
+            nav.add(self._nav_row("Leave setup", lambda: (self.stack.set_visible_child_name("overview"), self.refresh()), "flat"))
+
+    def _nav_row(self, label, cb, style):
+        r = Adw.ActionRow(); r.add_suffix(self._button(label, cb, style)); r.set_activatable(False); return r
+
+    def _wiz_set(self, key, status):
+        self._wiz["status"][key] = status
+        self._wiz_render()
+
+    def _wiz_run(self):
+        step = self._wiz["steps"][self._wiz["i"]]
+        key = step["key"]
+        if step.get("keyring"):
+            # ask for the password BEFORE marking running, so a cancelled dialog leaves the step idle
+            def enable(pw):
+                self._wiz_set(key, "running")
+                self.runner.run(["keyring", "enable", "--password-stdin"], True, pw,
+                                on_done=lambda rc: self._wiz_set(key, "ok" if rc == 0 else "failed"))
+            self.ask_text("Unlock the keyring by face",
+                          "Your login password is verified and stored sealed; it is released only after a face accept.",
+                          "", enable, password=True)
+            return
+        self._wiz_set(key, "running")
+        if step.get("camera"):
+            self._cam_then = lambda rc: self._wiz_set(key, "ok" if rc == 0 else "failed")
+            self._back_page = "setup"
+            self.camera_session(step["camera"])
+        else:
+            def after(rc, then=step.get("then_argv")):
+                if rc == 0 and then:
+                    self.runner.run(then, on_done=lambda rc2: self._wiz_set(key, "ok" if rc2 == 0 else "failed"))
+                else:
+                    self._wiz_set(key, "ok" if rc == 0 else "failed")
+            self.runner.run(step["argv"], on_done=after)
+
+    def _wiz_skip(self):
+        self._wiz_set(self._wiz["steps"][self._wiz["i"]]["key"], "skipped")
+
+    def _wiz_advance(self):
+        self._wiz["i"] += 1; self._wiz_render()
+
+    def _wiz_back(self):
+        self._wiz["i"] = max(0, self._wiz["i"] - 1); self._wiz_render()
 
     def confirm(self, heading, body, label, cb, destructive=True):
         dlg = message_dialog(self.win, heading, body)
@@ -641,8 +741,8 @@ class App(Adw.Application):
     def _advanced(self, rep):
         p = self.pages["advanced"]; self._clear(p)
         g = self._group(p, "Set up", "The whole chain in one go, or step by step. Each step is reversible.")
-        self._row(g, "Run the full setup", "cameras → IR emitter → recogniser → register → keyring → login", "system-run-symbolic", "Start",
-                  lambda: self.run_cmd(["setup"], people=True), style="suggested-action")
+        self._row(g, "Run the full setup", "a guided wizard, right here in this window — cameras → IR emitter → anti-spoof → register → keyring → turn on", "system-run-symbolic", "Start",
+                  lambda: self.start_setup_wizard(), style="suggested-action")
         self._row(g, "Detect cameras", PROFILE_TEXT.get(rep.get("profile"), "not detected yet"), None, "Detect", lambda: self.run_cmd(["setup", "--cameras-only"]))
         if rep.get("profile") in ("A", "B"):
             self._row(g, "IR emitter", "find the LED control and benchmark it (enables the shadow liveness test)", None, "Probe",

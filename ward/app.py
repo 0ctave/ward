@@ -28,6 +28,41 @@ CAMERA_CMDS = ("enroll", "calibrate")       # drawn inside the app (display.Stre
 PROFILE_TEXT = {"A": "IR + colour camera found", "B": "IR camera found", "C": "colour camera only"}
 
 
+def setup_steps(report: dict) -> list[dict]:
+    """The in-app setup wizard's ordered steps (GTK-free so it is unit-tested). Each step runs an
+    existing `ward …` action through the app: `argv` (+ optional `then_argv`) into the console,
+    `camera` through the in-app camera page, or `keyring` via a password dialog. `optional` steps
+    offer Skip; the emitter step only appears with an IR camera."""
+    profile = report.get("profile")
+    has_ir = profile in ("A", "B")
+    steps = [{"key": "cameras", "title": "Cameras",
+              "desc": "Detect the infrared and colour cameras and write the pair (stable USB ids).",
+              "argv": ["setup", "--cameras-only"], "run_label": "Detect"}]
+    if has_ir:
+        steps.append({"key": "emitter", "title": "Infrared emitter",
+                      "desc": "Find the IR LED control by measurement and benchmark its switch — this enables the "
+                              "shadow liveness test. Sit in front of the camera and keep still.",
+                      "argv": ["emitter", "probe"], "then_argv": ["emitter", "toggle-bench"],
+                      "run_label": "Probe", "optional": True})
+    steps.append({"key": "antispoof", "title": "Anti-spoof",
+                  "desc": "Turn on the anti-spoof CNN — a second liveness check on the colour camera that abstains "
+                          "when unsure and never blocks a real face.",
+                  "argv": ["antispoof", "on"], "run_label": "Turn on", "optional": True})
+    steps.append({"key": "register", "title": "Register your face",
+                  "desc": "One guided sweep, right here in this window: follow the ring and the arrow through each "
+                          "pose. The same sweep sets the recognition gate from your own frames.",
+                  "camera": ENROL, "run_label": "Register"})
+    steps.append({"key": "keyring", "title": "Keyring",
+                  "desc": "Optional: let a face login unlock GNOME Keyring / KWallet by storing your login password "
+                          "sealed (by your encrypted disk or TPM). It is released only after a face accept.",
+                  "keyring": True, "run_label": "Enable", "optional": True})
+    steps.append({"key": "pam", "title": "Turn on face unlock",
+                  "desc": "Wire Ward into login, sudo and polkit. Your password always keeps working — a failed face "
+                          "check simply falls back to it.",
+                  "argv": ["pam", "enable"], "run_label": "Turn on"})
+    return steps
+
+
 def strip_ansi(s: str) -> str:
     return ANSI.sub("", s)
 
