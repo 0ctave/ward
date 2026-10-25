@@ -1,5 +1,5 @@
 """ward — make face unlock on Linux actually work."""
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 def main(argv=None):

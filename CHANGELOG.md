@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 2026-10-22
+## 0.4.0 — 2026-10-25
 
 ### CI/CD and update checking
 - Workflows: `tests` (unit suite + PAM build), `lint` (byte-compile + ruff F/E9 advisory, `gcc -Werror` on the PAM module, cppcheck, shellcheck), `codeql` (Python + C security scanning, weekly), `release` (on a `v*` tag: run tests, build the .deb, publish a GitHub Release with checksums). `dependabot.yml` keeps the Actions current. All workflows run least-privilege (`permissions: contents: read`).

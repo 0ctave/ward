@@ -41,7 +41,7 @@ for d in "${@:-fedora arch tumbleweed ubuntu2204 debian12}"; do
     r5=0
     if command -v rpmbuild >/dev/null; then
       dnf -y -q builddep packaging/ward.spec || r5=12
-      mkdir -p ~/rpmbuild/SOURCES && tar --transform 's,^\.,ward-0.3.0,' -czf ~/rpmbuild/SOURCES/ward-0.3.0.tar.gz . &&
+      mkdir -p ~/rpmbuild/SOURCES && tar --transform 's,^\.,ward-0.4.0,' -czf ~/rpmbuild/SOURCES/ward-0.4.0.tar.gz . &&
       rpmbuild -bb packaging/ward.spec 2>&1 | tail -15; r5=\$((r5 + \${PIPESTATUS[0]}))
       rpm -qpl ~/rpmbuild/RPMS/*/ward-*.rpm | grep -E 'pam_ward.so|yunet' || r5=13
     fi

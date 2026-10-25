@@ -1,11 +1,11 @@
 # RPM spec (Fedora / openSUSE / RHEL-likes). Offline build from a tarball of this repo:
-#   git archive --prefix=ward-0.3.0/ -o ~/rpmbuild/SOURCES/ward-0.3.0.tar.gz HEAD
+#   git archive --prefix=ward-0.4.0/ -o ~/rpmbuild/SOURCES/ward-0.4.0.tar.gz HEAD
 #   rpmbuild -ba packaging/ward.spec
 # Same layout as packaging/stage.sh under /usr. Never edits PAM: run `sudo ward setup`.
 %global debug_package %{nil}
 
 Name:           ward
-Version:        0.3.0
+Version:        0.4.0
 Release:        1%{?dist}
 Summary:        Reliable face unlock for login, sudo and polkit
 License:        MIT
@@ -84,5 +84,8 @@ fi
 %dir %attr(0700,root,root) %{_sysconfdir}/ward/models
 
 %changelog
-* Fri Oct 23 2026 octave <redlab336@gmail.com> - 0.3.0-1
+* Sat Oct 25 2026 octave <0ctave@users.noreply.github.com> - 0.4.0-1
+- Rename to Ward; resident engine, anti-spoof CNN, manager app + setup wizard, benchmarks, CI
+
+* Fri Oct 23 2026 octave <0ctave@users.noreply.github.com> - 0.3.0-1
 - First packaged release (see CHANGELOG.md)

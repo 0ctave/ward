@@ -4,7 +4,7 @@ Reliable face-unlock for Linux. This file seeds a fresh session: read it, then `
 
 ## What it is
 
-A face-authentication stack for login / `sudo` / polkit that **replaces Howdy** (Howdy is still installed but its job is done). It has its **own engine** — `ward-auth`, called by PAM via `pam_exec` — built on dlib (ResNet embedding), OpenCV (YuNet detector), V4L2. Repo: `~/dev/ward`, MIT, v0.3.0. Reference machine: Lenovo Yoga Slim 7 ProX 14ARH7 — Ryzen 5 6600HS, RGB `/dev/video*` iface 00 + IR iface 02 (Windows-Hello module), GNOME 46 Wayland.
+A face-authentication stack for login / `sudo` / polkit that **replaces Howdy** (Howdy is still installed but its job is done). It has its **own engine** — `ward-auth`, called by PAM via `pam_exec` — built on dlib (ResNet embedding), OpenCV (YuNet detector), V4L2. Repo: `~/dev/ward`, MIT, v0.4.0. Reference machine: Lenovo Yoga Slim 7 ProX 14ARH7 — Ryzen 5 6600HS, RGB `/dev/video*` iface 00 + IR iface 02 (Windows-Hello module), GNOME 46 Wayland.
 
 ## Golden rules (do not break these)
 

@@ -12,7 +12,7 @@ body:
     attributes:
       label: Ward version
       description: Output of `ward --version`.
-      placeholder: "ward 0.3.0"
+      placeholder: "ward 0.4.0"
     validations:
       required: true
   - type: input

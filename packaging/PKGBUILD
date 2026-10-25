@@ -2,7 +2,7 @@
 #   cd packaging && makepkg -si
 # Same layout as packaging/stage.sh under /usr. Never edits PAM: run `sudo ward setup`.
 pkgname=ward
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="Reliable face unlock for login, sudo and polkit"
 arch=('x86_64' 'aarch64')

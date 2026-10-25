@@ -22,7 +22,7 @@ the algorithm — and it explains what it does so you can go further yourself.
 
 ```
 $ ward doctor
-▌ ward 0.3.0 · doctor
+▌ ward 0.4.0 · doctor
 Cameras
   · /dev/video0  RGB  1920x1080  [MJPG/YUYV]  Integrated Camera
   ✔ /dev/video2  IR (greyscale)  640x360  [GREY]  Integrated Camera
@@ -239,9 +239,9 @@ The usual ones:
 build time, so the target needs no gcc.
 
 ```bash
-packaging/build-deb.sh                     # Debian/Ubuntu → dist/ward_0.3.0-1_<arch>.deb (dpkg-deb only)
+packaging/build-deb.sh                     # Debian/Ubuntu → dist/ward_0.4.0-1_<arch>.deb (dpkg-deb only)
 sudo apt install ./dist/ward_*.deb
-git archive --prefix=ward-0.3.0/ -o ~/rpmbuild/SOURCES/ward-0.3.0.tar.gz HEAD
+git archive --prefix=ward-0.4.0/ -o ~/rpmbuild/SOURCES/ward-0.4.0.tar.gz HEAD
 rpmbuild -ba packaging/ward.spec         # Fedora/openSUSE
 (cd packaging && makepkg -si)              # Arch
 ```
