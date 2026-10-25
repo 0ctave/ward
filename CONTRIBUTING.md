@@ -1,12 +1,12 @@
-# Contributing to faceup
+# Contributing to Ward
 
 Thanks for helping make face unlock on Linux reliable. By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). The most valuable contributions are
-**camera quirks from other laptops** and **portability fixes** — faceup is developed on one machine
+**camera quirks from other laptops** and **portability fixes** — ward is developed on one machine
 and every new module teaches it something.
 
 ## Ground rules (the project's golden rules)
 
-1. **Distro Python only, zero pip dependencies.** faceup runs under `/usr/bin/python3` with the
+1. **Distro Python only, zero pip dependencies.** ward runs under `/usr/bin/python3` with the
    distro's `python3-opencv`, `python3-dlib` and `dlib-models`. A virtualenv can't see them. Never
    add a `requirements.txt` or a pip install step.
 2. **Tests stay green and need no camera:** `python3 -m unittest discover -s tests`. The suite runs
@@ -19,26 +19,26 @@ and every new module teaches it something.
 ## Getting set up
 
 ```bash
-git clone https://github.com/0ctave/faceup && cd faceup
+git clone https://github.com/0ctave/ward && cd ward
 python3 -m unittest discover -s tests      # must pass before you change anything
 sudo ./install.sh                          # to try it on your hardware
-faceup doctor                              # diagnoses cameras, emitter, engine, PAM
+ward doctor                              # diagnoses cameras, emitter, engine, PAM
 ```
 
 ## Reporting a camera / hardware issue
 
-Open an issue with the **full `faceup doctor` output**, your distro and desktop, the laptop model,
+Open an issue with the **full `ward doctor` output**, your distro and desktop, the laptop model,
 and `lsusb` / `v4l2-ctl --list-devices`. If recognition or liveness misbehaves, attach a recording
-made with `sudo faceup lab --record-frames <dir>` (frames of **your own** face only — never commit
+made with `sudo ward lab --record-frames <dir>` (frames of **your own** face only — never commit
 them; see below) so the problem can be replayed without your hardware.
 
 ## Pull requests
 
 - Match the surrounding style; keep diffs focused. One concern per PR.
-- Run the test suite and `gcc -fsyntax-only data/pam_faceup.c` if you touch the PAM module.
+- Run the test suite and `gcc -fsyntax-only data/pam_ward.c` if you touch the PAM module.
 - Update `docs/DESIGN.md` when you change a mechanism and `CHANGELOG.md` (Unreleased) always.
 - New bundled models must be permissively licensed, pinned by sha256, and small; their license and
-  notice go in `faceup/models/`. Non-redistributable models (e.g. ArcFace) are downloaded, not
+  notice go in `ward/models/`. Non-redistributable models (e.g. ArcFace) are downloaded, not
   bundled.
 
 ## Never commit personal or biometric data
