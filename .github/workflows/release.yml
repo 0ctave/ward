@@ -1,0 +1,37 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write          # create the GitHub Release and upload artifacts
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Don't ship a broken tag: the suite must pass on the exact commit being released.
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-opencv python3-numpy gcc dpkg-dev
+          sudo apt-get install -y python3-dlib dlib-models || echo "dlib not in archive — suite runs without it"
+      - name: Tests
+        run: python3 -m unittest discover -s tests
+
+      - name: Build the .deb (offline, dpkg-deb)
+        run: packaging/build-deb.sh dist
+
+      - name: Checksums
+        run: (cd dist && sha256sum *.deb > SHA256SUMS)
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.deb dist/SHA256SUMS \
+            --title "Ward ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag

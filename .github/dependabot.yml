@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Ward has no pip/npm dependencies (distro Python only), so the only thing to keep current is the
+  # set of GitHub Actions used by the workflows — pinned action versions get security fixes too.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["ci"]
+    commit-message:
+      prefix: "ci"

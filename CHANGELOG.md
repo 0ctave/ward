@@ -2,6 +2,10 @@
 
 ## Unreleased — 2026-10-22
 
+### CI/CD and update checking
+- Workflows: `tests` (unit suite + PAM build), `lint` (byte-compile + ruff F/E9 advisory, `gcc -Werror` on the PAM module, cppcheck, shellcheck), `codeql` (Python + C security scanning, weekly), `release` (on a `v*` tag: run tests, build the .deb, publish a GitHub Release with checksums). `dependabot.yml` keeps the Actions current. All workflows run least-privilege (`permissions: contents: read`).
+- `ward update` checks GitHub for a newer release — explicit, best-effort, stdlib-only, and never on the auth path (the PAM module, `ward-auth` and the daemon don't import it). `ward doctor` shows a cached result only (no network). `ward/update.py`, tested without the network.
+
 ### In-app setup wizard
 - `ward app` → Advanced → *Run the full setup* is now a real graphical wizard drawn **inside** the
   window, not a shell-out to the terminal flow. It steps through cameras → IR emitter → anti-spoof →

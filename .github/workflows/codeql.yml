@@ -1,0 +1,39 @@
+name: codeql
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "27 4 * * 1"          # weekly, so new CodeQL queries catch regressions in dormant code
+
+permissions:
+  contents: read
+  security-events: write          # upload results to the Security tab
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: c-cpp
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+      - name: Build the PAM module (c-cpp manual build)
+        if: matrix.language == 'c-cpp'
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc libpam0g-dev
+          gcc -O2 -fPIC -shared -o /tmp/pam_ward.so data/pam_ward.c
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

@@ -230,6 +230,15 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
     else:
         sec.items.append(Item("info", "no attempts logged yet"))
 
+    # ---- updates (cache only; `ward update` does the network check)
+    from . import __version__, update as upd
+    rec = upd.cached()
+    sec = Section("updates", "Updates"); S.append(sec)
+    if rec and upd.is_newer(rec["latest"]):
+        sec.items.append(Item("warn", f"a newer Ward is available: {rec['latest']} (you have {__version__})", ["update"], "Check"))
+    else:
+        sec.items.append(Item("info", f"Ward {__version__} · run `ward update` to check for a newer release"))
+
     # ---- compatibility
     sec = Section("compat", "Compatibility"); S.append(sec)
     sec.items.append(Item("info", f"python {sys.version.split()[0]} · opencv {__import__('cv2').__version__} (YuNet {'yes' if det.yunet_available() else 'no'}) · dlib {'yes' if det.dlib is not None else 'no'}"))

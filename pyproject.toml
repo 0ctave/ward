@@ -40,3 +40,12 @@ include = ["ward*"]
 
 [tool.setuptools.package-data]
 ward = ["models/*"]
+
+[tool.ruff]
+# Ward uses the distro Python with no pip deps; ruff is a CI-only check, scoped to real bugs
+# (pyflakes F + syntax E9), not style. Line length is informational only.
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F"]

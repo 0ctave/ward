@@ -20,6 +20,7 @@ from .common import (  # noqa: F401
     EMITTER_REPO, OPTIONAL_POSES, POSES, need_root, real_user,
 )
 from .doctor import (  # noqa: F401
+    cmd_update,
     cmd_bench, cmd_doctor, cmd_tune, recommend_cnn,
 )
 from .enroll import (  # noqa: F401
@@ -58,6 +59,7 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("doctor", help="diagnose cameras, emitter, engine, models, PAM"); d.add_argument("-U", "--user"); d.set_defaults(fn=cmd_doctor)
+    up = sub.add_parser("update", help="check GitHub for a newer release (explicit; never runs during an unlock)"); up.set_defaults(fn=cmd_update)
     s = sub.add_parser("setup", help="the whole chain: cameras → emitter → recogniser → register → keyring → PAM → policy (root)")
     s.add_argument("-U", "--user"); s.add_argument("--cameras-only", action="store_true", help="detect and write the camera pair, nothing else"); s.set_defaults(fn=cmd_setup)
     ap = sub.add_parser("app", help="the GTK application — every step from one window (sudo for setup actions)")
