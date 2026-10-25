@@ -24,7 +24,7 @@ cat > "$pkg/DEBIAN/control" <<EOC
 Package: ward
 Version: $ver-1
 Architecture: $arch
-Maintainer: octave <redlab336@gmail.com>
+Maintainer: octave <0ctave@users.noreply.github.com>
 Installed-Size: $size
 Section: admin
 Priority: optional
