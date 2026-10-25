@@ -1,19 +1,19 @@
 #!/bin/sh
-# Refuse removal while PAM still points at faceup (a dangling module line must never be left in
-# the auth stack); the user runs `sudo faceup pam disable` — this script does not edit PAM.
+# Refuse removal while PAM still points at ward (a dangling module line must never be left in
+# the auth stack); the user runs `sudo ward pam disable` — this script does not edit PAM.
 set -e
 case "$1" in
   remove|deconfigure)
-    refs=$(grep -lE 'faceup-auth|pam_faceup\.so' /etc/pam.d/* 2>/dev/null | grep -v '\.faceup-bak$' || true)
+    refs=$(grep -lE 'ward-auth|pam_ward\.so' /etc/pam.d/* 2>/dev/null | grep -v '\.ward-bak$' || true)
     if [ -n "$refs" ]; then
-      echo "faceup is still referenced in: $refs" >&2
-      echo "run 'sudo faceup pam disable' (and edit any hand-made lines), then remove the package" >&2
+      echo "ward is still referenced in: $refs" >&2
+      echo "run 'sudo ward pam disable' (and edit any hand-made lines), then remove the package" >&2
       exit 1
     fi
     if [ -d /run/systemd/system ] && command -v systemctl >/dev/null; then
-      systemctl disable --now faceup.service 2>/dev/null || true
+      systemctl disable --now ward.service 2>/dev/null || true
     fi
-    find /usr/lib/faceup -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+    find /usr/lib/ward -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
     ;;
 esac
 exit 0

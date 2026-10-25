@@ -7,10 +7,10 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 
-from faceup.engine import calibration as cal, config, store
+from ward.engine import calibration as cal, config, store
 
 
 def _store(dim=128, per=6):
@@ -200,7 +200,7 @@ class BuildFromCaptures(unittest.TestCase):
     """Fused enroll+calibrate: models from the best frames, gate from the held-out rest."""
 
     def test_builds_models_and_holds_out_for_the_gate(self):
-        from faceup.engine.detect import fuse
+        from ward.engine.detect import fuse
         rng = np.random.default_rng(7)
         # two poses, each with 15 captured frames per spectrum (quality, emb, aug, light)
         poses = [("C/level", "centre", "", (0.0, 0.0)), ("L1/level", "left", "", (-20.0, 0.0))]
@@ -233,7 +233,7 @@ class BuildFromCaptures(unittest.TestCase):
         self.assertIn("ir", res.gate)
 
     def test_folds_numbered_pass_into_base_label(self):
-        from faceup.engine.detect import fuse
+        from ward.engine.detect import fuse
         rng = np.random.default_rng(1)
         poses = [("C/level", "centre", "", (0.0, 0.0)), ("C/level2", "light", "", (0.0, 0.0))]
         caps = {}
@@ -288,7 +288,7 @@ class SelectRows(unittest.TestCase):
 
 class ReenrolKeepsSkippedPoses(unittest.TestCase):
     def test_a_pose_without_new_samples_keeps_its_old_model(self):
-        from faceup.engine.detect import fuse
+        from ward.engine.detect import fuse
         rng = np.random.default_rng(5)
         st = store.Store(user="keep", path=store.path_for("keep"))
         old = rng.normal(size=128); old /= np.linalg.norm(old)
@@ -304,7 +304,7 @@ class ReenrolKeepsSkippedPoses(unittest.TestCase):
 
 class OtherFaces(unittest.TestCase):
     def test_a_second_person_is_not_enrolled(self):
-        from faceup.engine.detect import fuse
+        from ward.engine.detect import fuse
         rng = np.random.default_rng(9)
         me = rng.normal(size=128); me /= np.linalg.norm(me)
         other = rng.normal(size=128); other /= np.linalg.norm(other)
@@ -322,7 +322,7 @@ class OtherFaces(unittest.TestCase):
 
 class SetupSummary(unittest.TestCase):
     def test_summary_names_missed_poses_and_the_dark(self):
-        from faceup import gui
+        from ward import gui
         res = cal.derive_from_holdout({})
         txt = gui._setup_summary(res, 7, ["Look up"], ir=True)
         self.assertIn("No model for: Look up", txt)

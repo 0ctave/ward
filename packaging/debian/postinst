@@ -1,22 +1,22 @@
 #!/bin/sh
-# faceup postinst: state directories, byte-compile, desktop caches, resident engine.
-# PAM is never touched here — the user runs `sudo faceup pam enable` (or `faceup setup`).
+# ward postinst: state directories, byte-compile, desktop caches, resident engine.
+# PAM is never touched here — the user runs `sudo ward pam enable` (or `ward setup`).
 set -e
 if [ "$1" = configure ]; then
-  mkdir -p /etc/faceup/models; chmod 700 /etc/faceup/models
-  [ -e /var/log/faceup.log ] || { touch /var/log/faceup.log; chmod 640 /var/log/faceup.log; chgrp adm /var/log/faceup.log 2>/dev/null || true; }
-  /usr/bin/python3 -m compileall -q /usr/lib/faceup >/dev/null 2>&1 || true
+  mkdir -p /etc/ward/models; chmod 700 /etc/ward/models
+  [ -e /var/log/ward.log ] || { touch /var/log/ward.log; chmod 640 /var/log/ward.log; chgrp adm /var/log/ward.log 2>/dev/null || true; }
+  /usr/bin/python3 -m compileall -q /usr/lib/ward >/dev/null 2>&1 || true
   command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q /usr/share/icons/hicolor || true
   command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
   if [ -d /run/systemd/system ] && command -v systemctl >/dev/null; then
     systemctl daemon-reload || true
-    # like install.sh: on by default on first install; a `faceup daemon disable` survives upgrades
+    # like install.sh: on by default on first install; a `ward daemon disable` survives upgrades
     if [ -z "$2" ]; then
-      systemctl enable --now faceup.service || echo "faceup: resident engine did not start — unlock still works in-process (journalctl -u faceup)"
-    elif systemctl is-enabled --quiet faceup.service; then
-      systemctl restart faceup.service || true
+      systemctl enable --now ward.service || echo "ward: resident engine did not start — unlock still works in-process (journalctl -u ward)"
+    elif systemctl is-enabled --quiet ward.service; then
+      systemctl restart ward.service || true
     fi
   fi
-  [ -n "$2" ] || echo "faceup installed. Next: faceup doctor, then sudo faceup setup (wires PAM; nothing was changed in /etc/pam.d)"
+  [ -n "$2" ] || echo "ward installed. Next: ward doctor, then sudo ward setup (wires PAM; nothing was changed in /etc/pam.d)"
 fi
 exit 0

@@ -8,7 +8,7 @@ dist/
 extensions/
 
 # --- Personal / biometric data: must NEVER be committed ------------------------
-# Enrolled face embeddings, calibration, learned models (the store lives in /etc/faceup,
+# Enrolled face embeddings, calibration, learned models (the store lives in /etc/ward,
 # but guard against a copy landing in the tree):
 *.cred
 models/*.json
@@ -16,7 +16,7 @@ models/*.json
 calib*.json
 # Attempt log and any copy of it:
 *.log
-faceup.log*
+ward.log*
 # Recorded camera frames / lab captures / replay corpora / benchmark dumps:
 samples/
 samples_*/
@@ -29,5 +29,5 @@ CelebA_Spoof/
 CASIA-SURF/
 WMCA/
 *_dataset/
-# NOTE: faceup/models/*.onnx (YuNet, MiniFASNet) and data/*.svg ARE tracked on purpose —
+# NOTE: ward/models/*.onnx (YuNet, MiniFASNet) and data/*.svg ARE tracked on purpose —
 # they are redistributable shipped models and the app icons, not personal data.

@@ -6,9 +6,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from faceup import feedback
-from faceup.engine.auth import Outcome
-from faceup.engine.liveness import ABSTAIN, PASS
+from ward import feedback
+from ward.engine.auth import Outcome
+from ward.engine.liveness import ABSTAIN, PASS
 
 
 class _Tty(io.StringIO):
@@ -105,12 +105,12 @@ class Notification(unittest.TestCase):
         cmd = feedback.notify_command(_accept(), "sudo")
         self.assertEqual(cmd[-2], "Unlocked with your face")
         self.assertIn("sudo · IR 0.21", cmd[-1])
-        self.assertIn("-a", cmd); self.assertIn("faceup", cmd)
+        self.assertIn("-a", cmd); self.assertIn("ward", cmd)
         self.assertIn("boolean:transient:true", cmd)                # GNOME keeps non-transient ones in the tray forever
         self.assertIn("-p", cmd)
         sh = feedback.replacing_shell(cmd, "/run/user/1000")
         self.assertEqual(sh[:2], ["/bin/sh", "-c"])
-        self.assertIn("/run/user/1000/faceup-notify.id", sh[2]); self.assertIn('-r "$r"', sh[2])
+        self.assertIn("/run/user/1000/ward-notify.id", sh[2]); self.assertIn('-r "$r"', sh[2])
         cmd = feedback.notify_command(Outcome(False, "spoof:cross", "octave"), "polkit-1")
         self.assertIn("Liveness", cmd[-1])
         spawned = []
@@ -129,13 +129,13 @@ class Notification(unittest.TestCase):
     def test_session_login_detection(self):
         me = os.environ.get("USER", "root")
         self.assertFalse(feedback.is_session_login(me, {"PAM_SERVICE": "sudo"}))            # never for sudo
-        self.assertFalse(feedback.is_session_login("no-such-user-faceup", {"PAM_SERVICE": "gdm-password"}))
+        self.assertFalse(feedback.is_session_login("no-such-user-ward", {"PAM_SERVICE": "gdm-password"}))
         has_bus = os.path.exists(f"/run/user/{os.getuid()}/bus")
         # a greeter service with a running session (bus present) is an unlock, not a login
         self.assertEqual(feedback.is_session_login(me, {"PAM_SERVICE": "gdm-password"}), not has_bus)
 
     def test_session_env_needs_a_bus(self):
-        self.assertIsNone(feedback.session_env("no-such-user-faceup"))
+        self.assertIsNone(feedback.session_env("no-such-user-ward"))
         se = feedback.session_env(os.environ.get("USER", "root"))
         if se is not None:
             env, uid, gid = se

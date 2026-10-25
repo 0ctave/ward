@@ -19,12 +19,12 @@ from unittest import mock
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-enroll-"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-enroll-"))
 
-from faceup import display as disp, gui  # noqa: E402
-from faceup.engine import pose as posemod, store  # noqa: E402
-from faceup.engine.capture import Frame  # noqa: E402
-from faceup.engine.detect import Box  # noqa: E402
+from ward import display as disp, gui  # noqa: E402
+from ward.engine import pose as posemod, store  # noqa: E402
+from ward.engine.capture import Frame  # noqa: E402
+from ward.engine.detect import Box  # noqa: E402
 
 FPS = 15.0                 # virtual camera rate (real ~30; halves the test time, same logic)
 
@@ -211,7 +211,7 @@ def run_setup(world: World, max_s: float = 240.0, condition: str = "", poses=Non
         es.enter_context(mock.patch.object(disp, "open_display", lambda *a, **k: screen))
         es.enter_context(mock.patch.object(gui, "_Sampler", sampler_cls or (lambda models: FakeSampler(world))))
         es.enter_context(mock.patch.object(posemod, "estimate", estimate))
-        es.enter_context(mock.patch("faceup.engine.emitter.instructions_for", lambda *a, **k: []))
+        es.enter_context(mock.patch("ward.engine.emitter.instructions_for", lambda *a, **k: []))
         es.enter_context(mock.patch.object(gui, "_ir_device", lambda cap: ""))
         res = gui.guided_setup(st, cap, models, cams, {"fusion_frames": 4}, condition=condition,
                                poses=poses, need=need, timeout=timeout)

@@ -7,11 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
-os.environ.setdefault("FACEUP_LAB", tempfile.mkdtemp(prefix="faceup-lab-"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
+os.environ.setdefault("WARD_LAB", tempfile.mkdtemp(prefix="ward-lab-"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from faceup.engine import lab  # noqa: E402
+from ward.engine import lab  # noqa: E402
 
 
 def sample(raw, w=None, thr=4.0, votes=(("cross", "PASS", ""), ("motion", "ABSTAIN", "")), subject="me"):
@@ -69,10 +69,10 @@ class LivenessOutsideAuthenticate(unittest.TestCase):
         """The lab (and the calibration session) call Engine._liveness without authenticate():
         the shadow test's per-attempt state must exist and yield ABSTAIN, never AttributeError."""
         import numpy as np
-        from faceup.engine.auth import Engine, Obs
-        from faceup.engine.detect import Box
-        from faceup.engine.capture import Frame
-        from faceup.engine.liveness import Result
+        from ward.engine.auth import Engine, Obs
+        from ward.engine.detect import Box
+        from ward.engine.capture import Frame
+        from ward.engine.liveness import Result
         eng = Engine.__new__(Engine)
         eng.verbose = False; eng.events = None; eng.cfg = {"liveness": {"shadow_toggle_ms": 33}}
         # emulate what __init__ sets without loading models
@@ -87,7 +87,7 @@ class LivenessOutsideAuthenticate(unittest.TestCase):
 
     def test_engine_init_creates_the_per_attempt_state(self):
         import inspect
-        from faceup.engine.auth import Engine
+        from ward.engine.auth import Engine
         src = inspect.getsource(Engine.__init__)
         for name in ("_cap", "_emitter", "_shadow_done"):
             self.assertIn(f"self.{name} = None", src)

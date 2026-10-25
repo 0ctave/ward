@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from faceup.engine import brightness  # noqa: E402
-from faceup.engine.detect import Box  # noqa: E402
+from ward.engine import brightness  # noqa: E402
+from ward.engine.detect import Box  # noqa: E402
 
 
 class MeterTests(unittest.TestCase):

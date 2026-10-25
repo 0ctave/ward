@@ -1,0 +1,21 @@
+# pacman hooks for ward. PAM is never edited here: run `sudo ward setup`.
+post_install() {
+  [ -e /var/log/ward.log ] || { touch /var/log/ward.log; chmod 640 /var/log/ward.log; chgrp wheel /var/log/ward.log 2>/dev/null; }
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable --now ward.service || echo "ward: resident engine did not start — unlock still works in-process"
+  fi
+  echo "ward installed. Next: ward doctor, then sudo ward setup (nothing was changed in /etc/pam.d)"
+}
+post_upgrade() {
+  [ -d /run/systemd/system ] || return 0
+  systemctl daemon-reload
+  if systemctl is-enabled --quiet ward.service; then systemctl restart ward.service || true; fi
+}
+pre_remove() {
+  # pacman cannot abort here: warn loudly instead (a dangling line falls through, but fix it)
+  refs=$(grep -lE 'ward-auth|pam_ward\.so' /etc/pam.d/* 2>/dev/null | grep -v '\.ward-bak$')
+  [ -z "$refs" ] || echo "WARNING: ward is still referenced in: $refs — remove those lines (sudo ward pam disable before removing next time)" >&2
+  [ -d /run/systemd/system ] && systemctl disable --now ward.service 2>/dev/null
+  return 0
+}

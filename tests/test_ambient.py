@@ -14,7 +14,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from faceup.engine import ambient, capture  # noqa: E402
+from ward.engine import ambient, capture  # noqa: E402
 
 
 def fake_iio(root: Path, readings: list[tuple[float, float]]) -> None:
@@ -29,8 +29,8 @@ def fake_iio(root: Path, readings: list[tuple[float, float]]) -> None:
 
 class AmbientTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="faceup-iio-"))
-        self.env = mock.patch.dict(os.environ, {"FACEUP_IIO": str(self.tmp)})
+        self.tmp = Path(tempfile.mkdtemp(prefix="ward-iio-"))
+        self.env = mock.patch.dict(os.environ, {"WARD_IIO": str(self.tmp)})
         self.env.start()
         self.mod = mock.patch.object(ambient, "same_module", return_value=True)   # a Windows-Hello module
         self.mod.start()
@@ -192,7 +192,7 @@ class OpenOrder(unittest.TestCase):
     def test_ir_first_light_read_in_parallel(self):
         import threading, time
         from unittest import mock
-        from faceup.engine import capture
+        from ward.engine import capture
         order, ev = [], threading.Event()
 
         def fake_open(sp, path):
@@ -212,7 +212,7 @@ class OpenOrder(unittest.TestCase):
     def test_light_answer_too_late_keeps_rgb(self):
         import time
         from unittest import mock
-        from faceup.engine import capture
+        from ward.engine import capture
         devs = {"ir": "/dev/video2", "rgb": "/dev/video0"}
         with mock.patch.object(capture, "_open_one", lambda sp, p: mock.Mock()), \
              mock.patch.object(capture.ambient, "for_light", lambda d, threshold=0: (time.sleep(0.5), ({"ir": d["ir"]}, "dark"))[1]), \

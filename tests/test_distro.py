@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from faceup import distro  # noqa: E402
+from ward import distro  # noqa: E402
 
 UBUNTU = 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\n'
 FEDORA = 'NAME="Fedora Linux"\nID=fedora\n'

@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from faceup import attempts
+from ward import attempts
 
 LINES = """2026-09-03T12:48:00 user=octave result=accept ir=0.14 rgb=0.36 irw=11.14/5.66 votes=cross:PASS,motion:ABSTAIN learned=ir:C/up frames=1 t=1616ms
 2026-09-03T14:46:37 user=octave result=camera frames=0 t=520ms detail='cannot open ir camera /dev/video2 (busy?)'
@@ -28,7 +28,7 @@ class Parse(unittest.TestCase):
         self.assertEqual(rows[4]["reason"], "spoof")
 
     def test_read_survives_invalid_utf8(self):
-        # R4: a torn multibyte write must not crash the app's refresh / doctor / `faceup log`
+        # R4: a torn multibyte write must not crash the app's refresh / doctor / `ward log`
         import tempfile
         from pathlib import Path
         with tempfile.TemporaryDirectory() as d:
@@ -50,7 +50,7 @@ class Parse(unittest.TestCase):
 
 class DarkFlag(unittest.TestCase):
     def test_service_and_dark_parse_together(self):
-        from faceup import attempts
+        from ward import attempts
         r = attempts.parse("2026-10-22T23:01:29 user=o result=accept ir=0.31 frames=3 t=1500ms detail='via sudo; ir-only (dark)'")
         self.assertEqual(r["service"], "sudo"); self.assertTrue(r["dark"])
         r = attempts.parse("2026-10-22T13:01:29 user=o result=accept ir=0.31 frames=3 t=1500ms detail='via gdm-password'")

@@ -11,11 +11,11 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-learn-"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-learn-"))
 
-from faceup.engine import store  # noqa: E402
-from faceup.engine.auth import Engine  # noqa: E402
-from faceup.engine.liveness import Result, Vote  # noqa: E402
+from ward.engine import store  # noqa: E402
+from ward.engine.auth import Engine  # noqa: E402
+from ward.engine.liveness import Result, Vote  # noqa: E402
 
 
 def unit(v):

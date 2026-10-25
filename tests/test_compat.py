@@ -2,7 +2,7 @@
 face, across hardware profiles — IR+RGB, IR only, RGB only, other frame sizes, shadow test with
 no emitter — and the lab evaluator driven the same way. No camera, no dlib inference: the
 detector, landmarks and embedding are patched to deterministic stand-ins so what is exercised
-is faceup's own logic (capture, fusion, gates, whitening, liveness votes, decision, learning,
+is ward's own logic (capture, fusion, gates, whitening, liveness votes, decision, learning,
 rolling calibration, lab policies)."""
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ from unittest import mock
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-compat-"))
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-compat-"))
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 
-from faceup.engine import config, replay, store
-from faceup.engine.capture import Frame
-from faceup.engine.detect import Box, Models
+from ward.engine import config, replay, store
+from ward.engine.capture import Frame
+from ward.engine.detect import Box, Models
 
 RNG = np.random.default_rng(11)
 USER_VEC = RNG.normal(size=128); USER_VEC /= np.linalg.norm(USER_VEC)
@@ -95,18 +95,18 @@ def enrolled_store(user, spectra=("ir", "rgb"), dim=128):
 
 
 def run_auth(user, d, cfg_over=None, who=USER_VEC):
-    from faceup.engine.auth import Engine
+    from ward.engine.auth import Engine
     cfg = config.load()
     cfg["timing"]["window_ms"] = 600; cfg["timing"]["hard_timeout_ms"] = 1500; cfg["timing"]["settle_ms"] = 0
     cfg["cameras"]["ir"] = "usb:1:1:2"; cfg["cameras"]["rgb"] = "usb:1:1:0"
     for sec, kv in (cfg_over or {}).items():
         cfg[sec].update(kv)
-    os.environ["FACEUP_REPLAY"] = str(d)
+    os.environ["WARD_REPLAY"] = str(d)
     try:
         with synthetic_face(who):
             return Engine(cfg).authenticate(user)
     finally:
-        os.environ.pop("FACEUP_REPLAY", None)
+        os.environ.pop("WARD_REPLAY", None)
 
 
 class Profiles(unittest.TestCase):
@@ -122,8 +122,8 @@ class Profiles(unittest.TestCase):
     def test_spoof_fail_is_sticky_for_the_attempt(self):
         """A1: a cross FAIL on one frame then PASSes on later frames (an attacker probing angles)
         must not accept; the attempt ends as spoof:cross so the lockout can count it."""
-        from faceup.engine import auth
-        from faceup.engine.liveness import FAIL, PASS
+        from ward.engine import auth
+        from ward.engine.liveness import FAIL, PASS
         enrolled_store("sticky")
         seq = iter([FAIL("cross", "face in RGB only — screen replay?")])
         with mock.patch.object(auth.cross_spectrum, "vote", lambda *a, **k: next(seq, PASS("cross", "agree"))):
@@ -186,7 +186,7 @@ class Lab(unittest.TestCase):
     """The lab evaluator on the same synthetic face: step, decide, record, summary."""
 
     def test_lab_step_with_a_face(self):
-        from faceup.engine import lab as labmod
+        from ward.engine import lab as labmod
         enrolled_store("lab")
         d = frames_dir(n=6)
         cfg = config.load(); cfg["cameras"]["ir"] = "usb:1:1:2"; cfg["cameras"]["rgb"] = "usb:1:1:0"
@@ -210,7 +210,7 @@ class Lab(unittest.TestCase):
         self.assertIn("me", labmod.format_summary(rows))
 
     def test_lab_single_camera(self):
-        from faceup.engine import lab as labmod
+        from ward.engine import lab as labmod
         enrolled_store("lab1", spectra=("ir",))
         d = frames_dir(n=4, spectra=("ir",))
         cfg = config.load(); cfg["cameras"]["ir"] = "usb:1:1:2"; cfg["cameras"]["rgb"] = ""

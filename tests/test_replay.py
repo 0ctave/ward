@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 
-from faceup.engine import config, replay, store
-from faceup.engine.capture import CaptureError, Frame
+from ward.engine import config, replay, store
+from ward.engine.capture import CaptureError, Frame
 
 
 def _frames(level: int, n: int = 6, size=(120, 160)):
@@ -54,14 +54,14 @@ class EngineOnReplay(unittest.TestCase):
         st.save()
 
     def _run(self, d, user="replayuser"):
-        from faceup.engine.auth import Engine
+        from ward.engine.auth import Engine
         self._store(user)
-        os.environ["FACEUP_REPLAY"] = str(d)
+        os.environ["WARD_REPLAY"] = str(d)
         try:
             cfg = config.load(); cfg["timing"]["window_ms"] = 400; cfg["timing"]["hard_timeout_ms"] = 800
             return Engine(cfg).authenticate(user)
         finally:
-            del os.environ["FACEUP_REPLAY"]
+            del os.environ["WARD_REPLAY"]
 
     def test_dark_frames_end_in_dark(self):
         out = self._run(_frames(5))
@@ -70,7 +70,7 @@ class EngineOnReplay(unittest.TestCase):
     def test_blank_lit_frames_end_in_no_face(self):
         out = self._run(_frames(110))
         self.assertFalse(out.accepted); self.assertEqual(out.reason, "no-face")
-        self.assertIn(out.reason, open(os.environ["FACEUP_LOG"]).read())          # one log line per attempt
+        self.assertIn(out.reason, open(os.environ["WARD_LOG"]).read())          # one log line per attempt
 
     def test_missing_recording_is_a_camera_failure(self):
         out = self._run(Path(tempfile.mkdtemp()))

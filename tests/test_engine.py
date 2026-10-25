@@ -8,16 +8,16 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from faceup.engine import config, pam, quality, store  # noqa: E402
-from faceup.engine.detect import Box  # noqa: E402
-from faceup.engine.liveness import Result, cross_spectrum, motion, shadow  # noqa: E402
+from ward.engine import config, pam, quality, store  # noqa: E402
+from ward.engine.detect import Box  # noqa: E402
+from ward.engine.liveness import Result, cross_spectrum, motion, shadow  # noqa: E402
 
 
 def textured(h=360, w=640, seed=1):
@@ -165,14 +165,14 @@ class PamTests(unittest.TestCase):
     def test_insert_before_first_real_module_and_remove(self):
         out = pam.render_enabled(self.SAMPLE, native=False)    # pam_exec flavour, whatever this machine has installed
         lines = out.splitlines()
-        self.assertIn("faceup-auth", lines[1])
+        self.assertIn("ward-auth", lines[1])
         self.assertTrue(lines[2].endswith("pam_howdy.so"))
         self.assertEqual(pam.render_enabled(out, native=False), out)         # idempotent
         self.assertIn("seteuid", lines[1])                         # runs as root, not as the sudo caller
         self.assertEqual(pam.render_disabled(out), self.SAMPLE)
-        old = self.SAMPLE.replace("auth\t[success=3", "auth\tsufficient\t\t\tpam_exec.so quiet /usr/local/bin/faceup-auth\t# faceup\nauth\t[success=3", 1)
+        old = self.SAMPLE.replace("auth\t[success=3", "auth\tsufficient\t\t\tpam_exec.so quiet /usr/local/bin/ward-auth\t# ward\nauth\t[success=3", 1)
         upgraded = pam.render_enabled(old, native=False)
-        self.assertEqual(upgraded.count("faceup-auth"), 1)
+        self.assertEqual(upgraded.count("ward-auth"), 1)
         self.assertIn("seteuid", upgraded)
         self.assertIn("stdout", upgraded)                          # PAM_TEXT_INFO feedback for the greeters
         # a line with seteuid but without stdout (pre-feedback install) is upgraded too
@@ -180,7 +180,7 @@ class PamTests(unittest.TestCase):
         self.assertEqual(pam.render_enabled(older, native=False), out)
 
     def test_native_module_line_jumps_to_pam_permit(self):
-        """pam_faceup.so uses [success=N default=ignore] like pam_unix, so the caller's
+        """pam_ward.so uses [success=N default=ignore] like pam_unix, so the caller's
         pam_gnome_keyring line after @include still runs and receives the token."""
         ubuntu = ("auth\t[success=2 default=ignore]\tpam_unix.so nullok try_first_pass\n"
                   "auth\t[success=1 default=ignore]\tpam_sss.so use_first_pass\n"
@@ -189,14 +189,14 @@ class PamTests(unittest.TestCase):
                   "auth\toptional\t\t\tpam_cap.so\n")
         out = pam.render_enabled(ubuntu, native=True)
         first = out.splitlines()[0]
-        self.assertIn("[success=3 default=ignore]", first); self.assertIn("pam_faceup.so", first)   # unix, sss, deny → permit
+        self.assertIn("[success=3 default=ignore]", first); self.assertIn("pam_ward.so", first)   # unix, sss, deny → permit
         self.assertEqual(pam.render_enabled(out, native=True), out)                                # idempotent
         # switching pam_exec ↔ native rewrites the line in place, disable removes either
         exec_line = pam.render_enabled(ubuntu, native=False)
         self.assertEqual(pam.render_enabled(exec_line, native=True), out)
         self.assertEqual(pam.render_enabled(out, native=False), exec_line)
         self.assertEqual(pam.render_disabled(out), ubuntu)
-        self.assertEqual(pam.render_enabled(self.SAMPLE, native=True).count("pam_faceup.so"), 1)
+        self.assertEqual(pam.render_enabled(self.SAMPLE, native=True).count("pam_ward.so"), 1)
 
     def test_status_ignores_commented_howdy(self):
         import os, tempfile
@@ -219,20 +219,20 @@ class PamPortability(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        self.dir = pam.Path(tempfile.mkdtemp(prefix="faceup-pam-"))
+        self.dir = pam.Path(tempfile.mkdtemp(prefix="ward-pam-"))
         self.saved = (pam.COMMON_AUTH, pam.BACKUP)
 
     def tearDown(self):
         pam.COMMON_AUTH, pam.BACKUP = self.saved
 
     def use(self, path):
-        pam.COMMON_AUTH = path; pam.BACKUP = path.with_name(path.name + ".faceup-bak")
+        pam.COMMON_AUTH = path; pam.BACKUP = path.with_name(path.name + ".ward-bak")
 
     def test_fedora_system_auth_native_jump_lands_after_deny(self):
         f = self.dir / "system-auth"; f.write_text(self.FEDORA); self.use(f)
         pam.enable(native=True)
         lines = f.read_text().splitlines()
-        i = next(k for k, ln in enumerate(lines) if "pam_faceup.so" in ln)
+        i = next(k for k, ln in enumerate(lines) if "pam_ward.so" in ln)
         self.assertIn("pam_unix", lines[i + 1])                                # before the first real module
         self.assertIn("[success=4 default=ignore]", lines[i])                  # unix, succeed_if, sss, deny
         pam.disable()
@@ -245,7 +245,7 @@ class PamPortability(unittest.TestCase):
         with unittest.mock.patch.object(pam, "manager", return_value="pam-config"):
             pam.enable(native=False)
         self.assertTrue(link.is_symlink())
-        self.assertIn("faceup-auth", real.read_text())
+        self.assertIn("ward-auth", real.read_text())
 
     def test_authselect_managed_file_is_refused_untouched(self):
         import os
@@ -255,7 +255,7 @@ class PamPortability(unittest.TestCase):
         with self.assertRaises(pam.PamError):
             pam.enable(native=True)
         self.assertEqual(real.read_text(), self.FEDORA)
-        self.assertFalse((self.dir / "system-auth.faceup-bak").exists())
+        self.assertFalse((self.dir / "system-auth.ward-bak").exists())
 
     def test_missing_stack_is_a_clear_error(self):
         self.use(self.dir / "nope")
@@ -266,7 +266,7 @@ class PamPortability(unittest.TestCase):
 class DetectorPortability(unittest.TestCase):
     def test_yunet_failure_falls_back_to_hog(self):
         import cv2
-        from faceup.engine import detect
+        from ward.engine import detect
         if detect.dlib is None:
             self.skipTest("dlib not installed")
         m = detect.Models("yunet", 320)
@@ -277,10 +277,10 @@ class DetectorPortability(unittest.TestCase):
 
     def test_dlib_dir_override_is_searched_first(self):
         import tempfile
-        from faceup.engine import detect
-        d = tempfile.mkdtemp(prefix="faceup-dlib-")
+        from ward.engine import detect
+        d = tempfile.mkdtemp(prefix="ward-dlib-")
         open(os.path.join(d, "shape_predictor_5_face_landmarks.dat"), "w").close()
-        with unittest.mock.patch.dict(os.environ, {"FACEUP_DLIB_DIR": d}):
+        with unittest.mock.patch.dict(os.environ, {"WARD_DLIB_DIR": d}):
             self.assertEqual(str(detect.model_path("shape_predictor_5_face_landmarks.dat").parent), d)
 
 
@@ -288,7 +288,7 @@ class FastPath(unittest.TestCase):
     """Roadmap R1/R2/R3/R7/L3: what can be checked without a camera."""
 
     def test_async_open_reports_missing_device_without_blocking_the_caller(self):
-        from faceup.engine.capture import Capture, CaptureError
+        from ward.engine.capture import Capture, CaptureError
         pending = Capture.open_async({"ir": "/dev/video-nope", "rgb": ""})
         with self.assertRaises(CaptureError):
             pending.result(timeout=5)
@@ -299,7 +299,7 @@ class FastPath(unittest.TestCase):
         # R2/R3: close()/a failed attempt must never leave a late-opening camera held by nobody
         import threading as _th
         import time as _t
-        from faceup.engine import capture as capmod
+        from ward.engine import capture as capmod
         released = []
 
         class FakeCap:
@@ -318,13 +318,13 @@ class FastPath(unittest.TestCase):
 
     def test_hw_apply_is_cheap_and_needs_no_subprocess(self):
         import time
-        from faceup import hw
+        from ward import hw
         t = time.monotonic(); n = hw.apply(); dt = time.monotonic() - t
         self.assertGreaterEqual(n, 1); self.assertLess(dt, 0.05)
         self.assertEqual(hw.threads_for(12), 4); self.assertEqual(hw.threads_for(2), 1)
 
     def test_confident_reject_needs_enough_far_frames(self):
-        from faceup.engine.auth import Engine, Obs
+        from ward.engine.auth import Engine, Obs
         rec = {"early_reject": 0.65, "fusion_frames": 4}
         def o(d):
             return Obs(None, None, None, np.ones(128), False, "ok", d)
@@ -336,9 +336,9 @@ class FastPath(unittest.TestCase):
         self.assertFalse(Engine._confident_reject(far, {"early_reject": 0, "fusion_frames": 4}))   # disabled
 
     def test_learning_stores_per_frame_samples(self):
-        from faceup.engine import store
-        from faceup.engine.auth import Engine, Obs
-        from faceup.engine.liveness import PASS, ABSTAIN
+        from ward.engine import store
+        from ward.engine.auth import Engine, Obs
+        from ward.engine.liveness import PASS, ABSTAIN
         rng = np.random.default_rng(1)
         base = rng.normal(size=128); base /= np.linalg.norm(base)
         st = store.Store(user="t")

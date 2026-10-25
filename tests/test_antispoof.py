@@ -8,15 +8,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from faceup.engine.detect import Box  # noqa: E402
-from faceup.engine.liveness import Result  # noqa: E402
-from faceup.engine.liveness import antispoof_cnn as asc  # noqa: E402
+from ward.engine.detect import Box  # noqa: E402
+from ward.engine.liveness import Result  # noqa: E402
+from ward.engine.liveness import antispoof_cnn as asc  # noqa: E402
 
 
 class FakeNet:

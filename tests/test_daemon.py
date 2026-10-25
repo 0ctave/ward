@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp(prefix="faceup-test-"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp(prefix="ward-test-"))
 
-from faceup import client, daemon  # noqa: E402
+from ward import client, daemon  # noqa: E402
 
 
 class FakeResident:
@@ -28,7 +28,7 @@ class FakeResident:
 class Protocol(unittest.TestCase):
     def serve(self, res):
         import socket
-        d = tempfile.mkdtemp(dir=os.environ["FACEUP_ETC"]); path = os.path.join(d, "s")
+        d = tempfile.mkdtemp(dir=os.environ["WARD_ETC"]); path = os.path.join(d, "s")
         srv = socket.socket(socket.AF_UNIX); srv.bind(path); srv.listen(1)
 
         def loop():
@@ -52,19 +52,19 @@ class Protocol(unittest.TestCase):
         self.assertIsNone(client.via_daemon("octave", path="/nonexistent/sock"))
 
     def test_outcome_dict_matches_feedback_needs(self):
-        from faceup import feedback
-        from faceup.engine.auth import Outcome
-        from faceup.engine.liveness import Result, Vote
+        from ward import feedback
+        from ward.engine.auth import Outcome
+        from ward.engine.liveness import Result, Vote
         o = Outcome(True, "accept", "u", ir_dist=0.2, votes=[Vote("cross", Result.PASS)], elapsed_ms=900)
         d = daemon.outcome_dict(o); d["votes"] = [client._vote(v) for v in d["votes"]]
         self.assertIn("IR 0.20", feedback._detail(SimpleNamespace(**d)))
 
     def test_client_falls_back_to_the_engine(self):
         with mock.patch.object(client, "connect", lambda path=None: None), \
-             mock.patch("faceup.cli.main", return_value=7) as cli_main, mock.patch.object(client.os, "geteuid", lambda: 0):
+             mock.patch("ward.cli.main", return_value=7) as cli_main, mock.patch.object(client.os, "geteuid", lambda: 0):
             self.assertEqual(client.main(["-v"]), 7)
         cli_main.assert_called_once_with(["auth", "-v"])
-        with mock.patch("faceup.cli.main", return_value=3) as cli_main:
+        with mock.patch("ward.cli.main", return_value=3) as cli_main:
             self.assertEqual(client.main(["--replay", "/x"]), 3)          # anything but -v goes to the full CLI
         cli_main.assert_called_once_with(["auth", "--replay", "/x"])
 
@@ -83,7 +83,7 @@ class Robustness(unittest.TestCase):
     def test_invalid_user_is_refused_before_the_cameras(self):
         # D3: null / list / missing user never reaches an attempt
         r = bare_resident(); sent = []
-        with mock.patch("faceup.engine.auth.Engine") as eng:
+        with mock.patch("ward.engine.auth.Engine") as eng:
             for req in ({}, {"user": None}, {"user": ["a"]}, {"user": "../x"}):
                 r.attempt(req, sent.append)
         eng.assert_not_called()
@@ -93,7 +93,7 @@ class Robustness(unittest.TestCase):
         # D1/R1: a queued request never waits behind a long or hung attempt
         r = bare_resident(); sent = []
         r.lock.acquire(); r.started = __import__("time").monotonic(); r.budget_s = 1.0
-        with mock.patch.object(daemon, "BUSY_WAIT_S", 0.05), mock.patch("faceup.engine.auth.Engine") as eng:
+        with mock.patch.object(daemon, "BUSY_WAIT_S", 0.05), mock.patch("ward.engine.auth.Engine") as eng:
             r.attempt({"user": "octave"}, sent.append)
             self.assertEqual(sent, [{"error": "busy"}])
             r.started -= 100                                  # far past hard timeout + margin: wedged
@@ -105,7 +105,7 @@ class Robustness(unittest.TestCase):
 
     def test_client_gone_while_queued_runs_no_attempt(self):
         r = bare_resident(); sent = []
-        with mock.patch("faceup.engine.auth.Engine") as eng:
+        with mock.patch("ward.engine.auth.Engine") as eng:
             r.attempt({"user": "octave"}, sent.append, alive=lambda: False)
         eng.assert_not_called(); self.assertFalse(r.lock.locked())
 
@@ -127,7 +127,7 @@ class Robustness(unittest.TestCase):
         real_connect = client.connect
         with mock.patch.object(client, "connect", lambda p=None: real_connect(path)), \
              mock.patch.object(client, "_behaviour", lambda: {}), \
-             mock.patch("faceup.cli.main", return_value=0) as cli_main, mock.patch.object(client.os, "geteuid", lambda: 0):
+             mock.patch("ward.cli.main", return_value=0) as cli_main, mock.patch.object(client.os, "geteuid", lambda: 0):
             self.assertEqual(client.main([]), 0)
         cli_main.assert_called_once_with(["auth"])
 
@@ -143,10 +143,10 @@ class SdNotify(unittest.TestCase):
         import socket
         s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         if abstract:
-            name = f"faceup-test-{os.getpid()}-{id(s)}"
+            name = f"ward-test-{os.getpid()}-{id(s)}"
             s.bind("\0" + name); addr = "@" + name
         else:
-            addr = os.path.join(tempfile.mkdtemp(dir=os.environ["FACEUP_ETC"]), "notify"); s.bind(addr)
+            addr = os.path.join(tempfile.mkdtemp(dir=os.environ["WARD_ETC"]), "notify"); s.bind(addr)
         s.settimeout(2)
         self.addCleanup(s.close)
         return s, addr
@@ -164,7 +164,7 @@ class SdNotify(unittest.TestCase):
     def test_absent_or_broken_socket_is_a_noop(self):
         self.assertFalse(daemon.sd_notify("READY=1", env={}))
         self.assertFalse(daemon.sd_notify("READY=1", env={"NOTIFY_SOCKET": "relative"}))
-        self.assertFalse(daemon.sd_notify("READY=1", env={"NOTIFY_SOCKET": "/nonexistent/faceup/notify"}))
+        self.assertFalse(daemon.sd_notify("READY=1", env={"NOTIFY_SOCKET": "/nonexistent/ward/notify"}))
 
     def test_watchdog_interval(self):
         me = str(os.getpid())
@@ -196,7 +196,7 @@ class SdNotify(unittest.TestCase):
         self.assertEqual(run(True), [])                                  # wedged: no ping → systemd restarts us
 
     def test_unit_file_declares_notify_and_watchdog(self):
-        unit = open(os.path.join(os.path.dirname(__file__), "..", "data", "faceup.service")).read()
+        unit = open(os.path.join(os.path.dirname(__file__), "..", "data", "ward.service")).read()
         for line in ("Type=notify", "WatchdogSec=", "CapabilityBoundingSet=\n", "DevicePolicy=closed",
                      "DeviceAllow=char-video4linux rw", "RestrictAddressFamilies=AF_UNIX", "MemoryMax="):
             self.assertIn(line, unit)

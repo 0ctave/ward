@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 
 from enroll_harness import World, run_setup  # noqa: E402
-from faceup.engine import calibration as cal  # noqa: E402
+from ward.engine import calibration as cal  # noqa: E402
 
 
 class HappyPath(unittest.TestCase):
@@ -174,7 +174,7 @@ class WindowStates(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from faceup import appui
+            from ward import appui
             cls.appui = appui
             cls.w = appui.CalibrateWindow("t", 320, 180)
         except Exception as e:                                      # no display / no libadwaita

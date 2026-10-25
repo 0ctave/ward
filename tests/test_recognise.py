@@ -11,11 +11,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("FACEUP_ETC", tempfile.mkdtemp())
-os.environ.setdefault("FACEUP_LOG", os.path.join(os.environ["FACEUP_ETC"], "log"))
+os.environ.setdefault("WARD_ETC", tempfile.mkdtemp())
+os.environ.setdefault("WARD_LOG", os.path.join(os.environ["WARD_ETC"], "log"))
 
-from faceup.engine import recognise, store
-from faceup.engine.detect import Box, Models
+from ward.engine import recognise, store
+from ward.engine.detect import Box, Models
 
 
 class Alignment(unittest.TestCase):
@@ -67,7 +67,7 @@ class Scaling(unittest.TestCase):
 
 class StoreIdentity(unittest.TestCase):
     def test_store_refuses_another_recogniser(self):
-        os.environ["FACEUP_ETC"]  # set at import
+        os.environ["WARD_ETC"]  # set at import
         st = store.Store(user="ident", path=store.config.MODELS_DIR / "ident.json", recogniser="arcface:mbf")
         st.add("C/level", "ir", np.ones(512) / np.sqrt(512), 0.9, None)
         st.save()
