@@ -6,7 +6,7 @@ jobs:
   unittest:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Distro dependencies (the only ones ward uses — no pip)
         run: |
           sudo apt-get update

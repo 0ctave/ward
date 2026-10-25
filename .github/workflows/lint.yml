@@ -7,7 +7,7 @@ jobs:
   python:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -25,7 +25,7 @@ jobs:
   c-module:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y gcc libpam0g-dev cppcheck
       # Hard gate: the PAM module must build clean with warnings as errors.
@@ -38,7 +38,7 @@ jobs:
   shell:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: ShellCheck the install and packaging scripts (advisory)
         continue-on-error: true
         run: |
