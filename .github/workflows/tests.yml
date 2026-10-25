@@ -1,5 +1,7 @@
 name: tests
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   unittest:
     runs-on: ubuntu-24.04

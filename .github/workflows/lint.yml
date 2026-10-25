@@ -1,0 +1,46 @@
+name: lint
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Hard gate: every module byte-compiles (catches syntax errors on every supported path).
+      - name: Byte-compile every module
+        run: python3 -m compileall -q ward tests
+      # Advisory: ruff at pyflakes level (config in pyproject). Promote to a required check once a
+      # green run confirms the backlog is clean — ruff is a CI-only dev tool, never a runtime dep.
+      - name: Install ruff
+        run: pipx install ruff
+      - name: Lint (ruff — advisory)
+        continue-on-error: true
+        run: ruff check . --output-format=github
+
+  c-module:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc libpam0g-dev cppcheck
+      # Hard gate: the PAM module must build clean with warnings as errors.
+      - name: Compile the PAM module (-Werror)
+        run: gcc -O2 -Wall -Wextra -Werror -fPIC -shared -o /tmp/pam_ward.so data/pam_ward.c
+      - name: Static analysis (cppcheck — advisory)
+        continue-on-error: true
+        run: cppcheck --error-exitcode=1 --enable=warning,portability --inline-suppr data/pam_ward.c
+
+  shell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck the install and packaging scripts (advisory)
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -S warning install.sh packaging/*.sh packaging/debian/postinst packaging/debian/prerm packaging/debian/postrm

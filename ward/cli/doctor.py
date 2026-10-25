@@ -11,6 +11,21 @@ from ..engine import store as storemod
 from .common import need_root, real_user
 
 # ----------------------------------------------------------------- doctor ----
+def cmd_update(args) -> int:
+    """Check GitHub for a newer release (explicit, best-effort — never runs during an unlock)."""
+    from .. import update as up
+    rec = up.check()
+    if rec["latest"] is None:
+        ui.warn("could not reach GitHub to check for updates (offline, or rate-limited)")
+        return 1
+    if up.is_newer(rec["latest"]):
+        ui.warn(f"a newer Ward is available: {rec['latest']}  (you have {__version__})")
+        ui.tip("update from source: git pull && sudo ./install.sh   ·   or your distro package")
+        return 0
+    ui.ok(f"up to date — Ward {__version__} is the latest release")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     ui.banner(f"ward {__version__} · doctor", "Everything that decides whether face unlock works on this machine")
     problems = 0
