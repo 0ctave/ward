@@ -1,0 +1,30 @@
+name: "💡 Feature / idea"
+description: Suggest an improvement, a new distro/greeter to support, or a reliability idea.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: "See [docs/ROADMAP.md](../blob/main/docs/ROADMAP.md) for what's already planned."
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or use case, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Proposed idea
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Ground rules
+      description: Ward keeps a few hard constraints (see CONTRIBUTING.md).
+      options:
+        - label: This wouldn't add a pip/virtualenv dependency (Ward uses the distro Python only).
+          required: false
+        - label: This wouldn't weaken the fail-open guarantee (a failure must always fall back to the password).
+          required: false

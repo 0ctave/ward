@@ -1,0 +1,56 @@
+name: "📷 Camera / hardware issue"
+description: Ward can't find, open, or recognise through your camera, or the IR emitter won't fire.
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Camera modules differ wildly between laptops — your report helps Ward support more of them.
+        **The single most useful thing you can attach is the full `ward doctor` output.**
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`ward doctor` output"
+      description: Run `ward doctor` and paste all of it. Redact nothing — it contains no secrets.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: laptop
+    attributes:
+      label: Laptop / camera model
+      placeholder: "e.g. Lenovo Yoga Slim 7 ProX 14ARH7, or an external USB webcam model"
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distro, desktop and session
+      placeholder: "e.g. Fedora 40, GNOME 46, Wayland"
+    validations:
+      required: true
+  - type: textarea
+    id: devices
+    attributes:
+      label: Camera devices
+      description: "Output of `lsusb` and `v4l2-ctl --list-devices` (install `v4l-utils` if missing)."
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what you expected
+      description: Include whether it's in daylight or the dark, and the relevant `ward log -n 5` lines if it's a recognition/liveness problem.
+    validations:
+      required: true
+  - type: textarea
+    id: frames
+    attributes:
+      label: Recorded frames (optional, hugely helpful)
+      description: |
+        For a recognition or liveness problem, `sudo ward lab --record-frames <dir>` records frames
+        that let the issue be replayed without your hardware. Attach the folder if you're comfortable
+        sharing images of **your own** face. Never attach anyone else's.
+    validations:
+      required: false
