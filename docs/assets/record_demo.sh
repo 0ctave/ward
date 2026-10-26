@@ -9,6 +9,8 @@
 # Requires Ward already enabled for sudo (`sudo ward pam enable`). Tools, either set:
 #   asciinema + agg   (default, clean terminal render — recommended)
 #   wf-recorder + gifski  (--tool screen: actually screen-records the terminal window, Wayland)
+# Re-exec under bash if invoked as `sh record_demo.sh` (dash has no `set -o pipefail`).
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd)
 out="$root/docs/demo.gif"; tool=asciinema; cols=92; rows=18; speed=1.0
@@ -25,12 +27,12 @@ hint() { echo "  install: $1"; }
 demo=$(mktemp); trap 'rm -f "$demo" "${cast:-}"' EXIT
 cat > "$demo" <<'DEMO'
 set -e
-type() { printf '\033[1;32m$\033[0m '; for c in $(echo "$1" | sed 's/./& /g'); do printf '%s' "$c"; sleep 0.04; done; printf '\n'; }
+show() { printf '\033[1;32m$\033[0m '; for c in $(echo "$1" | sed 's/./& /g'); do printf '%s' "$c"; sleep 0.04; done; printf '\n'; }
 clear
 echo "# Ward — face unlock for Linux. sudo without typing a password:"; echo; sleep 1
 sudo -k                                   # forget any cached sudo
-type "sudo whoami"; sudo whoami; echo; sleep 1.2
-type "sudo systemctl status ward --no-pager | head -1"; sudo systemctl status ward --no-pager | head -1 || true; echo; sleep 1
+show "sudo whoami"; sudo whoami; echo; sleep 1.2
+show "sudo systemctl status ward --no-pager | head -1"; sudo systemctl status ward --no-pager | head -1 || true; echo; sleep 1
 echo "# A failed face check (or covering the camera) just falls back to your password."; sleep 2
 DEMO
 
