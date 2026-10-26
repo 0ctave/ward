@@ -30,12 +30,14 @@ set -e
 # type a command, preserving spaces (${s:i:1} keeps every char), then the caller runs it
 show() { printf '\033[1;32m$\033[0m '; local s="$1" i; for ((i=0;i<${#s};i++)); do printf '%s' "${s:i:1}"; sleep 0.045; done; printf '\n'; }
 clear
-echo "# Ward — face unlock for Linux. sudo without typing a password:"; echo; sleep 1.2
+echo "# Ward — face unlock for Linux."; echo; sleep 1
 sudo -k                                   # forget any cached sudo
+echo "# One attempt, with the details Ward sees:"; sleep 0.8
 printf '\033[2m(look at the camera)\033[0m '; for i in 3 2 1; do printf '%s ' "$i"; sleep 1; done; printf '\r\033[K'
-show "sudo whoami"; sudo whoami; echo; sleep 1.5
-show "sudo systemctl status ward --no-pager | head -1"; sudo systemctl status ward --no-pager | head -1 || true; echo; sleep 1.2
-echo "# A failed face check — or covering the camera — just falls back to your password."; sleep 2.5
+show "sudo ward auth -v"; sudo ward auth -v; echo; sleep 2.2
+echo "# From now on sudo just works — no password:"; sleep 1
+show "sudo whoami"; sudo whoami; echo; sleep 1.8
+echo "# Cover the camera or fail the check, and it falls back to your password."; sleep 2.5
 DEMO
 
 if [ "$tool" = asciinema ]; then
