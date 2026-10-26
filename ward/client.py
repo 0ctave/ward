@@ -70,12 +70,34 @@ def via_daemon(user: str, verbose: bool = False, path: str | None = None, fb=Non
     return None
 
 
+def _human_user() -> str:
+    """The person at the keyboard to authenticate — NOT the target of an elevation.
+
+    `sudo` asks PAM to authenticate the *invoking* user, but on some systems `pam_get_user()`
+    (and so `PAM_USER`) comes back as the target `root`; meanwhile `sudo` keeps the caller's real
+    uid, so `getuid()` is the human. A login/polkit/`su` runs as root (getuid 0) but PAM sets
+    `PAM_USER` to the human. So: trust a non-root `PAM_USER` first (login, `su bob`), otherwise use
+    the real uid when it's a regular user (`sudo`), and only then fall back."""
+    import pwd
+    pam = os.environ.get("PAM_USER")
+    if pam and pam != "root":
+        return pam
+    ruid = os.getuid()
+    if ruid != 0:
+        try:
+            return pwd.getpwuid(ruid).pw_name
+        except KeyError:
+            pass
+    return pam or os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     plain = [a for a in argv if a in ("-v", "--verbose")] == argv          # replay / -U … go to the full CLI
+    user = None
     if plain and os.geteuid() == 0:
         verbose = bool(argv)
-        user = os.environ.get("PAM_USER") or os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
+        user = _human_user()
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
         signal.alarm(12)                                   # backstop: the kernel ends a wedged attempt
         try:
@@ -102,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
             pass                                           # anything odd: the in-process engine decides
         signal.alarm(0)
     from .cli import main as cli_main
-    return cli_main(["auth", *argv])
+    extra = ["-U", user] if user else []           # the in-process fallback gets the same human user
+    return cli_main(["auth", *extra, *argv])
 
 
 def _behaviour() -> dict:

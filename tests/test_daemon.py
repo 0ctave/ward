@@ -61,11 +61,12 @@ class Protocol(unittest.TestCase):
 
     def test_client_falls_back_to_the_engine(self):
         with mock.patch.object(client, "connect", lambda path=None: None), \
+             mock.patch.object(client, "_human_user", lambda: "octave"), \
              mock.patch("ward.cli.main", return_value=7) as cli_main, mock.patch.object(client.os, "geteuid", lambda: 0):
             self.assertEqual(client.main(["-v"]), 7)
-        cli_main.assert_called_once_with(["auth", "-v"])
+        cli_main.assert_called_once_with(["auth", "-U", "octave", "-v"])   # the resolved human is threaded through
         with mock.patch("ward.cli.main", return_value=3) as cli_main:
-            self.assertEqual(client.main(["--replay", "/x"]), 3)          # anything but -v goes to the full CLI
+            self.assertEqual(client.main(["--replay", "/x"]), 3)          # not plain → full CLI, no -U injected
         cli_main.assert_called_once_with(["auth", "--replay", "/x"])
 
 
@@ -127,9 +128,30 @@ class Robustness(unittest.TestCase):
         real_connect = client.connect
         with mock.patch.object(client, "connect", lambda p=None: real_connect(path)), \
              mock.patch.object(client, "_behaviour", lambda: {}), \
+             mock.patch.object(client, "_human_user", lambda: "octave"), \
              mock.patch("ward.cli.main", return_value=0) as cli_main, mock.patch.object(client.os, "geteuid", lambda: 0):
             self.assertEqual(client.main([]), 0)
-        cli_main.assert_called_once_with(["auth"])
+        cli_main.assert_called_once_with(["auth", "-U", "octave"])
+
+
+class HumanUser(unittest.TestCase):
+    """The PAM helper must authenticate the person at the keyboard, not root (the sudo target)."""
+
+    def test_non_root_pam_user_wins(self):           # login / polkit / `su bob`
+        with mock.patch.dict(os.environ, {"PAM_USER": "alice"}, clear=False):
+            self.assertEqual(client._human_user(), "alice")
+
+    def test_sudo_root_pam_user_falls_to_real_uid(self):   # the bug: PAM_USER=root, caller uid is the human
+        import pwd
+        with mock.patch.dict(os.environ, {"PAM_USER": "root"}, clear=False), \
+             mock.patch.object(client.os, "getuid", lambda: 1000), \
+             mock.patch.object(pwd, "getpwuid", lambda u: type("P", (), {"pw_name": "octave"})()):
+            self.assertEqual(client._human_user(), "octave")
+
+    def test_actual_root_login_stays_root(self):
+        with mock.patch.dict(os.environ, {"PAM_USER": "root"}, clear=False), \
+             mock.patch.object(client.os, "getuid", lambda: 0):
+            self.assertEqual(client._human_user(), "root")
 
 
 if __name__ == "__main__":
