@@ -1,4 +1,4 @@
-# ward — Roadmap
+# Ward — Roadmap
 
 *Written 2026-09-07 against v0.2.0 + session feedback. Companion to `DESIGN.md` (what exists and why) and `README.md` (the guide). This document says what comes next, in what order, and why.*
 
@@ -101,7 +101,7 @@ Order: U5 + U6 + U7 + U4 now (they need nothing else), U1 with the daemon, then 
 | GDM login, GNOME Shell unlock | `gdm-password` | yes | yes | works, feedback shown |
 | GNOME polkit agent | `polkit-1` | yes | yes | works |
 | sudo / su | `sudo`, `su` | yes | yes (stderr) | works, spinner |
-| KDE lock screen (Plasma 6) | `kde` | yes — Plasma 6 runs an *active* and a *fingerprint* PAM stack side by side ([kscreenlocker !318](https://invent.kde.org/plasma/kscreenlocker/-/merge_requests/318)); ward belongs in the fingerprint-style stack | yes | to verify on a Plasma 6 VM |
+| KDE lock screen (Plasma 6) | `kde` | yes — Plasma 6 runs an *active* and a *fingerprint* PAM stack side by side ([kscreenlocker !318](https://invent.kde.org/plasma/kscreenlocker/-/merge_requests/318)); Ward belongs in the fingerprint-style stack | yes | to verify on a Plasma 6 VM |
 | KDE polkit agent | `polkit-1` | yes | yes | expected to work |
 | SDDM | `sddm` | **no** — PAM runs when the user submits; press Enter with an empty password ([Arch forum](https://bbs.archlinux.org/viewtopic.php?id=309702)) | yes | document; consider an SDDM "face" hint theme snippet |
 | LightDM | `lightdm` | no (same as SDDM) | yes | document |
@@ -115,7 +115,7 @@ Fix for the "press Enter" surfaces: a `behaviour.retry_on_empty_password` note i
 ### 4.3 Cameras
 
 - **libcamera-only sensors** (Intel IPU6 on 2023+ laptops): no V4L2 node for the RGB sensor; IR modules usually stay UVC. Plan: IR-only profile B works; document `v4l2-relayd`/libcamerify for RGB; refuse `v4l2loopback` remains (spoof surface).
-- **PipeWire camera portal**: root PAM helper cannot use the portal; the daemon (R4) could later be a PipeWire client so browsers and ward share the camera instead of "busy".
+- **PipeWire camera portal**: root PAM helper cannot use the portal; the daemon (R4) could later be a PipeWire client so browsers and Ward share the camera instead of "busy".
 - **Multiple IR modules**: `cameras.pick_pair` prefers the same USB module; add a `ward cameras` command to list, test and choose.
 
 ### 4.4 Engines (recognisers and detectors)
@@ -145,7 +145,7 @@ Plan, in order of how much it stores:
 
 | Stage | Approach | Stores a secret? | Ships when |
 |---|---|---|---|
-| K0 | **Explain.** `doctor` and the README say: face unlock at login leaves the keyring locked until first use; face unlock everywhere else is unaffected. Option to disable ward for `gdm-password`'s *login* phase only (PAM_TYPE + no existing session → skip), so login stays password and everything after is face | no | now |
+| K0 | **Explain.** `doctor` and the README say: face unlock at login leaves the keyring locked until first use; face unlock everywhere else is unaffected. Option to disable Ward for `gdm-password`'s *login* phase only (PAM_TYPE + no existing session → skip), so login stays password and everything after is face | no | now |
 | K1 | **Sealed login credential, opt-in.** `ward keyring enable` asks for the login password, verifies it against PAM, and seals it with `systemd-creds encrypt --with-key=tpm2` bound to PCR 7 (Secure Boot state) — or with the host key on machines without a TPM, which then requires full-disk encryption (checked, refused otherwise). A native module `pam_ward.so` (≈ 300 lines of C, replaces `pam_exec`) runs the helper, and on an accept *that meets the strict policy* (§6) unseals the credential and calls `pam_set_item(PAM_AUTHTOK)`. `pam_gnome_keyring`/`pam_kwallet5` then unlock as if the password had been typed | yes, sealed to TPM/FDE | v0.6 |
 | K2 | **Separate keyring password.** If the keyring password differs from the login password, K1 stores that one instead; verified by unlocking the keyring over the Secret Service API from the user's session | yes | with K1 |
 | K3 | **No-secret alternatives, documented.** KWallet with a GPG-key wallet; a blank login keyring on FDE-only machines (GNOME's own trade-off). These avoid K1 at the price of weaker at-rest protection | no | docs |
@@ -156,7 +156,7 @@ The native module also cleans up the integration: proper conversation messages i
 
 ## 6. Security policy
 
-ward is **convenience-grade authentication with a password behind it**, on a 2D sensor. The policy makes that explicit and tunable.
+Ward is **convenience-grade authentication with a password behind it**, on a 2D sensor. The policy makes that explicit and tunable.
 
 **Principles**
 
@@ -179,7 +179,7 @@ ward is **convenience-grade authentication with a password behind it**, on a 2D 
 
 **Context checks.** Skip face auth when: SSH (exists), `PAM_RHOST` set, inside a container, tty login under `policy.login = off`, and when the model store is newer than the recogniser build (tamper/mismatch).
 
-**Store hygiene.** Learned models capped, listed, forgettable (exists); a notification when a learned model is added ("ward learned your night-time look") so silent drift is visible; `doctor` warns when learned models outnumber enrolled ones.
+**Store hygiene.** Learned models capped, listed, forgettable (exists); a notification when a learned model is added ("Ward learned your night-time look") so silent drift is visible; `doctor` warns when learned models outnumber enrolled ones.
 
 **Audit.** One line per attempt (exists) plus structured journald fields (`WARD_RESULT`, `WARD_SERVICE`, distances) so `journalctl -t ward` works; the Attempts page reads both.
 
