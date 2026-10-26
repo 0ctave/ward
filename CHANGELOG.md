@@ -2,6 +2,13 @@
 
 ## 0.4.0 — 2026-10-25
 
+### Coherent setup flow
+- The **app is the front door**: `ward` with no arguments (and the desktop launcher) opens the
+  manager window; `install.sh` now points first-time users to the app, not `sudo ward setup`.
+- First-run Overview leads with a prominent **Set up Ward → Start setup** card that launches the
+  in-app wizard (everything graphical, in one window). The terminal `ward setup` stays for
+  headless/SSH and now tips toward the app when a display is available.
+
 ### CI/CD and update checking
 - Workflows: `tests` (unit suite + PAM build), `lint` (byte-compile + ruff F/E9 advisory, `gcc -Werror` on the PAM module, cppcheck, shellcheck), `codeql` (Python + C security scanning, weekly), `release` (on a `v*` tag: run tests, build the .deb, publish a GitHub Release with checksums). `dependabot.yml` keeps the Actions current. All workflows run least-privilege (`permissions: contents: read`).
 - `ward update` checks GitHub for a newer release — explicit, best-effort, stdlib-only, and never on the auth path (the PAM module, `ward-auth` and the daemon don't import it). `ward doctor` shows a cached result only (no network). `ward/update.py`, tested without the network.

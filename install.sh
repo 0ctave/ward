@@ -57,4 +57,5 @@ if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   fi
 fi
 echo "installed: $BIN, $AUTH  (package in $LIB)"
-echo "next:  ward doctor   ·   sudo ward setup"
+echo "next:  open \"Ward\" from your applications (or run: ward) — it sets everything up."
+echo "       headless / SSH?  sudo ward setup"
