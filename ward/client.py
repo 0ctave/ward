@@ -70,24 +70,32 @@ def via_daemon(user: str, verbose: bool = False, path: str | None = None, fb=Non
     return None
 
 
+def _loginuid() -> int | None:
+    """The kernel audit login uid (/proc/self/loginuid): the uid of whoever logged in, set once at
+    login and inherited through every `sudo`/`su`. None, or 0xffffffff, when it isn't set yet."""
+    try:
+        return int(open("/proc/self/loginuid").read().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _human_user() -> str:
     """The person at the keyboard to authenticate — NOT the target of an elevation.
 
-    `sudo` asks PAM to authenticate the *invoking* user, but on some systems `pam_get_user()`
-    (and so `PAM_USER`) comes back as the target `root`; meanwhile `sudo` keeps the caller's real
-    uid, so `getuid()` is the human. A login/polkit/`su` runs as root (getuid 0) but PAM sets
-    `PAM_USER` to the human. So: trust a non-root `PAM_USER` first (login, `su bob`), otherwise use
-    the real uid when it's a regular user (`sudo`), and only then fall back."""
+    `sudo` asks PAM to authenticate the *invoking* user, but on some systems `pam_get_user()` (and
+    so `PAM_USER`) comes back as the target `root`, and `getuid()` is 0 in the helper too. The
+    reliable signal is the kernel login uid, which stays the original human through any sudo/su.
+    A login/polkit/`su bob` instead sets a non-root `PAM_USER`, which we trust first."""
     import pwd
     pam = os.environ.get("PAM_USER")
     if pam and pam != "root":
-        return pam
-    ruid = os.getuid()
-    if ruid != 0:
-        try:
-            return pwd.getpwuid(ruid).pw_name
-        except KeyError:
-            pass
+        return pam                                         # login, polkit, `su bob`
+    for uid in (_loginuid(), os.getuid()):                 # sudo/su: the human is the login uid
+        if uid is not None and uid not in (0, 0xffffffff):
+            try:
+                return pwd.getpwuid(uid).pw_name
+            except KeyError:
+                pass
     return pam or os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
 
 

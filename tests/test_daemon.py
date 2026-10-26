@@ -141,15 +141,16 @@ class HumanUser(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PAM_USER": "alice"}, clear=False):
             self.assertEqual(client._human_user(), "alice")
 
-    def test_sudo_root_pam_user_falls_to_real_uid(self):   # the bug: PAM_USER=root, caller uid is the human
+    def test_sudo_root_pam_user_falls_to_loginuid(self):   # the bug: PAM_USER=root; login uid is the human
         import pwd
         with mock.patch.dict(os.environ, {"PAM_USER": "root"}, clear=False), \
-             mock.patch.object(client.os, "getuid", lambda: 1000), \
+             mock.patch.object(client, "_loginuid", lambda: 1000), \
              mock.patch.object(pwd, "getpwuid", lambda u: type("P", (), {"pw_name": "octave"})()):
             self.assertEqual(client._human_user(), "octave")
 
-    def test_actual_root_login_stays_root(self):
+    def test_actual_root_login_stays_root(self):            # loginuid unset AND getuid 0 → root
         with mock.patch.dict(os.environ, {"PAM_USER": "root"}, clear=False), \
+             mock.patch.object(client, "_loginuid", lambda: 0xffffffff), \
              mock.patch.object(client.os, "getuid", lambda: 0):
             self.assertEqual(client._human_user(), "root")
 
