@@ -27,13 +27,15 @@ hint() { echo "  install: $1"; }
 demo=$(mktemp); trap 'rm -f "$demo" "${cast:-}"' EXIT
 cat > "$demo" <<'DEMO'
 set -e
-show() { printf '\033[1;32m$\033[0m '; for c in $(echo "$1" | sed 's/./& /g'); do printf '%s' "$c"; sleep 0.04; done; printf '\n'; }
+# type a command, preserving spaces (${s:i:1} keeps every char), then the caller runs it
+show() { printf '\033[1;32m$\033[0m '; local s="$1" i; for ((i=0;i<${#s};i++)); do printf '%s' "${s:i:1}"; sleep 0.045; done; printf '\n'; }
 clear
-echo "# Ward — face unlock for Linux. sudo without typing a password:"; echo; sleep 1
+echo "# Ward — face unlock for Linux. sudo without typing a password:"; echo; sleep 1.2
 sudo -k                                   # forget any cached sudo
-show "sudo whoami"; sudo whoami; echo; sleep 1.2
-show "sudo systemctl status ward --no-pager | head -1"; sudo systemctl status ward --no-pager | head -1 || true; echo; sleep 1
-echo "# A failed face check (or covering the camera) just falls back to your password."; sleep 2
+printf '\033[2m(look at the camera)\033[0m '; for i in 3 2 1; do printf '%s ' "$i"; sleep 1; done; printf '\r\033[K'
+show "sudo whoami"; sudo whoami; echo; sleep 1.5
+show "sudo systemctl status ward --no-pager | head -1"; sudo systemctl status ward --no-pager | head -1 || true; echo; sleep 1.2
+echo "# A failed face check — or covering the camera — just falls back to your password."; sleep 2.5
 DEMO
 
 if [ "$tool" = asciinema ]; then
