@@ -553,6 +553,10 @@ class App(Adw.Application):
         p = self.pages["overview"]; self._clear(p)
         rel = manage.reliability(rep["rows"], self._n_people())
         on = rep.get("pam")
+        if not on:                                   # not set up yet → lead straight into the guided wizard
+            g0 = self._group(p, "Get started", "Set up face unlock in a few guided steps — right here in this window.")
+            self._row(g0, "Set up Ward", "cameras → infrared → register your face → turn on", "system-run-symbolic",
+                      "Start setup", lambda: self.start_setup_wizard(), style="suggested-action")
         g = self._group(p, "Face unlock", f"Login, sudo and system prompts for {rep['user']}")
         sw = Gtk.Switch(active=bool(on)); sw.set_valign(Gtk.Align.CENTER)
 

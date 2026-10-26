@@ -18,6 +18,9 @@ def cmd_setup(args) -> int:
     """The whole chain in one go: cameras → emitter → recogniser → register (window) → keyring → PAM → self-check."""
     need_root("setup")
     ui.banner(f"ward {__version__} · setup", "guided and reversible — config is rewritten, models are yours, PAM is backed up")
+    from .enroll import _display_available
+    if _display_available():
+        ui.tip("Prefer a graphical setup? Open the Ward app (or run `ward`) → it guides every step in one window.")
     cfg = cfgmod.load()
     cams = cameras.list_cameras()
     if not cams:

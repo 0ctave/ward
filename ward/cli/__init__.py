@@ -49,6 +49,8 @@ def cmd_benchmark(args) -> int:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        argv = ["app"]          # bare `ward` / the desktop launcher opens the manager window
     # `benchmark <name> …` hands the rest straight to that harness's own argparse (including --help),
     # which REMAINDER-based subparsers mis-route; the parser below still lists it for discoverability.
     if argv and argv[0] == "benchmark" and len(argv) > 1 and argv[1] in BENCHMARKS:
