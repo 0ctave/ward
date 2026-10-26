@@ -46,8 +46,9 @@ default) or Ward's downloaded ArcFace model (no dlib needed).
   run `sudo ward recogniser install && sudo ward recogniser use arcface`. Ward then uses its bundled
   YuNet detector and a downloaded ArcFace model, both through OpenCV — no dlib at all.
 
-> **Not sure what you have?** Install Ward and run `ward doctor`. It checks every dependency and
-> prints the exact command for anything missing.
+> [!TIP]
+> Not sure what you have? Install Ward and run `ward doctor` — it checks every dependency and prints
+> the exact command for anything missing.
 
 ## 2. Install Ward
 

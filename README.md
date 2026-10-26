@@ -72,7 +72,8 @@ in one window. Prefer the terminal (or on a server)? `sudo ward setup` does the 
 works headless. Full details, per-distro dependencies, the dlib-vs-ArcFace choice and troubleshooting
 are in the **[Install guide](docs/install.md)**.
 
-> **Note** — Ward is at its best on a laptop with a **Windows Hello infrared camera** (most 2019+
+> [!NOTE]
+> Ward is at its best on a laptop with a **Windows Hello infrared camera** (most 2019+
 > business/premium models). A plain colour webcam works too, just without infrared liveness and
 > night unlock.
 
