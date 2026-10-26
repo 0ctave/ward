@@ -48,7 +48,7 @@ A face-authentication stack for login / `sudo` / polkit that **replaces Howdy** 
 
 - `daemon.py` + `data/ward.service` — the resident engine (models stay loaded; `client.py` falls back in-process on any error). Unit is `Type=notify` + `WatchdogSec=30`: stdlib `sd_notify` (READY=1 after warm; WATCHDOG=1 thread silenced by `Resident.wedged()`), no libsystemd. Sandbox: zero capabilities, `DevicePolicy=closed` + `char-video4linux`, AF_UNIX only, `MemoryDenyWriteExecute` (verified with numpy/cv2/dlib), `@system-service` filter, MemoryMax 1G (RSS ~200 MB with dlib, flat over 200 attempts; ArcFace r50 reload needs more); the wedged clock starts after `warm()`; `systemd-analyze security` 0.9. Anything the daemon must do as another user or over the network belongs in the client (notifications already are).
 
-Docs of record: `docs/DESIGN.md` (full rationale, kept in sync), `docs/ROADMAP.md` (what comes next: responsiveness, reliability, UI, distro/greeter matrix, keyring, security policy, milestones), `README.md` (the "why face unlock fails on Linux" guide).
+Docs of record: `docs/DESIGN.md` (full rationale, kept in sync), `docs/ROADMAP.md` (what comes next: responsiveness, reliability, UI, distro/greeter matrix, keyring, security policy, milestones), `README.md` (crisp landing page), `docs/install.md`, `docs/usage.md`, `docs/how-it-works.md` (the "why face unlock fails on Linux" guide — split out of the README).
 
 ## Install / run
 

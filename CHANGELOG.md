@@ -2,6 +2,14 @@
 
 ## 0.4.0 — 2026-10-25
 
+### Docs
+- Split the monolithic README into a crisp landing page plus focused guides: `docs/install.md`
+  (prerequisites, per-distro deps, recogniser choice, packages, headless, uninstall, troubleshooting),
+  `docs/usage.md` (the app, everyday tasks, headless, full command reference) and
+  `docs/how-it-works.md` (the 'why face unlock fails on Linux' guide, rewritten Ward-first with the
+  stale Howdy-scale threshold numbers corrected). README is now scannable: features, quick start, a
+  docs index, and up-front honest limits.
+
 ### Coherent setup flow
 - The **app is the front door**: `ward` with no arguments (and the desktop launcher) opens the
   manager window; `install.sh` now points first-time users to the app, not `sudo ward setup`.
