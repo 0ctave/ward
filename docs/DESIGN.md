@@ -1,4 +1,4 @@
-# ward v0.2 — Design
+# Ward v0.2 — Design
 
 Status: **implementing (v0.2.x)** · updated 2026-08-29 · supersedes the Howdy-wrapper scope of v0.1
 
@@ -9,7 +9,7 @@ Face authentication for Linux (login, `sudo`, polkit) that is **reliable at ever
 ### Non-goals
 
 - Matching a structured-light / ToF sensor (Face ID). Without depth hardware there is a residual attack (§9) and the docs say so.
-- Replacing PAM, GDM, or the password. ward is one `sufficient` step before them.
+- Replacing PAM, GDM, or the password. Ward is one `sufficient` step before them.
 - Supporting cameras the kernel does not expose as V4L2 devices.
 - Cloud, network, telemetry. The engine never opens a socket.
 
@@ -75,7 +75,7 @@ per-camera exposure capabilities. The engine sets OpenCV's thread count from it.
    gate only remains for frames with no face at all.
 2. *Steer exposure when the camera allows it.* On open, each camera is probed for manual
    exposure (V4L2 via OpenCV: `AUTO_EXPOSURE`, `EXPOSURE`, `GAIN`) and put back on auto.
-   When the face leaves the target band and auto-exposure cannot fix it, ward takes over
+   When the face leaves the target band and auto-exposure cannot fix it, Ward takes over
    with bounded proportional steps (≤ 1.6× per step, ≤ 4 steps/s) and restores the original
    settings on close. Cameras that run auto-exposure in firmware and expose no controls (the
    reference IR module) are left alone. Reference laptop: IR = firmware auto only, RGB =
@@ -224,7 +224,7 @@ Drop frames that are dark (below threshold), blown out (p95 > 250), blurred (Lap
 
 **Measured so far (one subject, single frames, raw units).** dlib: median 0.10 / p95 0.29 from the mean; ArcFace r50: 0.36 / 0.57 (= 0.20 / 0.31 in dlib units); mbf: 0.39 / 0.66. Multi-frame fusion roughly halves these. The *impostor* side — the point of the exercise — needs a second person in `ward lab`; until that calibrates `ARCFACE_RADIUS`, ArcFace is opt-in.
 
-**Install.** `sudo ward recogniser install [mbf|r50]` downloads the pinned insightface release zip (sha256 of the zip and of the ONNX member both verified), writes `/etc/ward/arcface.onnx`, and loads it once. The packs are licensed for non-commercial research use, so ward fetches, never bundles, and says so. `recogniser use arcface` switches the config; `doctor` reports the active backend; `setup` offers it.
+**Install.** `sudo ward recogniser install [mbf|r50]` downloads the pinned insightface release zip (sha256 of the zip and of the ONNX member both verified), writes `/etc/ward/arcface.onnx`, and loads it once. The packs are licensed for non-commercial research use, so Ward fetches, never bundles, and says so. `recogniser use arcface` switches the config; `doctor` reports the active backend; `setup` offers it.
 
 ### 6.5 Decision rule
 ```
@@ -503,7 +503,7 @@ frame happens to be dark.
 
 - **PAM placement:** `auth sufficient pam_exec.so quiet stdout seteuid /usr/local/bin/ward-auth` inserted *before* `pam_unix` in `common-auth` (or the distro equivalent), with the original file backed up. `pam_exec` runs the engine as root with `PAM_USER` set; the engine authenticates only that user.
 - **Files:** models 0600 root, config 0644 root, engine 0755 root-owned, log 0640 root:adm. Snapshots off by default.
-- **Residual risk (documented):** two high-quality prints aligned for both lenses, plus a way to fake near-field shadowing, could defeat a profile-A setup. This is the same order of difficulty as attacking Windows Hello on the same hardware. ward is convenience-grade with strong anti-casual-spoofing, not a hardware security module.
+- **Residual risk (documented):** two high-quality prints aligned for both lenses, plus a way to fake near-field shadowing, could defeat a profile-A setup. This is the same order of difficulty as attacking Windows Hello on the same hardware. Ward is convenience-grade with strong anti-casual-spoofing, not a hardware security module.
 - **Lockout:** none by default — the password is always available, so lockout only creates denial-of-service. Optional `lockout_failures` for users who want a cooling-off after N spoof detections.
 - **No timing side channels of note:** results are all-or-nothing and the password path is unchanged.
 - **Coexistence with Howdy:** `setup` offers to disable `pam_howdy` (two face steps in a row is pointless) and can *import* nothing — dlib embeddings from RGB frames don't match IR; re-enroll.
@@ -619,7 +619,7 @@ attempts should score 0 % with raw distances above the hard cap or liveness FAIL
 
 ## 13b. Compatibility matrix (`tests/test_compat.py`)
 
-The pipeline on recorded frames with a synthetic face (the detector, landmarks and embedding patched to deterministic stand-ins, so ward's own logic is what runs): profiles A/B/C, other frame sizes (1280×720 IR + 640×480 RGB, 320×240), a stranger (early reject), the shadow test without an emitter, learning + rolling calibration, and the lab evaluator (step, decide, record, summary) with one or two cameras. Portability decisions it protects: TOML parsing without `tomllib` (Python 3.10), `crypt` via libcrypt (3.13), dlib optional on the ArcFace + YuNet path, motion thresholds as fractions of the face width, windows falling back to text without libadwaita, the lab dir honouring `WARD_ETC`.
+The pipeline on recorded frames with a synthetic face (the detector, landmarks and embedding patched to deterministic stand-ins, so Ward's own logic is what runs): profiles A/B/C, other frame sizes (1280×720 IR + 640×480 RGB, 320×240), a stranger (early reject), the shadow test without an emitter, learning + rolling calibration, and the lab evaluator (step, decide, record, summary) with one or two cameras. Portability decisions it protects: TOML parsing without `tomllib` (Python 3.10), `crypt` via libcrypt (3.13), dlib optional on the ArcFace + YuNet path, motion thresholds as fractions of the face width, windows falling back to text without libadwaita, the lab dir honouring `WARD_ETC`.
 
 ## 14. Roadmap after v0.2
 
