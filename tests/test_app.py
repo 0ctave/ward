@@ -94,7 +94,7 @@ class Privileges(unittest.TestCase):
 
     def test_invoking_user_under_pkexec(self):
         from unittest import mock
-        from ward import manage
+        from ward import appdata as manage
         with mock.patch.dict(os.environ, {"PKEXEC_UID": str(os.getuid()), "USER": "root"}, clear=False):
             os.environ.pop("SUDO_USER", None)
             import pwd
@@ -144,7 +144,7 @@ class Manage(unittest.TestCase):
         return {"accepted": ok, "reason": reason, "result": reason, "who": who, "dark": dark, "ms": ms, "service": service, "time": "2026-10-23T10:00:00"}
 
     def test_names(self):
-        from ward import manage
+        from ward import appdata as manage
         self.assertEqual(manage.valid_name("Alice"), "")
         for bad in ("", "-rf", "a" * 40, "x/y", "--identity"):
             self.assertTrue(manage.valid_name(bad), bad)
@@ -152,7 +152,7 @@ class Manage(unittest.TestCase):
 
     def test_people_from_store_and_log(self):
         import numpy as np
-        from ward import manage
+        from ward import appdata as manage
         from ward.engine import store
         st = store.Store(user="u")
         e = np.ones(128) / np.sqrt(128)
@@ -165,7 +165,7 @@ class Manage(unittest.TestCase):
         self.assertEqual(ppl[0]["conditions"], ["glasses"]); self.assertEqual(ppl[1]["accepts"], 1)
 
     def test_reliability_verdicts_and_advice(self):
-        from ward import manage
+        from ward import appdata as manage
         self.assertEqual(manage.reliability([])["verdict"], "unknown")
         good = manage.reliability([self._row(True)] * 20)
         self.assertEqual(good["verdict"], "good"); self.assertEqual(good["overall"]["rate"], 1.0)

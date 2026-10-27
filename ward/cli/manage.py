@@ -40,8 +40,8 @@ def cmd_models(args) -> int:
         st.save(); ui.ok(f"forgot {n} learned model(s)"); return 0
     if getattr(args, "json", False):
         import json
-        from .. import attempts, manage
-        print(json.dumps({"user": user, "people": manage.people(st, user, attempts.read(cfgmod.LOG_PATH, 500)),
+        from .. import appdata, attempts
+        print(json.dumps({"user": user, "people": appdata.people(st, user, attempts.read(cfgmod.LOG_PATH, 500)),
                           "calibrated": (st.calib.get("calibration") or {}).get("date", "")[:10]}))
         return 0
     if not st.models:

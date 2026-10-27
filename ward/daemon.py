@@ -37,6 +37,9 @@ USER_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}\$?")
 BUSY_WAIT_S = 1.0          # a queued request waits this long for the cameras, then the client falls back
 STUCK_MARGIN_S = 15.0      # an attempt this far past its hard timeout is wedged: exit, systemd restarts us
 SEND_TIMEOUT_S = 5.0       # a client that stops reading drops events instead of blocking the attempt
+# The one list of environment variables forwarded from PAM into an attempt. client.py imports
+# this (not its own copy); the native module data/pam_ward.c sets the PAM_* subset by hand and
+# must be kept in step with the PAM_* entries here.
 PAM_ENV = ("PAM_SERVICE", "PAM_TTY", "PAM_TYPE", "PAM_RHOST", "PAM_RUSER", "PAM_USER", "SSH_CONNECTION", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_ID")
 
 
@@ -163,7 +166,11 @@ class Resident:
 
 
 def outcome_dict(out) -> dict:
+    # Every Outcome field the client's SimpleNamespace reconstructs — wdist/learned/policy were
+    # dropped before, so the client's copy did not match the engine's (the logline is computed
+    # here, but a faithful round-trip keeps the two objects identical). wdist tuples → JSON lists.
     return {"accepted": out.accepted, "reason": out.reason, "user": out.user, "ir_dist": out.ir_dist, "rgb_dist": out.rgb_dist,
+            "wdist": {sp: list(v) for sp, v in out.wdist.items()}, "learned": out.learned, "policy": out.policy,
             "identity": out.identity, "condition": out.condition, "elapsed_ms": out.elapsed_ms, "frames": out.frames,
             "detail": out.detail, "phases": out.phases, "logline": out.logline(),
             "votes": [{"voter": v.voter, "result": v.result.value} for v in out.votes]}

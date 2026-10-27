@@ -15,16 +15,26 @@ NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}")
 
 
 def invoking_user() -> str:
-    """The human behind this process: sudo's or pkexec's caller, else the login user."""
+    """The human behind this process: sudo's or pkexec's caller, else the kernel login user.
+
+    SUDO_USER first (this runs in the actual sudo/pkexec shell, where it is reliable) — the auth
+    path's client._human_user prefers the login uid instead, because there PAM_USER can be the root
+    target and SUDO_USER may be absent in the root child. The two resolvers stay separate on
+    purpose; the shared piece is the login-uid fallback (client._loginuid)."""
     if os.environ.get("SUDO_USER"):
         return os.environ["SUDO_USER"]
-    uid = os.environ.get("PKEXEC_UID")
-    if uid:
+    from .client import _loginuid                      # one definition of the /proc/self/loginuid read
+    import pwd
+    for uid in (os.environ.get("PKEXEC_UID"), _loginuid()):
         try:
-            import pwd
-            return pwd.getpwuid(int(uid)).pw_name
-        except (KeyError, ValueError):
-            pass
+            u = int(uid)                               # PKEXEC_UID is a string; _loginuid an int or None
+        except (TypeError, ValueError):
+            continue
+        if u not in (0, 0xffffffff):
+            try:
+                return pwd.getpwuid(u).pw_name
+            except KeyError:
+                pass
     return os.environ.get("USER") or "root"
 
 
