@@ -109,18 +109,14 @@ class Resident:
 
     def warm(self, cfg: dict) -> None:
         """Load (or reload after `recogniser use` / `tune recognition.detector`) and run each network
-        once: the first YuNet inference and the first embedding allocate their buffers (~50–150 ms)."""
+        once: the first YuNet inference and the first embedding allocate their buffers (~50–150 ms).
+        preload() now folds in the one-shot dummy detect that builds the detector."""
         key = self._models_key(cfg)
         if key == self.key and self.models is not None:
             return
-        import numpy as np
         from .engine.detect import Models
         m = Models(*key)
         m.preload()
-        try:
-            m.detect(np.zeros((360, 640), np.uint8))
-        except Exception:
-            pass
         self.models, self.key = m, key
 
     def attempt(self, req: dict, send, alive=lambda: True) -> None:
