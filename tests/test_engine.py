@@ -179,6 +179,25 @@ class PamTests(unittest.TestCase):
         older = out.replace("quiet stdout seteuid", "quiet seteuid")
         self.assertEqual(pam.render_enabled(older, native=False), out)
 
+    def test_refuses_to_jump_past_a_second_factor(self):
+        # a 2FA module placed AFTER pam_unix would be skipped by ward's success jump: detect + refuse
+        after = ("auth\t[success=2 default=ignore]\tpam_unix.so nullok try_first_pass\n"
+                 "auth\trequired\t\t\tpam_google_authenticator.so\n"
+                 "auth\trequisite\t\t\tpam_deny.so\n")
+        self.assertEqual(pam.bypassed_second_factor(after), "pam_google_authenticator")
+        # placed BEFORE pam_unix it runs ahead of ward, so it is NOT bypassed
+        before = ("auth\trequired\t\t\tpam_u2f.so\n"
+                  "auth\t[success=1 default=ignore]\tpam_unix.so\n"
+                  "auth\trequisite\t\t\tpam_deny.so\n")
+        self.assertIsNone(pam.bypassed_second_factor(before))
+        # a plain stack (and Fedora-style faillock authfail, which is not a second factor) is fine
+        self.assertIsNone(pam.bypassed_second_factor(self.SAMPLE))
+        fedora = ("auth\trequired\t\t\tpam_faillock.so preauth\n"
+                  "auth\tsufficient\t\t\tpam_unix.so\n"
+                  "auth\t[default=die]\t\tpam_faillock.so authfail\n"
+                  "auth\trequired\t\t\tpam_deny.so\n")
+        self.assertIsNone(pam.bypassed_second_factor(fedora))
+
     def test_native_module_line_jumps_to_pam_permit(self):
         """pam_ward.so uses [success=N default=ignore] like pam_unix, so the caller's
         pam_gnome_keyring line after @include still runs and receives the token."""

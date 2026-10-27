@@ -111,7 +111,10 @@ def _cmd_pam(args) -> int:
     need_root("pam")
     if args.action == "enable":
         native = pammod.native_available()
-        new = pammod.enable(dry_run=args.dry_run, native=native)
+        try:
+            new = pammod.enable(dry_run=args.dry_run, native=native, force=getattr(args, "force", False))
+        except pammod.PamError as e:
+            ui.fail(str(e)); return 1
         ui.ok(("would write" if args.dry_run else "enabled") + f" ward in {pammod.COMMON_AUTH} via "
               + (f"{pammod.MODULE} (native: messages + keyring token)" if native else "pam_exec (no keyring unlock; install gcc and re-run install.sh for the native module)")
               + f" (backup: {pammod.BACKUP})")
