@@ -2,6 +2,17 @@
 
 ## 0.4.0 — 2026-10-25
 
+### Experimental: segmented coverage-ring enrollment
+- `ward enroll --style ring` offers a second, Face-ID-style enrol experience: instead of stepping
+  through discrete poses, eight direction segments sit around your face and **light green as you
+  reach each one — fill the ring**. An ellipse of eight directions (yaw ±28°, up +18° / down −24°,
+  the same reliable extents as the guided sweep) plus the frontal hub and the shared lean/light
+  tail, so it captures the diagonals the five-point sweep never did — better off-angle coverage.
+- It reuses the exact capture → sampler → `build_from_captures` backend and the honest held-out
+  gate; the default guided sweep and all its tests are untouched. A single arrow still points from
+  your current pose to the active segment (direction decided only in `cue_direction`, golden rule 5).
+  Overlay verified by PNG render; two new flow/overlay tests (285 total, green).
+
 ### Coherence & robustness pass
 - Security defaults now match the docs: spoof **lockout is off by default** (`lockout_failures = 0`;
   the password is always available, so a lockout only creates denial-of-service), and the

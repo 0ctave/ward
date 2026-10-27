@@ -23,6 +23,51 @@ class HappyPath(unittest.TestCase):
         self.assertEqual(snaps[-1]["phase"], "done")
 
 
+class RingStyle(unittest.TestCase):
+    """`ward enroll --style ring`: the segmented coverage ring (same backend, different visuals)."""
+
+    def test_ring_enrols_every_segment_and_reports_coverage(self):
+        res, snaps, st = run_setup(World(), poses=cal.RING_POSES, style="ring")
+        self.assertIsNotNone(res)
+        self.assertGreater(res["added"], 0)
+        labels = {m.label for m in st.models}
+        for label, _cue, _t, _tgt in cal.RING_POSES:
+            self.assertIn(label.replace("2", ""), labels, f"no model for {label}")
+        runs = [s for s in snaps if s.get("phase") == "run"]
+        self.assertTrue(runs and all(s.get("style") == "ring" for s in runs))
+        # eight ring segments, all off-centre (the frontal hub is not a segment)
+        segs = runs[0]["ring_segs"]
+        self.assertEqual(len(segs), 8)
+        self.assertTrue(all(tuple(s) != (0.0, 0.0) for s in segs))
+        # an angular pass marks exactly one active segment in range; coverage accumulates
+        done_counts = [sum(s["ring_done"]) for s in runs if s.get("ring_active") is not None]
+        self.assertTrue(done_counts and done_counts[-1] > done_counts[0])
+        for s in runs:
+            a = s.get("ring_active")
+            if a is not None:
+                self.assertTrue(0 <= a < 8)
+        self.assertEqual(snaps[-1]["phase"], "done")
+
+    def test_overlay_draws_without_error(self):
+        # the ring overlay renders (Cairo) for a mid-sweep snapshot, incl. a diagonal segment active.
+        # Needs GTK + pycairo, which CI's no-camera runner does not have — skip there, like WindowStates.
+        try:
+            import cairo
+            from ward import appui
+            prev = appui.Preview.__new__(appui.Preview)
+        except Exception as e:                                  # no GTK / libadwaita / pycairo
+            self.skipTest(f"GTK/cairo unavailable: {e!r}")
+        segs = [list(t[3]) for t in cal.RING_POSES if t[1] in cal.DIRECTIONAL_CUES and tuple(t[3]) != (0.0, 0.0)]
+        prev.accent = (0.2, 0.5, 0.9)
+        prev.box = (80, 60, 160, 160); prev.frame_size = (640, 360)
+        prev.cue, prev.cue_ok, prev.cue_progress = "up", False, 0.4
+        prev.cue_pose, prev.cue_target = (2.0, 6.0), [0.0, 18.0]
+        prev.cue_ring = {"segs": segs, "done": [True, True, False, False, False, False, False, False],
+                         "active": 2, "hub_done": True}       # a diagonal segment active
+        prev._arrow_dir = None
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 640, 360)
+        prev._draw_cue(cairo.Context(surf), 640, 360)          # must not raise
+
 
 class Robustness(unittest.TestCase):
     def test_stepping_away_does_not_cost_poses(self):

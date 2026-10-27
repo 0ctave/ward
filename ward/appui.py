@@ -121,13 +121,15 @@ class Preview(Gtk.Overlay):
         self.cue_progress = 0.0
         self.cue_pose = None       # (yaw, pitch) display space, live head angle
         self.cue_target = None     # (yaw, pitch) display space, where to bring the head
+        self.cue_ring = None       # segmented-coverage-ring state (style="ring"), else None
         self._anim = None
 
-    def set_cue(self, cue, ok: bool, progress: float, pose=None, target=None) -> None:
+    def set_cue(self, cue, ok: bool, progress: float, pose=None, target=None, ring=None) -> None:
         if cue != getattr(self, "cue", None) or target != getattr(self, "cue_target", None):
             self._arrow_dir = None                          # a new pass starts without a held direction
         self.cue, self.cue_ok, self.cue_progress = cue, ok, progress
         self.cue_pose, self.cue_target = pose, target
+        self.cue_ring = ring            # {segs, done, active, hub_done} when the ring style is on, else None
         self.area.queue_draw()
         if cue is not None and self._anim is None:
             self._anim = GLib.timeout_add(40, lambda: (self.area.queue_draw(), True)[1])
@@ -197,7 +199,20 @@ class Preview(Gtk.Overlay):
                 cr.move_to(ex, ey); cr.line_to(ex - _m.cos(ang + side * 0.5) * hd, ey - _m.sin(ang + side * 0.5) * hd)
             cr.stroke()
 
-        if not self.cue_ok:
+        ring = self.cue_ring
+        if ring is not None:
+            self._draw_ring(cr, cx, cy, R, green, pulse)
+        ring_active = ring.get("active") if ring is not None else None
+        if not self.cue_ok and ring_active is not None:
+            # ring mode: point a single arrow straight at the active segment (a true diagonal, not
+            # the 4-way cue_direction) — direction is still derived from target−pose, no new sign
+            segs = ring.get("segs") or []
+            if 0 <= ring_active < len(segs):
+                ty, tp = segs[ring_active]
+                dx = ty - (self.cue_pose[0] if self.cue_pose is not None else 0.0)
+                dy = -(tp - (self.cue_pose[1] if self.cue_pose is not None else 0.0))   # +pitch = up = −y
+                arrow(_m.atan2(dy, dx))
+        elif not self.cue_ok:
             self._arrow_dir = cue_direction(self.cue, self.cue_pose, self.cue_target, getattr(self, "_arrow_dir", None))
             if self._arrow_dir is not None:
                 arrow(ARROW_ANGLE[self._arrow_dir])
@@ -235,6 +250,32 @@ class Preview(Gtk.Overlay):
         if self.cue_ok:
             cr.set_source_rgba(*green, 0.16 + 0.16 * pulse); cr.set_line_width(9.0)
             cr.arc(cx, cy, R, 0, 2 * _m.pi); cr.stroke()
+
+    def _draw_ring(self, cr, cx, cy, R, green, pulse):
+        """Segmented coverage ring (style='ring'): a tick per direction around the face, lit green
+        once that segment is captured and pulsing while it is the active one — so the user always
+        sees how much of the circle is left to fill (the Face-ID 'complete the ring' idea)."""
+        import math as _m
+        ring = self.cue_ring or {}
+        segs = ring.get("segs") or []
+        done = ring.get("done") or []
+        active = ring.get("active")
+        Rseg = R * 1.32
+        for k, seg in enumerate(segs):
+            yaw, pitch = seg
+            ang = _m.atan2(-pitch, yaw)                       # display→screen: +yaw right, +pitch up (−y)
+            a0, a1 = ang - 0.26, ang + 0.26                   # a ~30° arc centred on the direction
+            if k == active:
+                col, alpha, lw = self.accent, 0.55 + 0.45 * pulse, 7.0
+            elif k < len(done) and done[k]:
+                col, alpha, lw = green, 0.95, 6.0
+            else:
+                col, alpha, lw = self.accent, 0.28, 5.0
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.set_source_rgba(0, 0, 0, 0.35); cr.set_line_width(lw + 3)   # halo: legible on any frame
+            cr.arc(cx, cy, Rseg, a0, a1); cr.stroke()
+            cr.set_source_rgba(*col, alpha); cr.set_line_width(lw)
+            cr.arc(cx, cy, Rseg, a0, a1); cr.stroke()
 
     @staticmethod
     def _face_glyph(cr, x, y, r, col):
@@ -1119,7 +1160,9 @@ class CalibrateWindow(_Shell):
 
     CUE_WORD = {"centre": "Look at the centre", "up": "Look up", "down": "Look down", "away": "Lean back",
                 "closer": "Lean in", "tilt": "Tilt your head", "left": "Turn left",
-                "right": "Turn right", "light": "Change the light"}
+                "right": "Turn right", "light": "Change the light",
+                "upleft": "Up and left", "upright": "Up and right",
+                "downleft": "Down and left", "downright": "Down and right"}
 
     def __init__(self, title: str = "ward", width: int = 640, height: int = 360, sgn: float = 1.0):
         super().__init__(title, "Calibration", 760, 720)
@@ -1240,7 +1283,9 @@ class CalibrateWindow(_Shell):
             if s.get("pass_done"):
                 self._pass_done_t = time.monotonic()
             cue = s.get("cue", "centre")
-            self.preview.set_cue(cue, bool(ok), s.get("progress", 0.0), s.get("pose"), s.get("target"))
+            ring = {"segs": s["ring_segs"], "done": s.get("ring_done", []),
+                    "active": s.get("ring_active"), "hub_done": s.get("hub_done", False)} if s.get("style") == "ring" else None
+            self.preview.set_cue(cue, bool(ok), s.get("progress", 0.0), s.get("pose"), s.get("target"), ring=ring)
             # the word follows the arrow (rule 5: direction is decided only in cue_direction, no new sign):
             # "Ease back a little" on an overshoot, "Hold still" once on-target and filling, else the cue.
             direction = cue_direction(cue, s.get("pose"), s.get("target"))

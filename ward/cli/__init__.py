@@ -73,6 +73,8 @@ def main(argv=None) -> int:
     e.add_argument("--selfcheck", action="store_true", help="run the self-check without asking")
     e.add_argument("--guided", action="store_true", help="scripted 8-pose text flow instead of the window")
     e.add_argument("--classic", action="store_true", help="old free-move coverage-map registration + a separate calibration step")
+    e.add_argument("--style", choices=["guided", "ring"], default="guided",
+                   help="window enrol style: 'guided' sweep (default) or 'ring' (segmented coverage ring, fill the circle)")
     e.add_argument("--identity", metavar="NAME", help="register another person on this login under NAME (any registered face unlocks)")
     e.add_argument("--add", metavar="CONDITION", help="short sweep that adds a condition to the existing models: glasses, headset, night, …")
     e.add_argument("--profile", action="store_true", help="print per-stage timings once a second (diagnose a laggy preview)")
