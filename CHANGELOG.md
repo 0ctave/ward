@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Docs: migrating from Howdy
+- New **[Migrating from Howdy](docs/migrating-from-howdy.md)** guide and an honest **Ward vs Howdy**
+  comparison table in the README (right camera, IR emitter, poses, measured threshold, liveness,
+  fail-open, Wayland/greeter, zero-pip deps). GitHub Discussions is now the place for questions,
+  ideas and "does it work on my laptop" reports (linked from the issue picker).
+
 ### Polish
 - `doctor` and the app's health report now read the shadow-test latency cutoff from the engine's
   `emitter.SHADOW_MAX_LATENCY_MS` instead of a hardcoded `150`, so the reported threshold can't drift
