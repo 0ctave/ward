@@ -508,6 +508,31 @@ class Engine:
         spectra = getattr(cap, "spectra", None)
         return devices if spectra is None else {s: p for s, p in devices.items() if s in spectra}
 
+    @staticmethod
+    def _accept_votes(votes, required_votes, need_strong, require_when_available) -> bool:
+        """The liveness vote decision (§7), the security-critical core of _decide: given the voters'
+        votes, does liveness allow the accept? A FAIL always rejects; strict needs a STRONG_VOTERS PASS;
+        with nothing enabled recognition alone carries; otherwise enough PASSes, or one PASS when the
+        rest abstain (degraded profile), or — when nothing passed — only if liveness is not required."""
+        n_pass = sum(v.result == Result.PASS for v in votes)
+        n_fail = sum(v.result == Result.FAIL for v in votes)
+        enabled = len(votes)
+        required = min(required_votes, enabled)
+        strong = any(v.result == Result.PASS and v.voter in polmod.STRONG_VOTERS for v in votes)
+        if n_fail:
+            ok = False
+        elif need_strong and not strong:
+            ok = False           # strict: a shadow-test or CNN PASS is mandatory
+        elif enabled == 0:
+            ok = True
+        elif n_pass >= required:
+            ok = True
+        elif n_pass >= 1:
+            ok = True            # everything else abstained (degraded profile)
+        else:
+            ok = not require_when_available
+        return ok
+
     def _decide(self, st, obs, primary, devices, rec, live):
         """None = not enough evidence yet; else (accepted, votes, dists)."""
         dists = self._best_dists(st, obs, rec)
@@ -530,23 +555,8 @@ class Engine:
             return None   # keep collecting; a later frame may match
 
         votes = self._liveness(st, obs, devices, live)
-        n_pass = sum(v.result == Result.PASS for v in votes)
-        n_fail = sum(v.result == Result.FAIL for v in votes)
-        enabled = len(votes)
-        required = min(live["required_votes"], enabled)
-        strong = any(v.result == Result.PASS and v.voter in polmod.STRONG_VOTERS for v in votes)
-        if n_fail:
-            ok = False
-        elif pol.get("need_strong_voter") and not strong:
-            ok = False           # strict: a shadow-test or CNN PASS is mandatory
-        elif enabled == 0:
-            ok = True
-        elif n_pass >= required:
-            ok = True
-        elif n_pass >= 1:
-            ok = True            # everything else abstained (degraded profile)
-        else:
-            ok = not live["require_liveness_when_available"]
+        ok = self._accept_votes(votes, live["required_votes"], pol.get("need_strong_voter"),
+                                live["require_liveness_when_available"])
         self.say("recognised " + " ".join(f"{k}={v:.2f}" for k, v in dists.items() if v is not None)
                  + " votes=" + ",".join(f"{v}({v.reason})" for v in votes) + f" → {'ACCEPT' if ok else 'hold'}")
         return ok, votes, dists

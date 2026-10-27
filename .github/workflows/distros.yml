@@ -1,0 +1,28 @@
+name: distros
+# The distro / Python-version portability matrix the normal CI (ubuntu-24.04, Python 3.12, no dlib)
+# cannot cover: the 3.10 flat-TOML parser, the 3.13 libcrypt path, the YuNet 2022-vs-2023 graph split,
+# and the dlib default recogniser. It runs tests/containers/run.sh (podman) across five distros —
+# unit suite + `ward doctor` + `--help` + the pam_ward.so compile (+ rpmbuild on Fedora).
+# Not a required check and not run on PRs: weekly, plus on demand.
+on:
+  schedule:
+    - cron: '0 6 * * 1'          # Mondays 06:00 UTC
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install podman
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Portability matrix (Debian 12, Ubuntu 22.04, Fedora, Arch, openSUSE Tumbleweed)
+        run: NET=host OUT="$RUNNER_TEMP/ward-containers" bash tests/containers/run.sh
+      - name: Per-distro logs
+        if: always()
+        run: |
+          for f in "$RUNNER_TEMP"/ward-containers/*.log; do
+            echo "::group::$(basename "$f")"; cat "$f"; echo "::endgroup::"
+          done
