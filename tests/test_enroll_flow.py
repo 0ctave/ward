@@ -208,9 +208,10 @@ class RgbCarries(unittest.TestCase):
 class Tolerance(unittest.TestCase):
     def test_level_head_is_not_look_up(self):
         self.assertFalse(cal.pose_ok((0.0, 4.0), (0.0, 18.0)))     # level head is not look-up
-        self.assertTrue(cal.pose_ok((0.0, 12.0), (0.0, 18.0)))     # |6| <= 8
-        self.assertTrue(cal.pose_ok((0.0, 10.0), (0.0, 18.0)))     # just reaches the arrival band
-        self.assertFalse(cal.pose_ok((0.0, -7.0), (0.0, -24.0)))   # |17| > 8
+        self.assertTrue(cal.pose_ok((0.0, 12.0), (0.0, 18.0)))     # |6| <= 10
+        self.assertTrue(cal.pose_ok((0.0, 8.0), (0.0, 18.0)))      # |10| exactly reaches the 10° band
+        self.assertFalse(cal.pose_ok((0.0, 7.0), (0.0, 18.0)))     # |11| just outside
+        self.assertFalse(cal.pose_ok((0.0, -7.0), (0.0, -24.0)))   # |17| > 10
         self.assertTrue(cal.pose_ok((-20.0, 0.0), (-28.0, 0.0)))   # the required ~20° turn counts
         self.assertTrue(cal.pose_ok((5.0, 0.0), (0.0, 0.0)))       # centre still accepts a level head
 
