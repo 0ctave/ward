@@ -31,7 +31,7 @@ Priority: optional
 Depends: python3 (>= 3.10), python3-opencv, python3-numpy, libc6
 Recommends: python3-dlib, dlib-models, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, systemd, policykit-1 | polkitd
 Suggests: linux-enable-ir-emitter
-Homepage: https://github.com/<you>/ward
+Homepage: https://github.com/0ctave/ward
 Description: reliable face unlock for login, sudo and polkit
  Face authentication through PAM with its own engine (YuNet detector, dlib or
  ArcFace embeddings, IR + RGB cameras, multi-frame fusion, liveness voters).
