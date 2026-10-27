@@ -105,6 +105,38 @@ def _skip_count(lines: list[str], at: int) -> int:
     return max(1, m)
 
 
+# Second-factor auth modules: if a required/requisite one sits AFTER the ward line (before pam_deny),
+# ward's success-jump [success=N] lands on pam_permit past it, so a face accept would SKIP the second
+# factor. We refuse to write that rather than silently weaken 2FA (ROADMAP §6: 2FA modules stay put).
+# (pam_faillock is deliberately NOT here: its authfail line only acts on FAILURE — skipping it on a
+# success is harmless — and it is in Fedora's default stack, so flagging it would wrongly refuse there.)
+SECOND_FACTORS = ("pam_u2f", "pam_google_authenticator", "pam_yubico", "pam_duo", "pam_oath", "pam_otpw")
+
+
+def bypassed_second_factor(text: str) -> str | None:
+    """The name of a required/requisite second-factor module that a face accept would jump over, or
+    None. The jump skips auth lines from the ward line through pam_deny inclusive."""
+    lines = text.splitlines()
+    at = next((i for i, ln in enumerate(lines) if _is_ours(ln)), None)
+    if at is not None:
+        start = at + 1
+    else:                                             # not inserted yet: where render_enabled would put it
+        at = next((i for i, ln in enumerate(lines) if re.match(r"^\s*auth\s", ln) and ("pam_unix" in ln or "pam_howdy" in ln)), None)
+        if at is None:
+            return None
+        start = at
+    for ln in lines[start:]:
+        if not re.match(r"^\s*auth\s", ln):
+            continue
+        if "pam_deny" in ln:
+            break
+        if re.search(r"\b(required|requisite)\b", ln):
+            hit = next((sf for sf in SECOND_FACTORS if sf in ln), None)
+            if hit:
+                return hit
+    return None
+
+
 def render_enabled(text: str, native: bool | None = None) -> str:
     """Insert (or upgrade in place) ward's line. native=None → the module if it is installed."""
     native = native_available() if native is None else native
@@ -139,8 +171,13 @@ def _read() -> str:
     return COMMON_AUTH.read_text()
 
 
-def enable(dry_run: bool = False, native: bool | None = None) -> str:
+def enable(dry_run: bool = False, native: bool | None = None, force: bool = False) -> str:
     text = _read()
+    sf = bypassed_second_factor(text)
+    if sf and not force:
+        raise PamError(f"a second-factor auth module ({sf}) sits after where ward goes, and a face accept "
+                       f"would jump past it — refusing to silently weaken your two-factor auth. Put the ward "
+                       f"line after {sf} by hand, or re-run with --force if you understand the trade-off.")
     new = render_enabled(text, native)
     if dry_run or new == text:
         return new

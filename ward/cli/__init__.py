@@ -101,7 +101,9 @@ def main(argv=None) -> int:
     a.add_argument("--replay", metavar="DIR", help="authenticate against recorded frame sets instead of the cameras"); a.set_defaults(fn=cmd_auth)
 
     pm = sub.add_parser("pam", help="enable | disable | status the PAM integration (root)")
-    pm.add_argument("action", choices=["enable", "disable", "status"]); pm.add_argument("--dry-run", action="store_true"); pm.set_defaults(fn=cmd_pam)
+    pm.add_argument("action", choices=["enable", "disable", "status"]); pm.add_argument("--dry-run", action="store_true")
+    pm.add_argument("--force", action="store_true", help="enable even if a second-factor module after the ward line would be bypassed")
+    pm.set_defaults(fn=cmd_pam)
 
     lb = sub.add_parser("lab", help="live evaluation window: compare unlock policies, record subjects, summarise (root)")
     lb.add_argument("--record-frames", metavar="DIR", help="save every frame set as PNGs for replay (roadmap L7)")

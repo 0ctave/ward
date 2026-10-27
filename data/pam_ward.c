@@ -102,6 +102,16 @@ static const char *item_str(pam_handle_t *pamh, int type) {
     return (const char *)v;
 }
 
+/* The keyring unseal is only meaningful for a login or screen-unlock, where the keyring is opened;
+ * scoping it here keeps the cleartext login password out of sudo/su/polkit, which never need it to
+ * unlock a keyring. Mirrors the login/unlock services in ward/engine/policy.py SERVICE_KEYS — an
+ * unlisted greeter simply skips the auto-unlock (the keyring falls back to its own prompt). */
+static int is_login_service(const char *svc) {
+    static const char *login[] = { "gdm-password", "sddm", "lightdm", "login", "greetd", "kde", NULL };
+    for (int i = 0; login[i]; i++) if (!strcmp(svc, login[i])) return 1;
+    return 0;
+}
+
 /* Run the helper as root with PAM_* in its environment; forward each stdout line as a PAM
  * info message; return its exit status (or -1). */
 static int run_helper_(pam_handle_t *pamh, const struct opts *o, const char *user);
@@ -288,9 +298,12 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     const char *user = NULL;
     if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL || !*user) return PAM_AUTH_ERR;
     if (access(o.helper, X_OK) != 0) { if (o.debug) logmsg(LOG_DEBUG, "helper %s missing", o.helper); return PAM_AUTH_ERR; }
-    /* start the keyring decrypt now: it runs while the camera does its work, so a slow TPM is free */
-    struct unseal_job job;
-    unseal_start(&o, user, &job);
+    /* start the keyring decrypt now: it runs while the camera does its work, so a slow TPM is free.
+     * Only for a login/unlock — sudo/su/polkit never unlock the keyring, so they never materialise
+     * the cleartext login password. job stays inactive (safe for unseal_finish/abort) otherwise. */
+    struct unseal_job job = { .pid = -1, .fd = -1, .active = 0 };
+    if (is_login_service(item_str(pamh, PAM_SERVICE)))
+        unseal_start(&o, user, &job);
     int rc = run_helper(pamh, &o, user);
     if (o.debug) logmsg(LOG_DEBUG, "helper exit %d for %s", rc, user);
     if (rc != 0) { unseal_abort(&job); return PAM_AUTH_ERR; }
