@@ -2,6 +2,15 @@
 
 ## 0.4.0 — 2026-10-25
 
+### Visible sudo feedback + a doctor pre-flight
+- `sudo` face unlock now shows the "Looking for your face…" status line. The native PAM module
+  nulls the helper's stderr, so feedback finds the caller's terminal via PAM_TTY (normalised —
+  sudo may give `pts/3` without the `/dev` prefix) or the controlling `/dev/tty`. Terminal
+  services only, so a login greeter never gets it.
+- `ward doctor` pre-flights user resolution: with PAM on, it reports which user sudo/login will
+  authenticate (the login uid) and warns if that user has no enrolled face — catching the
+  'sudo → root → no-models → password' class of bug before you hit it.
+
 ### Docs
 - Split the monolithic README into a crisp landing page plus focused guides: `docs/install.md`
   (prerequisites, per-distro deps, recogniser choice, packages, headless, uninstall, troubleshooting),
