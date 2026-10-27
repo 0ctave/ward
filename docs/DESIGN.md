@@ -274,6 +274,12 @@ embedding cloud extends**, and the principled tool is to learn that cloud:
   0.6 same-person radius) AND `whitened ≤ threshold`). The whitened path only ever extends
   acceptance along the user's own variation directions. Both distances are logged
   (`irw=2.9/4.1`).
+- **Status: experimental, OFF by default** (`recognition.whitened = false`). On the reference
+  hardware it was measured never to fire — live whitened distances ran 28–37 against a learned
+  threshold near 15, and it rescued no night frame — so the raw gate and the rolling calibration
+  carry acceptance in practice. It stays in the engine as an opt-in for hardware where it does
+  help; `strict` forces it off, and the engine's internal default is also `false` so a config
+  that omits the key behaves as documented, not as a silently-enabled second path.
 
 ### 6.5b Online adaptation
 
@@ -308,7 +314,7 @@ No gate is a constant. `engine/calibration.py` derives the recognition threshold
 
 ### 6.8 Security policy, identities, conditions
 
-**Policy (`engine/policy.py`).** Three presets resolved *at attempt time* from the measured gates (an unlock never rewrites the config): `convenience` (raw gate or whitened path, one PASS), `balanced` (default: the colour camera must agree whenever it sees the face well — `rgb_when_bright` — and two PASSes when two voters exist), `strict` (gate −0.05 capped at 0.35, RGB match mandatory, whitened path off, a shadow-test or anti-spoof PASS required, learning off). Presets only ever *tighten* the calibrated gate. `security.policy_<service>` overrides per PAM service (`sudo`, `polkit`, `login`, `unlock`; `off` disables). Text-console logins are off unless `behaviour.tty_login`. **Lockout**: `security.lockout_failures` liveness FAILs within `lockout_minutes` (spoof signals only — never "no face" or a plain mismatch) pause face unlock for that user for `lockout_minutes`, reason `lockout`; the password path is untouched by construction. The log carries `policy=` when not balanced.
+**Policy (`engine/policy.py`).** Three presets resolved *at attempt time* from the measured gates (an unlock never rewrites the config): `convenience` (raw gate or whitened path, one PASS), `balanced` (default: the colour camera must agree whenever it sees the face well — `rgb_when_bright` — and at least one liveness PASS with no FAILs), `strict` (gate −0.05 capped at 0.35, RGB match mandatory, whitened path off, a shadow-test or anti-spoof PASS required, learning off). `balanced` carries `required_votes = 2`, but by §6.5's degraded-profile rule an accept needs only one PASS when the other voters abstain — which is the common case on an IR-only night unlock (cross-spectrum is usually the only non-abstaining voter), so two-of-two is a soft ceiling, not a hard gate; a true two-voter requirement is a deliberate opt-in. Presets only ever *tighten* the calibrated gate. `security.policy_<service>` overrides per PAM service (`sudo`, `polkit`, `login`, `unlock`; `off` disables). Text-console logins are off unless `behaviour.tty_login`. **Lockout**: off by default (`lockout_failures = 0`) — the password is always available, so a lockout only creates denial-of-service; when set, `security.lockout_failures` liveness FAILs within `lockout_minutes` (spoof signals only — never "no face" or a plain mismatch) pause face unlock for that user for `lockout_minutes`, reason `lockout`; the password path is untouched by construction. The log carries `policy=` when not balanced.
 
 **Identities.** A store belongs to a Linux login; each model carries an `identity` ("" = the owner, else a name). `enroll --identity "Alice"` runs the fused window for another person; `Store.nearest()` returns the matched model so the accept logs `who=Alice`; online learning inherits the matched identity. `--fresh` scoped to the identity never deletes the others; `models --remove-identity` does. Any registered face unlocks the login — the security decision is the registration, made by root.
 

@@ -205,21 +205,24 @@ class Engine:
             if isinstance(e, CaptureError):
                 return fail("camera", str(e))
             raise
-        self._cap = cap
         ph["cams"] = int((time.monotonic() - t0) * 1000)
-        self._notes_seen = 0
-        wanted = dict(devices)
-        devices = self._follow_cameras(cap, devices)
-
-        camera_lost = ""
-        obs: dict[str, list[Obs]] = {s: [] for s in devices}
-        last_votes: list[Vote] = []
-        saw_face = False
-        all_dark = True
-        hard = t0 + timing["hard_timeout_ms"] / 1000
-        n_sets = 0
-        ir_means: list[float] = []
+        # From here the cameras — and the lit IR emitter — are OURS. Everything that can raise runs
+        # INSIDE this try, so its finally ALWAYS releases them: a resident daemon must never leak a
+        # /dev handle or leave the emitter on until systemd restarts it (golden rule 3). Setting
+        # self._cap and _follow_cameras used to sit before the try, so an exception there leaked both.
         try:
+            self._cap = cap
+            self._notes_seen = 0
+            wanted = dict(devices)
+            devices = self._follow_cameras(cap, devices)
+            camera_lost = ""
+            obs: dict[str, list[Obs]] = {s: [] for s in devices}
+            last_votes: list[Vote] = []
+            saw_face = False
+            all_dark = True
+            hard = t0 + timing["hard_timeout_ms"] / 1000
+            n_sets = 0
+            ir_means: list[float] = []
             if timing["settle_ms"] > 0:
                 self.say(f"exposure settled in {self._settle(cap, primary, timing['settle_ms'])} ms")
             deadline = min(hard, time.monotonic() + timing["window_ms"] / 1000)   # window starts now
@@ -482,8 +485,8 @@ class Engine:
         if raw is None or fused is None:
             return False, (None, None)
         if raw <= gate:
-            return True, st.wdist(fused, spectrum) if rec.get("whitened", True) else (None, None)
-        if rec.get("whitened", True) and raw <= rec.get("hard_cap", 0.55):
+            return True, st.wdist(fused, spectrum) if rec.get("whitened", False) else (None, None)
+        if rec.get("whitened", False) and raw <= rec.get("hard_cap", 0.55):
             wd, thr = st.wdist(fused, spectrum)
             if wd is not None and wd <= thr:
                 return True, (wd, thr)
