@@ -211,7 +211,8 @@ class App(Adw.Application):
         content.append(rev)
         body.append(content); body.set_vexpand(True)
         root.append(body)
-        self.win.set_content(root)
+        self.toast = Adw.ToastOverlay(); self.toast.set_child(root)
+        self.win.set_content(self.toast)
         self.pages = {}
         for key, title in (("overview", "Overview"), ("people", "People"), ("reliability", "Reliability"), ("settings", "Settings"), ("advanced", "Advanced")):
             page = Adw.PreferencesPage(); page.set_margin_top(6)
@@ -379,11 +380,20 @@ class App(Adw.Application):
         except (BrokenPipeError, OSError):
             proc.terminate()
 
+    def _toast(self, text):
+        """A transient banner over the whole window (survives page changes)."""
+        try:
+            self.toast.add_toast(Adw.Toast(title=text))
+        except Exception:
+            pass
+
     def _camera_done(self, rc, seen):
         self.cam_proc = None
         self.side.set_sensitive(True)
         if rc in (126, 127) and not ROOT:
             self.console.write("administrator authorisation was cancelled or refused\n")
+            self._toast("Administrator authorisation was cancelled")
+            self.console_btn.set_active(True)          # otherwise a polkit cancel left no visible trace
         appui._set_pill(self.console.state, "done" if rc == 0 else f"exit {rc}", "ok" if rc == 0 else "warn")
         then = getattr(self, "_cam_then", None)
         if then is not None:                      # a wizard step drove the camera: go back to it and report
@@ -404,7 +414,9 @@ class App(Adw.Application):
     def start_setup_wizard(self):
         if getattr(self, "cam_proc", None) is not None or self.runner.busy:
             self.console.write("… finish the current action first\n"); return
-        self._wiz = {"steps": setup_steps(self.report), "i": 0, "status": {}}
+        steps = setup_steps(self.report)
+        status = {s["key"]: "ok" for s in steps if s.get("satisfied")}   # already-on steps start satisfied
+        self._wiz = {"steps": steps, "i": 0, "status": status}
         if getattr(self, "wiz_page", None) is None:
             self.wiz_page = Adw.PreferencesPage()
             self.stack.add_named(self.wiz_page, "setup")
@@ -562,11 +574,19 @@ class App(Adw.Application):
 
         def toggled(s, _p):
             if s.get_active():
+                # never enable PAM with nobody enrolled — route through the wizard, which registers first
+                if self.people is not None and not any(x["owner"] and x["models"] for x in self.people):
+                    s.handler_block(hid); s.set_active(False); s.handler_unblock(hid)
+                    self.start_setup_wizard(); return
                 self.run_cmd(["pam", "enable"]); return
             s.handler_block(hid); s.set_active(True); s.handler_unblock(hid)   # only flips once confirmed
             self.confirm("Turn face unlock off?", "ward is removed from the login stack; passwords only. Nothing else changes.", "Turn off",
                          lambda: self.run_cmd(["pam", "disable"]))
         hid = sw.connect("notify::active", toggled)
+        # keep the switch live while OFF only if the owner is already enrolled (a quick re-enable);
+        # on first run / nobody enrolled the 'Start setup' card above is the single entry point
+        if not on and not (self.people and any(x["owner"] and x["models"] for x in self.people)):
+            sw.set_sensitive(False)
         self._row(g, "On" if on else "Off", "your password always works as well — a failed face check falls back to it", "system-lock-screen-symbolic", suffix=sw)
         text, cls = VERDICT[rel["verdict"]]
         self._row(g, text, describe_stats(rel["overall"]) + " · recent attempts", "emblem-ok-symbolic" if cls == "ok" else "dialog-warning-symbolic",
