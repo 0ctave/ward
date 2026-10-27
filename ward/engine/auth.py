@@ -573,7 +573,10 @@ class Engine:
         return False
 
     def _shadow_vote(self, li) -> Vote:
-        """Emitter-modulation shadow test, once per attempt (it costs ~4 IR frames)."""
+        """Emitter-modulation shadow test, cached so it runs once per attempt (it costs ~4 IR frames
+        and toggles the LEDs). The cache `_shadow_done` is reset at the attempt boundary by the caller
+        — authenticate() per attempt, the lab per sample — NOT inside _liveness, which runs per
+        frame-set while liveness is still pending."""
         if self._shadow_done is not None:
             return self._shadow_done
         from .liveness import ABSTAIN

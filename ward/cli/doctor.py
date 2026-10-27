@@ -79,7 +79,7 @@ def cmd_doctor(args) -> int:
 
     if ir:
         ui.section("IR emitter")
-        from ..engine.emitter import config_instruction as emitmod_config_instruction
+        from ..engine.emitter import config_instruction as emitmod_config_instruction, SHADOW_MAX_LATENCY_MS
         e = probe.emitter_status()
         if not e["installed"]:
             ui.warn("not installed — if the IR preview is black in a dark room, the emitter isn't firing")
@@ -93,7 +93,7 @@ def cmd_doctor(args) -> int:
                 if ms < 0:
                     ui.info("shadow-test liveness not yet benchmarked"); ui.tip("sudo ward emitter toggle-bench")
                 else:
-                    (ui.ok if ms <= 150 else ui.warn)(f"emitter toggle latency {ms} ms → shadow test {'active' if ms <= 150 else 'too slow, disabled'}")
+                    (ui.ok if ms <= SHADOW_MAX_LATENCY_MS else ui.warn)(f"emitter toggle latency {ms} ms → shadow test {'active' if ms <= SHADOW_MAX_LATENCY_MS else 'too slow, disabled'}")
             elif e.get("state") == "absent":
                 ui.fail("installed but NO device configured — the tool has nothing to switch on")
                 ui.tip("sudo ward emitter configure"); problems += 1
@@ -108,7 +108,7 @@ def cmd_doctor(args) -> int:
                 if ms < 0:
                     ui.info("shadow-test liveness not yet benchmarked"); ui.tip("sudo ward emitter toggle-bench")
                 else:
-                    (ui.ok if ms <= 150 else ui.warn)(f"emitter toggle latency {ms} ms → shadow test {'active' if ms <= 150 else 'too slow, disabled'}")
+                    (ui.ok if ms <= SHADOW_MAX_LATENCY_MS else ui.warn)(f"emitter toggle latency {ms} ms → shadow test {'active' if ms <= SHADOW_MAX_LATENCY_MS else 'too slow, disabled'}")
                 # roadmap L1: measure instead of trusting the config — re-apply the emitter
                 # instructions and meter the IR frame again (root only; harmless re-run of the tool)
                 if probe.is_root() and "ir" in light and paths.get("ir") and e.get("state") == "working":

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Polish
+- `doctor` and the app's health report now read the shadow-test latency cutoff from the engine's
+  `emitter.SHADOW_MAX_LATENCY_MS` instead of a hardcoded `150`, so the reported threshold can't drift
+  from the one the engine actually gates on.
+- Fixed a latent cache leak: the shadow-test vote was cached on the Engine and reset only by
+  `authenticate()`, so the lab (which reuses one Engine across samples) would have frozen the first
+  shadow vote for the whole session once an emitter was wired in. The lab now resets it per sample.
+
 ### Engine hardening & portability CI
 - The liveness **accept/reject core** is now a pure `Engine._accept_votes(...)` helper with its own
   unit-test case table (single PASS, strict-needs-a-strong-voter, any FAIL, all-abstain with/without
