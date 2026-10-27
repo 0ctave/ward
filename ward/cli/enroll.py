@@ -110,8 +110,10 @@ def cmd_enroll(args) -> int:
             try:
                 ui_models = models if cfg["recognition"]["detector"] != "cnn" else Models("yunet", 320, recogniser=models.recogniser_kind)
                 from ..engine import calibration as cal
+                ring = (getattr(args, "style", "guided") or "guided") == "ring" and not condition
                 res = gui.guided_setup(st, cap, ui_models, cams, cfg["recognition"], identity=identity, condition=condition,
-                                       poses=cal.CONDITION_POSES if condition else None)
+                                       poses=(cal.CONDITION_POSES if condition else (cal.RING_POSES if ring else None)),
+                                       style="ring" if ring else "guided")
             except gui.GuiUnavailable as e:
                 if not sys.stdin.isatty():                   # e.g. the app's console: a text flow would answer itself
                     ui.fail(f"no camera window available ({e})"); return 1
