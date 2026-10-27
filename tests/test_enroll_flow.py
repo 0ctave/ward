@@ -49,26 +49,24 @@ class RingStyle(unittest.TestCase):
         self.assertEqual(snaps[-1]["phase"], "done")
 
     def test_overlay_draws_without_error(self):
-        # the ring overlay renders (Cairo) for a mid-sweep snapshot, incl. a diagonal segment active
-        appui = __import__("ward.appui", fromlist=["Preview"])
-        segs = [list(t[3]) for t in cal.RING_POSES if t[1] in cal.DIRECTIONAL_CUES and tuple(t[3]) != (0.0, 0.0)]
-        self._render(appui, {"segs": segs, "done": [True, True, False, False, False, False, False, False],
-                             "active": 2, "hub_done": True}, cue="up", pose=(2.0, 6.0), target=[0.0, 18.0])
-
-    def _render(self, appui, ring, cue, pose, target):
-        import cairo
+        # the ring overlay renders (Cairo) for a mid-sweep snapshot, incl. a diagonal segment active.
+        # Needs GTK + pycairo, which CI's no-camera runner does not have — skip there, like WindowStates.
         try:
+            import cairo
+            from ward import appui
             prev = appui.Preview.__new__(appui.Preview)
-        except Exception as e:
-            self.skipTest(f"Preview needs GTK: {e!r}")
+        except Exception as e:                                  # no GTK / libadwaita / pycairo
+            self.skipTest(f"GTK/cairo unavailable: {e!r}")
+        segs = [list(t[3]) for t in cal.RING_POSES if t[1] in cal.DIRECTIONAL_CUES and tuple(t[3]) != (0.0, 0.0)]
         prev.accent = (0.2, 0.5, 0.9)
         prev.box = (80, 60, 160, 160); prev.frame_size = (640, 360)
-        prev.cue, prev.cue_ok, prev.cue_progress = cue, False, 0.4
-        prev.cue_pose, prev.cue_target, prev.cue_ring = pose, target, ring
+        prev.cue, prev.cue_ok, prev.cue_progress = "up", False, 0.4
+        prev.cue_pose, prev.cue_target = (2.0, 6.0), [0.0, 18.0]
+        prev.cue_ring = {"segs": segs, "done": [True, True, False, False, False, False, False, False],
+                         "active": 2, "hub_done": True}       # a diagonal segment active
         prev._arrow_dir = None
         surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 640, 360)
-        cr = cairo.Context(surf)
-        prev._draw_cue(cr, 640, 360)      # must not raise
+        prev._draw_cue(cairo.Context(surf), 640, 360)          # must not raise
 
 
 class Robustness(unittest.TestCase):
