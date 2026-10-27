@@ -6,3 +6,6 @@ contact_links:
   - name: 📷 Run `ward doctor` first
     url: https://github.com/0ctave/ward/blob/main/docs/install.md#troubleshooting
     about: Most install and camera problems are diagnosed (with a fix command) by `ward doctor` and the Troubleshooting table.
+  - name: 💬 Questions, ideas & show-and-tell
+    url: https://github.com/0ctave/ward/discussions
+    about: Not a bug? Ask in Discussions — Q&A, ideas, and 'does it work on my laptop' reports.

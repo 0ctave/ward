@@ -37,6 +37,25 @@ instead of the algorithm: it finds and lights the IR emitter, enrolls many poses
 sweep, measures the match threshold from *your* face, adds liveness, and tells you exactly what it's
 doing. And it never locks you out — every failure falls through to the password.
 
+### Ward vs Howdy
+
+Howdy is pleasant when it works and is widely packaged; its weak spots are setup and security, which
+it's [honest about](https://github.com/boltgolt/howdy). Ward targets exactly those. Each cell is
+factual; see **[Migrating from Howdy](docs/migrating-from-howdy.md)** to move across without losing
+your password fallback.
+
+| | Ward | Howdy |
+|---|---|---|
+| **Right camera** | auto-detected by probing the stream's pixel format | manual `device_path`; wrong `/dev/videoN` is a top failure |
+| **IR emitter** | lit by measurement, re-applied at boot/resume | offloaded to a separate tool; often never fires in the dark |
+| **Poses per enrollment** | many, in one guided sweep | one still capture (users add models by hand per lighting) |
+| **Match threshold** | measured from held-out frames of *your* face | one fixed default (`certainty`) |
+| **Liveness** | IR cross-spectrum + anti-spoof CNN + motion + optional emitter shadow | none — face matching only; a printed photo can defeat it |
+| **Fail-open** | every failure falls to the password, with a SIGALRM hard-timeout backstop | falls to the password too (PAM) |
+| **Wayland / greeter** | native GTK 4 app; PAM text shown on GDM/SDDM/KDE | works, but greeter + PAM setup is a recurring rough edge |
+| **Dependencies** | distro Python, **zero pip** | dlib via pip (`--break-system-packages`) on distros where it isn't packaged |
+| **Maintenance** | active | low-activity; 3.0 rewrite in beta since late 2023, stable line is the older 2.x |
+
 ## Features
 
 - 🌙 **Works in the dark.** Uses the infrared camera and turns on its emitter, so it sees you at
@@ -84,6 +103,7 @@ are in the **[Install guide](docs/install.md)**.
 | **[Install](docs/install.md)** | Prerequisites, per-distro dependencies, the recogniser choice, distro packages, headless, uninstall, troubleshooting. |
 | **[Usage](docs/usage.md)** | The app, everyday tasks (people, glasses, keyring, policy, speed), headless/SSH, and the full command reference. |
 | **[How it works](docs/how-it-works.md)** | Why Linux face unlock is unreliable and how Ward fixes each part — IR, emitter, poses, measured thresholds, liveness, and the honest limits. |
+| **[Migrating from Howdy](docs/migrating-from-howdy.md)** | Install alongside Howdy, let Ward retire it, verify, fully remove it, and roll back. |
 | **[Security](SECURITY.md)** | Threat model, what's in and out of scope, the fail-open guarantee, and how to report a vulnerability. |
 | **[Design](docs/DESIGN.md)** · **[Roadmap](docs/ROADMAP.md)** | Full rationale and thresholds · what's planned next. |
 
