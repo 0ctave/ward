@@ -82,5 +82,41 @@ class ExposureTests(unittest.TestCase):
         self.assertIn("firmware", e.describe())
 
 
+class EmbedInput(unittest.TestCase):
+    """embed_rgb is the one crop-source enrol and auth share: identity in-range, normalised out."""
+
+    def _frame(self, mean):
+        import numpy as np
+        g = np.full((64, 64), int(mean), np.uint8)
+        rgb = np.stack([g, g, g], axis=-1)
+        return rgb, g
+
+    def test_in_range_is_identity_for_both_spectra(self):
+        rgb, g = self._frame(120)                                   # inside [60, 190]
+        for sp in ("ir", "rgb"):
+            self.assertIs(brightness.embed_rgb(rgb, g, sp, 120.0), rgb)   # same object, untouched
+
+    def test_out_of_range_is_normalised_not_raw(self):
+        import numpy as np
+        rgb, g = self._frame(20)                                   # dark, below the band
+        ir = brightness.embed_rgb(rgb, g, "ir", 20.0)
+        col = brightness.embed_rgb(rgb, g, "rgb", 20.0)
+        self.assertEqual(ir.shape, rgb.shape); self.assertEqual(col.shape, rgb.shape)
+        self.assertFalse(np.array_equal(ir, rgb))                  # IR luminance was normalised
+        self.assertFalse(np.array_equal(col, rgb))                 # colour luminance was normalised
+
+    def test_matches_the_auth_observe_logic(self):
+        # the helper must stay byte-identical to engine.auth._observe's inline expression
+        import numpy as np
+        from ward.engine.auth import cv2_gray_to_rgb
+        for mean in (20.0, 120.0, 230.0):
+            rgb, g = self._frame(mean)
+            gn = brightness.normalise(g, mean)
+            ir_ref = rgb if gn is g else cv2_gray_to_rgb(gn)
+            col_ref = brightness.normalise_rgb(rgb, g)
+            self.assertTrue(np.array_equal(brightness.embed_rgb(rgb, g, "ir", mean), ir_ref))
+            self.assertTrue(np.array_equal(brightness.embed_rgb(rgb, g, "rgb", mean), col_ref))
+
+
 if __name__ == "__main__":
     unittest.main()

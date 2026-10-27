@@ -54,6 +54,16 @@ class Health(unittest.TestCase):
         faces = next(s for s in rep["sections"] if s.key == "faces")
         self.assertTrue(any(it.fix == ["enroll"] or "root" in it.text for it in faces.items))   # no store → enrol, or root needed
 
+    def test_missing_dlib_recogniser_is_a_failure_not_a_note(self):
+        from unittest import mock
+        from ward.engine import config, detect
+        cfg = config.load(); cfg["recognition"]["recogniser"] = "dlib"
+        with mock.patch.object(detect, "dlib", None):             # Debian/Ubuntu/Fedora: no python3-dlib
+            rep = health.collect(user="nobody-here", cfg=cfg, probe_cameras=False)
+        eng = next(s for s in rep["sections"] if s.key == "engine")
+        bad = [it for it in eng.items if "python3-dlib is MISSING" in it.text]
+        self.assertTrue(bad and bad[0].level == "fail" and bad[0].fix == ["recogniser", "install", "-y"])
+
     def test_rgb_only_profile_advice(self):
         from ward.engine import config
         cfg = config.load(); cfg["cameras"]["ir"] = ""; cfg["cameras"]["rgb"] = "usb:1:1:0"

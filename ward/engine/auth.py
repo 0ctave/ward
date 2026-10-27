@@ -443,7 +443,7 @@ class Engine:
         state = light.state(s)
         if state == "dark":
             return Obs(fr, q, box, None, True, state)     # a face, but unusably dark (emitter off?)
-        rgb = fr.rgb if s == "ir" and gray is fr.gray else (cv2_gray_to_rgb(gray) if s == "ir" else brightness.normalise_rgb(fr.rgb, fr.gray))
+        rgb = brightness.embed_rgb(fr.rgb, fr.gray, s, q.mean)   # SAME normalisation enrollment uses (no train/serve skew)
         emb = self.models.embed(rgb, box)
         return Obs(fr, q, box, emb, False, state)
 
