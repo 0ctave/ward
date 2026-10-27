@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Launch readiness
+- The README now shows the **face-free terminal demo** (`docs/demo.gif`) as its hero.
+- Fixed the `<you>` placeholder in the package URLs (`PKGBUILD`, `ward.spec`, `build-deb.sh`) that
+  would have shipped broken homepage links, and added **`packaging/README.md`** — a maintainer
+  runbook for AUR / Fedora COPR / Ubuntu PPA / Flathub and the per-release checklist.
+
 ### Docs: migrating from Howdy
 - New **[Migrating from Howdy](docs/migrating-from-howdy.md)** guide and an honest **Ward vs Howdy**
   comparison table in the README (right camera, IR emitter, poses, measured threshold, liveness,

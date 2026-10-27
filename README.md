@@ -14,8 +14,9 @@ distro's own Python (no pip), and it **always falls back to your password**. Fre
 
 **[Install](docs/install.md)** · **[Usage](docs/usage.md)** · **[How it works](docs/how-it-works.md)** · **[Security](SECURITY.md)** · **[Roadmap](docs/ROADMAP.md)**
 
-<!-- Hero demo (face-free terminal screencast): run docs/assets/record_demo.sh, then uncomment -->
-<!-- ![Ward unlocking a sudo prompt by face](docs/demo.gif) -->
+<p align="center">
+  <img src="docs/demo.gif" width="640" alt="Ward unlocking a sudo prompt by face — a face-free terminal screencast">
+</p>
 
 <p align="center">
   <img src="docs/assets/app-overview.png" width="420" alt="Ward app — Overview">
