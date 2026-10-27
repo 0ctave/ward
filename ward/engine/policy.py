@@ -4,10 +4,18 @@ ward is convenience-grade authentication with a password behind it. The policy m
 trade-off explicit and tunable instead of scattered over a dozen keys:
 
     convenience   raw ≤ gate or whitened path · ≥ 1 PASS, 0 FAIL · learning on
-    balanced      + RGB match required when the colour camera sees the face well · ≥ 2 PASS
-                    when two voters are available · learning on (strict novelty)     ← default
+    balanced      + RGB match required when the colour camera sees the face well · ≥ 1 PASS,
+                    0 FAIL · learning on (strict novelty)                             ← default
     strict        gate tightened by 0.05 (never above 0.35), RGB match required, whitened path
-                    off · 2 PASS including shadow or the CNN, else reject · learning off
+                    off · ≥ 1 PASS that is shadow or the CNN, 0 FAIL · learning off
+
+Honest note on `required_votes`: `balanced` carries `required_votes = 2`, but in `_decide` an
+accept needs only ONE PASS (and zero FAILs) — when the other enabled voters all ABSTAIN, as they
+do on a typical IR-only night unlock (cross-spectrum is usually the sole non-abstaining voter),
+the engine accepts on that single PASS by design, so a working night unlock is never blocked.
+`required_votes = 2` is therefore a soft ceiling, not a hard two-of-two gate; raising it to a real
+two-voter requirement is a deliberate opt-in (see CLAUDE.md / DESIGN §6.5), not the default.
+`strict` differs by additionally requiring that the one PASS come from a STRONG voter (shadow/CNN).
 
 `effective(cfg, service)` resolves the level for one PAM service (`security.policy_sudo`,
 `policy_polkit`, `policy_login`, `policy_unlock` override the default) and returns the
@@ -81,7 +89,7 @@ def apply_preset(cfg: dict, level: str) -> dict:
 
 def describe(level: str) -> str:
     return {"convenience": "raw gate or whitened path · one liveness PASS · learning on",
-            "balanced": "RGB must agree when it sees you well · two PASSes when two voters exist · learning on",
+            "balanced": "RGB must agree when it sees you well · one liveness PASS, no FAILs · learning on",
             "strict": "gate −0.05 (≤ 0.35) · RGB match required · no whitened path · shadow/CNN PASS required · learning off",
             "off": "face unlock disabled for this service"}.get(level, level)
 

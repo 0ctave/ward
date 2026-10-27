@@ -39,7 +39,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
                   "learn": True, "learn_max_dist": 0.30, "learn_min_novelty": 0.25, "learn_per_bin": 2, "learn_max_total": 12,
                   "notify": "accept", "skip_login": False},
     "security": {"policy": "balanced", "policy_sudo": "", "policy_polkit": "", "policy_login": "", "policy_unlock": "",
-                 "lockout_failures": 3, "lockout_minutes": 15},
+                 "lockout_failures": 0, "lockout_minutes": 15},
 }
 
 _COMMENTS = {
