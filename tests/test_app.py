@@ -207,11 +207,30 @@ class SetupWizard(unittest.TestCase):
         self.assertNotIn("emitter", [s["key"] for s in setup_steps({"profile": "C"})])
         self.assertIn("emitter", [s["key"] for s in setup_steps({"profile": "B"})])
 
+    def test_antispoof_only_with_colour_camera(self):
+        """The anti-spoof CNN is colour-only — the step is pointless without an RGB camera (B and none)."""
+        from ward.app import setup_steps
+        self.assertIn("antispoof", [s["key"] for s in setup_steps({"profile": "A"})])
+        self.assertIn("antispoof", [s["key"] for s in setup_steps({"profile": "C"})])
+        self.assertNotIn("antispoof", [s["key"] for s in setup_steps({"profile": "B"})])
+        self.assertNotIn("antispoof", [s["key"] for s in setup_steps({"profile": "-"})])
+
+    def test_antispoof_reflects_current_state(self):
+        """Already-on → a satisfied 'Done' step, not an actionable 'Turn on'; off → the real action."""
+        from ward.app import setup_steps
+        on = next(s for s in setup_steps({"profile": "A", "cfg": {"liveness": {"antispoof_cnn": True}}}) if s["key"] == "antispoof")
+        self.assertTrue(on.get("satisfied")); self.assertNotIn("argv", on); self.assertFalse(on.get("optional"))
+        off = next(s for s in setup_steps({"profile": "A", "cfg": {"liveness": {"antispoof_cnn": False}}}) if s["key"] == "antispoof")
+        self.assertFalse(off.get("satisfied")); self.assertEqual(off["argv"], ["antispoof", "on"]); self.assertTrue(off.get("optional"))
+        default = next(s for s in setup_steps({"profile": "A"}) if s["key"] == "antispoof")   # no cfg → defaults on
+        self.assertTrue(default.get("satisfied"))
+
     def test_optional_and_labels(self):
         from ward.app import setup_steps
-        for s in setup_steps({"profile": "A"}):
+        report = {"profile": "A", "cfg": {"liveness": {"antispoof_cnn": False}}}
+        for s in setup_steps(report):
             self.assertTrue(s["title"] and s["desc"] and s["run_label"])
-        optional = {s["key"] for s in setup_steps({"profile": "A"}) if s.get("optional")}
+        optional = {s["key"] for s in setup_steps(report) if s.get("optional")}
         self.assertEqual(optional, {"emitter", "antispoof", "keyring"})   # the essentials aren't skippable
 
 
