@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+# Ward is distro-Python plus a tiny C PAM module: there is NO Python build step
+# (zero pip, distro python only). pyproject.toml would otherwise make dh autodetect
+# the pybuild buildsystem and attempt a Python build, so every dh_auto_* target is
+# overridden to a no-op and the real install is done by packaging/stage.sh — the one
+# cross-distro install contract shared with install.sh, build-deb.sh, the rpm and Arch.
+include /usr/share/dpkg/default.mk
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+override_dh_auto_build:
+override_dh_auto_test:
+override_dh_auto_clean:
+
+override_dh_auto_install:
+	WARD_REQUIRE_PAM_MODULE=1 LDFLAGS="$(LDFLAGS)" \
+	    packaging/stage.sh debian/ward /usr /usr/lib/systemd/system
+
+# Keep the hand-written systemd enable logic in debian/postinst (shared with the rpm
+# and Arch maintainer scripts); stop debhelper injecting a second, duplicate snippet.
+override_dh_installsystemd:
+
+override_dh_installchangelogs:
+	dh_installchangelogs CHANGELOG.md

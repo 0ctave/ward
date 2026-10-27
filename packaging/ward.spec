@@ -1,15 +1,16 @@
 # RPM spec (Fedora / openSUSE / RHEL-likes). Offline build from a tarball of this repo:
-#   git archive --prefix=ward-0.4.0/ -o ~/rpmbuild/SOURCES/ward-0.4.0.tar.gz HEAD
+#   git archive --prefix=ward-0.5.0/ -o ~/rpmbuild/SOURCES/ward-0.5.0.tar.gz HEAD
 #   rpmbuild -ba packaging/ward.spec
+# Fedora COPR: SCM package, Clone URL https://github.com/0ctave/ward, Spec packaging/ward.spec.
 # Same layout as packaging/stage.sh under /usr. Never edits PAM: run `sudo ward setup`.
 %global debug_package %{nil}
 
 Name:           ward
-Version:        0.4.0
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Reliable face unlock for login, sudo and polkit
 License:        MIT
-URL:            https://github.com/<you>/ward
+URL:            https://github.com/0ctave/ward
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc
@@ -84,7 +85,10 @@ fi
 %dir %attr(0700,root,root) %{_sysconfdir}/ward/models
 
 %changelog
-* Sat Oct 25 2026 octave <0ctave@users.noreply.github.com> - 0.4.0-1
+* Wed Oct 28 2026 octave <0ctave@users.noreply.github.com> - 0.5.0-1
+- Release 0.5.0: packaging for AUR, COPR and a Debian/Ubuntu source package (see CHANGELOG.md)
+
+* Sun Oct 25 2026 octave <0ctave@users.noreply.github.com> - 0.4.0-1
 - Rename to Ward; resident engine, anti-spoof CNN, manager app + setup wizard, benchmarks, CI
 
 * Fri Oct 23 2026 octave <0ctave@users.noreply.github.com> - 0.3.0-1

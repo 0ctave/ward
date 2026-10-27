@@ -1,0 +1,48 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ward
+Upstream-Contact: octave <0ctave@users.noreply.github.com>
+Source: https://github.com/0ctave/ward
+
+Files: *
+Copyright: 2026 octave
+License: MIT
+
+Files: ward/models/face_detection_yunet_2022mar.onnx
+       ward/models/face_detection_yunet_2023mar.onnx
+Copyright: 2021-2023 Shiqi Yu and contributors (OpenCV Zoo)
+License: Apache-2.0
+Comment: YuNet face detector, bundled from https://github.com/opencv/opencv_zoo
+ (models/face_detection_yunet/). See ward/models/NOTICE for the exact commits
+ and sha256 digests.
+
+Files: ward/models/minifasnet_v2.onnx
+Copyright: 2019-2020 Minivision AI (minivision-ai/Silent-Face-Anti-Spoofing)
+License: Apache-2.0
+Comment: MiniFASNetV2 silent face anti-spoofing network, ONNX export by yakhyo
+ (yakhyo/face-anti-spoofing, Apache-2.0). See ward/models/NOTICE for the exact
+ commits and sha256 digests; the full licence text is in
+ ward/models/LICENSE-Apache-2.0.txt.
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
+License: Apache-2.0
+ On Debian systems the full text of the Apache License version 2.0 can be
+ found in /usr/share/common-licenses/Apache-2.0. A copy is also bundled in the
+ package at /usr/lib/ward/ward/models/LICENSE-Apache-2.0.txt.

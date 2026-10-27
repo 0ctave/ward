@@ -1,12 +1,20 @@
-# Arch Linux. Offline build from this checkout:
-#   cd packaging && makepkg -si
+# Maintainer: octave <0ctave@users.noreply.github.com>
+# AUR package: builds from the GitHub release tarball for tag v$pkgver.
+#   Publish to the AUR with: PKGBUILD, .SRCINFO and ward.install.
+#   After the v$pkgver tag/release exists, the maintainer runs:
+#     updpkgsums && makepkg --printsrcinfo > .SRCINFO
+#   to replace the SKIP checksum below with the real digest, then test
+#   `makepkg -si` in a clean chroot and commit all three files.
+# To build offline from a local checkout instead (no tag needed), point
+# source= at a local tarball or use `makepkg` from a git checkout with
+# the stage.sh path — the package() step itself is offline.
 # Same layout as packaging/stage.sh under /usr. Never edits PAM: run `sudo ward setup`.
 pkgname=ward
-pkgver=0.4.0
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="Reliable face unlock for login, sudo and polkit"
 arch=('x86_64' 'aarch64')
-url="https://github.com/<you>/ward"
+url="https://github.com/0ctave/ward"
 license=('MIT')
 depends=('python' 'python-opencv' 'python-numpy' 'pam')
 makedepends=('gcc')
@@ -17,13 +25,14 @@ optdepends=('python-dlib: dlib recogniser (AUR; ArcFace works without it)'
             'polkit: the ward app launcher')
 install=ward.install
 options=('!debug' '!strip')
-# the repo itself is the source: no download
-_src=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')  # maintainer runs `updpkgsums` once the v$pkgver tag exists
 
 package() {
-  WARD_REQUIRE_PAM_MODULE=1 LDFLAGS="$LDFLAGS" "$_src/packaging/stage.sh" "$pkgdir" /usr /usr/lib/systemd/system
+  cd "$srcdir/$pkgname-$pkgver"
+  WARD_REQUIRE_PAM_MODULE=1 LDFLAGS="$LDFLAGS" packaging/stage.sh "$pkgdir" /usr /usr/lib/systemd/system
   python -m compileall -q -d /usr/lib/ward "$pkgdir/usr/lib/ward" >/dev/null
-  install -Dm644 "$_src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 "$_src/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -dm700 "$pkgdir/etc/ward/models"
 }

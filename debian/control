@@ -1,0 +1,21 @@
+Source: ward
+Section: admin
+Priority: optional
+Maintainer: octave <0ctave@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), gcc, libc6-dev
+Rules-Requires-Root: no
+Standards-Version: 4.7.0
+Homepage: https://github.com/0ctave/ward
+Vcs-Git: https://github.com/0ctave/ward.git
+Vcs-Browser: https://github.com/0ctave/ward
+
+Package: ward
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, python3 (>= 3.10), python3-opencv, python3-numpy, libc6
+Recommends: python3-dlib, dlib-models, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, systemd, policykit-1 | polkitd
+Suggests: linux-enable-ir-emitter
+Description: reliable face unlock for login, sudo and polkit
+ Face authentication through PAM with its own engine (YuNet detector, dlib or
+ ArcFace embeddings, IR + RGB cameras, multi-frame fusion, liveness voters).
+ Every failure falls through to the password. The package never edits PAM:
+ run "sudo ward setup" (or "sudo ward pam enable") after installing.

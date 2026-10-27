@@ -1,0 +1,7 @@
+ward (0.5.0) unstable; urgency=medium
+
+  * Release 0.5.0 (see CHANGELOG.md for the full list of changes).
+  * Add a debhelper source package (this debian/ dir) for debuild / PPA builds,
+    reusing packaging/stage.sh and the shared maintainer scripts.
+
+ -- octave <0ctave@users.noreply.github.com>  Wed, 28 Oct 2026 12:00:00 +0000
