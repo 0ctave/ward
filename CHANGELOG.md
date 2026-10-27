@@ -2,6 +2,26 @@
 
 ## 0.4.0 — 2026-10-25
 
+### Clearer, wider-angle enrollment
+- The default `ward enroll` guided sweep now asks for **real head turns**. The four angular
+  targets widened — yaw ±20° → **±28°**, look-up +15° → **+18°**, look-down −18° → **−24°** — and
+  the arrival band is a **flat 8°** (was `0.6 × target`, which let a 15° look-up be satisfied by a
+  level head and let you stop at ~40 % of the turn). Off-angle pose models are now fused from
+  genuinely-turned frames, which is the reliability fix (the old shallow angles barely moved the
+  head). Every band stays below the dlib ResNet ~30–35° yaw knee and inside the storage edges, so
+  it is wider, not riskier. The `centre` pose still accepts a resting head; a pose that can't be
+  reached still fails open (it is listed under "No model for:", password untouched).
+- **Clearer cueing.** The word chip now switches to **"Hold still…"** the moment you are on-target
+  and the ring is filling (it used to keep saying "Turn left" while frames accumulated, so people
+  drifted out of band), shows **"Ease back a little"** on an overshoot so the word never contradicts
+  the arrow, and the per-pose success beat is now a labelled **"✓ Got it"** held a touch longer. A
+  **"Step N of M"** caption, a real multi-line **intro** ("Ward will learn your face… your password
+  always works") with a readable 5 s countdown, and plainer lean/light wording round it out. The
+  done card leads with **"Your face is set up — you can now unlock with your face."**
+- Arrow direction is still decided in exactly one place (`cue_direction`, display space, golden
+  rule 5); the word only follows it. The overshoot-reversal threshold is 3.4σ of the ±4° estimator
+  jitter so a noise spike near the target can't flip the arrow.
+
 ### Visible sudo feedback + a doctor pre-flight
 - `sudo` face unlock now shows the "Looking for your face…" status line. The native PAM module
   nulls the helper's stderr, so feedback finds the caller's terminal via PAM_TTY (normalised —

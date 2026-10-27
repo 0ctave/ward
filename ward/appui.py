@@ -463,7 +463,7 @@ def cue_direction(cue, pose=None, target=None, prev=None):
     other = "pitch" if main == "yaw" else "yaw"
     opposite = {"left": "right", "right": "left", "up": "down", "down": "up"}
     # reversing the pass's own direction (an overshoot) needs clearer evidence than continuing it
-    need = 1.4 if along(main) == opposite.get(cue) else 1.0      # 1.4 × 12° ≈ 4σ of the estimator jitter
+    need = 1.7 if along(main) == opposite.get(cue) else 1.0      # 1.7 × 8° ≈ 13.6° ≈ 3.4σ of the ±4° jitter: a 3σ spike near the target can't reverse the arrow
     if err(main) > need:
         return along(main)
     if err(other) > 1.3:                                       # stricter: the other axis is a nudge
@@ -1135,6 +1135,8 @@ class CalibrateWindow(_Shell):
         self.overlay = Gtk.Overlay(); self.overlay.set_child(self.preview)
         self.word = Gtk.Label(); self.word.add_css_class("fu-cue-word")
         self.word.set_halign(Gtk.Align.CENTER); self.word.set_valign(Gtk.Align.START); self.word.set_margin_top(14)
+        # the intro is a multi-line card; wrap it (harmless in the run phase — the short cue words don't wrap)
+        self.word.set_wrap(True); self.word.set_justify(Gtk.Justification.CENTER); self.word.set_max_width_chars(42)
         self.overlay.add_overlay(self.word)
         self.pill_over = _pill(""); self.pill_over.set_halign(Gtk.Align.CENTER); self.pill_over.set_valign(Gtk.Align.END); self.pill_over.set_margin_bottom(14)
         self.overlay.add_overlay(self.pill_over)
@@ -1143,6 +1145,8 @@ class CalibrateWindow(_Shell):
         self.dots = Gtk.Box(spacing=9); self.dots.set_halign(Gtk.Align.CENTER)
         self._dot_widgets = []
         outer.append(self.dots)
+        self.count = Gtk.Label(); self.count.add_css_class("caption"); self.count.set_halign(Gtk.Align.CENTER)
+        outer.append(self.count)
         self.bar = Gtk.ProgressBar(); self.bar.add_css_class("fu-progress")
         outer.append(self.bar)
         self.summary = Gtk.Label(xalign=0.5, wrap=True); self.summary.add_css_class("caption"); self.summary.set_visible(False)
@@ -1181,6 +1185,7 @@ class CalibrateWindow(_Shell):
         self.summary.set_visible(phase == "done")
         self.bar.set_visible(False)              # the ring on the face carries progress; no duplicate bar
         self.dots.set_visible(phase != "done")
+        self.count.set_visible(phase == "measuring")   # "Step N of M" only during the sweep
         self.btn_next.set_label({"intro": "Start", "measuring": "Skip pass", "done": "Finish"}.get(phase, "Start"))
         (self.btn_next.add_css_class if phase != "measuring" else self.btn_next.remove_css_class)("suggested-action")
 
@@ -1203,6 +1208,8 @@ class CalibrateWindow(_Shell):
                     d.add_css_class("fu-dot-now")
                 else:
                     d.add_css_class("fu-dim")
+            if phase == "measuring":
+                self.count.set_label(f"Step {i + 1} of {n}")
             self.btn_glasses.set_visible(phase == "done" and bool(s.get("offer_glasses")))
             self.btn_cancel.set_visible(phase != "done")
             if phase == "intro":
@@ -1234,10 +1241,20 @@ class CalibrateWindow(_Shell):
                 self._pass_done_t = time.monotonic()
             cue = s.get("cue", "centre")
             self.preview.set_cue(cue, bool(ok), s.get("progress", 0.0), s.get("pose"), s.get("target"))
-            self.word.set_label(s.get("text") or self.CUE_WORD.get(cue, ""))
+            # the word follows the arrow (rule 5: direction is decided only in cue_direction, no new sign):
+            # "Ease back a little" on an overshoot, "Hold still" once on-target and filling, else the cue.
+            direction = cue_direction(cue, s.get("pose"), s.get("target"))
+            opp = {"left": "right", "right": "left", "up": "down", "down": "up"}
+            overshoot = direction is not None and direction == opp.get(cue)
+            if overshoot:
+                self.word.set_label("Ease back a little")
+            elif ok and 0.0 < s.get("progress", 0.0) < 1.0:
+                self.word.set_label("Hold still…")
+            else:
+                self.word.set_label(s.get("text") or self.CUE_WORD.get(cue, ""))
             # the arrow + ring convey the guidance; the pill appears only for a problem, else hides
-            if (time.monotonic() - self._pass_done_t) < 0.7:
-                self.pill_over.set_visible(True); _set_pill(self.pill_over, "\u2713", "ok")
+            if (time.monotonic() - self._pass_done_t) < 0.9:
+                self.pill_over.set_visible(True); _set_pill(self.pill_over, "\u2713 Got it", "ok")
             elif s.get("camera_stalled"):
                 _set_pill(self.pill_over, "Camera not responding\u2026", "bad")
             elif s.get("light") == "dark":

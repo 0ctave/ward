@@ -67,14 +67,14 @@ PASS_TIMEOUT_S = 15.0                # then move on with what was measured
 # there and derives the arrow from current→target, so left/right can never be mixed up. Display
 # yaw < 0 = the user turns to THEIR left (matches the enrollment hint the user already likes).
 SETUP_POSES = [
-    ("C/level", "centre", "Look here",      (0.0, 0.0)),
-    ("C/up",    "up",     "Look up",        (0.0, 15.0)),
-    ("C/down",  "down",   "Look down",      (0.0, -18.0)),
-    ("L1/level","left",   "Turn left",      (-20.0, 0.0)),
-    ("R1/level","right",  "Turn right",     (20.0, 0.0)),
-    ("C/close", "closer", "Lean in",        (0.0, 0.0)),
-    ("C/back",  "away",   "Lean back",      (0.0, 0.0)),
-    ("C/level2","light",  "Change the light", (0.0, 0.0)),
+    ("C/level", "centre", "Look here",      (0.0,   0.0)),
+    ("C/up",    "up",     "Look up",        (0.0,  18.0)),    # was +15 — deeper so an off-angle look-up matches
+    ("C/down",  "down",   "Look down",      (0.0, -24.0)),    # was -18 — people look down at a laptop; go further
+    ("L1/level","left",   "Turn left",      (-28.0, 0.0)),    # was -20 — a real turn, still below the dlib ~30-35° knee
+    ("R1/level","right",  "Turn right",     (28.0,  0.0)),    # was +20
+    ("C/close", "closer", "Lean in — fill the circle",   (0.0, 0.0)),
+    ("C/back",  "away",   "Lean back",                        (0.0, 0.0)),
+    ("C/level2","light",  "Change your light — lamp on/off, or turn to a window", (0.0, 0.0)),
 ]
 CONDITION_POSES = [p for p in SETUP_POSES if p[1] in ("centre", "down", "left", "right")]   # glasses/headset: 4 short passes
 
@@ -363,7 +363,7 @@ def refresh(st) -> dict:
     return out
 
 
-POSE_TOLERANCE_DEG = 12.0           # a frame belongs to a pose only once the head is this close to the target
+POSE_TOLERANCE_DEG = 8.0            # arrival band per axis: a frame belongs to a pose only once the head is this close
 DIRECTIONAL_CUES = ("centre", "up", "down", "left", "right")
 
 
@@ -372,11 +372,13 @@ LIGHT_PASS_MIN_S = 4.0               # the "change the light" pass stays open lo
 
 
 def pose_tolerance(target) -> tuple[float, float]:
-    """Per-axis tolerance around a display-space target: POSE_TOLERANCE_DEG, but never more than
-    60 % of the target's own offset — a 15° "look up" with 12° of slack accepted a level head
-    (pitch 3°). Never below 6°, which is the pose estimator's own noise."""
-    return tuple(max(6.0, min(POSE_TOLERANCE_DEG, 0.6 * abs(v))) if abs(v) > 1e-6 else POSE_TOLERANCE_DEG
-                 for v in target)
+    """Flat per-axis arrival band around a display-space target. With the deeper SETUP_POSES
+    targets a resting head can no longer satisfy an angular pose (frontal vs ±28 yaw = 28° >> 8;
+    level pitch ≈ -4 vs +18 = 22° >> 8), so the old 0.6*|target| guard — which let a 15° look-up
+    be satisfied by a level head, and let the user stop at ~40 % of the turn — is no longer needed.
+    8° sits above the pose estimator's own ~±4° noise, and stays above the neutral head's pitch
+    (≈ -4°) so the centre pose still accepts a level head (6° would make it flaky)."""
+    return (POSE_TOLERANCE_DEG, POSE_TOLERANCE_DEG)
 
 
 def pose_ok(pose, target) -> bool:
