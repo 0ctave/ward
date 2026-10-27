@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Faster, less fussy enrollment hold
+- Each pose fills (and the "Hold still…" cue clears) sooner: the per-pose usable-sample target
+  drops from 12 to **9** for the guided sweep and **8** for `--style ring` (the ring pools its
+  honest held-out gate across 12 poses, so each one can hold fewer). Both still pool 24 held-out
+  frames per spectrum and keep a 4-sample-per-pose model, so the measured gate is unchanged — the
+  hold per pose is ~25 % shorter (guided) / ~33 % shorter (ring).
+- The pose arrival band widens 8° → **10°**, so samples start banking while the head is still
+  settling instead of only after a dead-stop; still well above the estimator's ±4° noise and below
+  the 18° nearest inter-pose gap. The arrow's overshoot-reversal is now a fixed ~13.6° of overshoot
+  (band-independent), so widening the band didn't push the reversal point out with it.
+
 ## 0.4.0 — 2026-10-25
 
 ### Experimental: segmented coverage-ring enrollment

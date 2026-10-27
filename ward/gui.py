@@ -703,7 +703,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                "prev_box": None, "fps_t": time.monotonic(), "fps_n": 0, "fps": 0.0, "emit_t": 0.0,
                "counted_t": 0.0, "ready_since": None, "intro_t0": None}
     NEEDN = need or cal.NEED_FRAMES
-    NEED_S = min(cal.NEED_SAMPLES, NEEDN)               # tests pass a small `need` to finish quickly
+    NEED_S = min(cal.RING_NEED_SAMPLES if ring_mode else cal.NEED_SAMPLES, NEEDN)   # ring pools the gate over more poses, so each holds fewer; tests pass a small `need`
     TIMEOUT = timeout or cal.PASS_TIMEOUT_S
 
     def satisfied(pose_disp, cue, face_w):
