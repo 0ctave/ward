@@ -193,6 +193,7 @@ class LiveEvaluator:
                 wd[s], wthr[s] = w, thr
             else:
                 raw[s] = None; label[s] = ""; wd[s] = None; wthr[s] = None
+        self.engine._shadow_done = None   # each lab sample is an independent attempt: don't freeze the first shadow vote (authenticate resets this per attempt; the lab reuses one Engine across samples)
         votes_v = self.engine._liveness(st, obs, self.devices, live) if any(faces.values()) else []
         votes = [(v.voter, v.result.value, v.reason) for v in votes_v]
         # pose of the primary face (display convention not needed here: camera angles)

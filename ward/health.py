@@ -91,7 +91,7 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
             ms = int(cfg["liveness"].get("shadow_toggle_ms", -1))
             if ms < 0:
                 sec.items.append(Item("warn", "switch speed not benchmarked — the shadow-test liveness voter is off", ["emitter", "toggle-bench"], "Benchmark"))
-            elif ms <= 150:
+            elif ms <= emitmod.SHADOW_MAX_LATENCY_MS:
                 sec.items.append(Item("ok", f"switch {ms} ms → shadow test active"))
             else:
                 sec.items.append(Item("warn", f"switch {ms} ms — too slow for the shadow test"))
