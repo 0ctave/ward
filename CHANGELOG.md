@@ -15,6 +15,17 @@
   defaults to installing ArcFace when neither embedder is present, and `doctor` reports a missing
   dlib embedder as a real **failure** (with a fix) instead of a note.
 
+### PAM hardening
+- The keyring unseal (which materialises your cleartext login password for `pam_gnome_keyring` /
+  `pam_kwallet`) now runs **only for login/unlock services** (`gdm-password`, `sddm`, `lightdm`,
+  `login`, `greetd`, `kde`) — never for `sudo`/`su`/`polkit`, which don't unlock a keyring and so
+  never need the password materialised.
+- `ward pam enable` now **refuses to silently bypass a second factor**: if a required/requisite 2FA
+  module (`pam_u2f`, `pam_google_authenticator`, `pam_yubico`, …) sits after where the ward line
+  goes, its success-jump would skip it, so enable stops with a clear message (use `--force` to
+  override). (`pam_faillock` is not treated as a second factor — its authfail line only acts on
+  failure, and it's in Fedora's default stack.)
+
 ### Faster, less fussy enrollment hold
 - Each pose fills (and the "Hold still…" cue clears) sooner: the per-pose usable-sample target
   drops from 12 to **9** for the guided sweep and **8** for `--style ring` (the ring pools its
