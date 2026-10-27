@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Manager app: clearer setup, safer first run
+- The setup wizard's **anti-spoof** step now only appears when there's a colour camera (the CNN is
+  colour-only and abstains on IR), and it reflects the current state — a satisfied "already on" step
+  instead of an actionable "Turn on" when it's already enabled (the default). Matches the terminal
+  `ward setup`.
+- **Cancelling the admin password prompt** during an in-app enroll/calibrate now shows a toast and
+  reveals the console, instead of silently flipping back (it used to look like a dead button).
+- The Overview **On switch can't enable face unlock with nobody enrolled**: on first run it's
+  disabled so "Start setup" is the single entry point, and toggling it on with no enrolled face
+  routes through the wizard (which registers first) rather than wiring up a doomed face step.
+
 ### Faster, less fussy enrollment hold
 - Each pose fills (and the "Hold still…" cue clears) sooner: the per-pose usable-sample target
   drops from 12 to **9** for the guided sweep and **8** for `--style ring` (the ring pools its

@@ -37,8 +37,10 @@ def setup_steps(report: dict) -> list[dict]:
     The terminal counterpart is `cli.setup.cmd_setup` (the same chain, run interactively); the two
     are separate because one drives `ward` subprocesses and the other prompts inline — keep them in
     step. Both delegate to the SAME `ward …` commands, which stay the single implementation."""
+    report = report or {}
     profile = report.get("profile")
     has_ir = profile in ("A", "B")
+    has_rgb = profile in ("A", "C")                    # the anti-spoof CNN is colour-only (grey/IR abstain)
     steps = [{"key": "cameras", "title": "Cameras",
               "desc": "Detect the infrared and colour cameras and write the pair (stable USB ids).",
               "argv": ["setup", "--cameras-only"], "run_label": "Detect"}]
@@ -48,10 +50,17 @@ def setup_steps(report: dict) -> list[dict]:
                               "shadow liveness test. Sit in front of the camera and keep still.",
                       "argv": ["emitter", "probe"], "then_argv": ["emitter", "toggle-bench"],
                       "run_label": "Probe", "optional": True})
-    steps.append({"key": "antispoof", "title": "Anti-spoof",
-                  "desc": "Turn on the anti-spoof CNN — a second liveness check on the colour camera that abstains "
-                          "when unsure and never blocks a real face.",
-                  "argv": ["antispoof", "on"], "run_label": "Turn on", "optional": True})
+    if has_rgb:                                        # no colour camera → the CNN can never contribute a vote
+        anti_on = bool(report.get("cfg", {}).get("liveness", {}).get("antispoof_cnn", True))
+        if anti_on:
+            steps.append({"key": "antispoof", "title": "Anti-spoof", "satisfied": True, "run_label": "Done",
+                          "desc": "The anti-spoof CNN is already on — a second liveness check on the colour camera "
+                                  "that abstains when unsure and never blocks a real face. Nothing to do here."})
+        else:
+            steps.append({"key": "antispoof", "title": "Anti-spoof",
+                          "desc": "Turn on the anti-spoof CNN — a second liveness check on the colour camera that "
+                                  "abstains when unsure and never blocks a real face.",
+                          "argv": ["antispoof", "on"], "run_label": "Turn on", "optional": True})
     steps.append({"key": "register", "title": "Register your face",
                   "desc": "One guided sweep, right here in this window: follow the ring and the arrow through each "
                           "pose. The same sweep sets the recognition gate from your own frames.",
