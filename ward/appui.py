@@ -503,8 +503,11 @@ def cue_direction(cue, pose=None, target=None, prev=None):
         ("yaw" if err("yaw") >= err("pitch") else "pitch")
     other = "pitch" if main == "yaw" else "yaw"
     opposite = {"left": "right", "right": "left", "up": "down", "down": "up"}
-    # reversing the pass's own direction (an overshoot) needs clearer evidence than continuing it
-    need = 1.7 if along(main) == opposite.get(cue) else 1.0      # 1.7 × 8° ≈ 13.6° ≈ 3.4σ of the ±4° jitter: a 3σ spike near the target can't reverse the arrow
+    # reversing the pass's own direction (an overshoot) needs clearer evidence than continuing it;
+    # that evidence is a fixed ~13.6° of overshoot (≈ 3.4σ of the ±4° jitter, so a 3σ spike near the
+    # target can't reverse the arrow), independent of the arrival band so widening the band does not
+    # push the reversal point out with it.
+    need = (13.6 / ty) if along(main) == opposite.get(cue) else 1.0
     if err(main) > need:
         return along(main)
     if err(other) > 1.3:                                       # stricter: the other axis is a nudge

@@ -347,6 +347,11 @@ class Holdout(unittest.TestCase):
         res2 = cal.derive_from_holdout({"ir": rows_ir[:4]})
         self.assertNotIn("ir", res2.gate); self.assertTrue(any("not enough" in w for w in res2.warnings))
 
+    def test_need_samples_floor(self):
+        # ring pools the gate over more poses so each holds fewer; neither style drops below the model-4 floor
+        self.assertLessEqual(cal.RING_NEED_SAMPLES, cal.NEED_SAMPLES)
+        self.assertGreaterEqual(cal.RING_NEED_SAMPLES, 6)
+
     def test_setup_poses_cover_the_grid_and_target_signs(self):
         keys = [p[1] for p in cal.SETUP_POSES]
         self.assertEqual(keys[:5], ["centre", "up", "down", "left", "right"])

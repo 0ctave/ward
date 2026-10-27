@@ -380,21 +380,23 @@ def refresh(st) -> dict:
     return out
 
 
-POSE_TOLERANCE_DEG = 8.0            # arrival band per axis: a frame belongs to a pose only once the head is this close
+POSE_TOLERANCE_DEG = 10.0           # arrival band per axis: samples start counting ~2° sooner so a pose fills faster and feels less fussy; still >> estimator ±4° noise and < the 18° nearest inter-pose gap
 DIRECTIONAL_CUES = ("centre", "up", "down", "left", "right", "upleft", "upright", "downleft", "downright")
 
 
-NEED_SAMPLES = 12                    # usable (pose-true, lit) embeddings a setup pass collects: ≤6 model + 4 held out
+NEED_SAMPLES = 9                     # usable embeddings a GUIDED (8-pose) pass collects: 4 model + 3 held out → pools 24/spectrum
+RING_NEED_SAMPLES = 8                # ring (12 poses) feeds the SAME pooled gate from more poses, so each holds less: 4 model + 2 held out → pools 24/spectrum
 LIGHT_PASS_MIN_S = 4.0               # the "change the light" pass stays open long enough to actually do it
 
 
 def pose_tolerance(target) -> tuple[float, float]:
     """Flat per-axis arrival band around a display-space target. With the deeper SETUP_POSES
-    targets a resting head can no longer satisfy an angular pose (frontal vs ±28 yaw = 28° >> 8;
-    level pitch ≈ -4 vs +18 = 22° >> 8), so the old 0.6*|target| guard — which let a 15° look-up
+    targets a resting head can no longer satisfy an angular pose (frontal vs ±28 yaw = 28° >> 10;
+    level pitch ≈ -4 vs +18 = 22° >> 10), so the old 0.6*|target| guard — which let a 15° look-up
     be satisfied by a level head, and let the user stop at ~40 % of the turn — is no longer needed.
-    8° sits above the pose estimator's own ~±4° noise, and stays above the neutral head's pitch
-    (≈ -4°) so the centre pose still accepts a level head (6° would make it flaky)."""
+    10° sits above the pose estimator's own ~±4° noise and below the 18° nearest inter-pose gap, lets
+    samples start banking while the head is still settling (less fussy), and stays above the neutral
+    head's pitch (≈ -4°) so the centre pose still accepts a level head."""
     return (POSE_TOLERANCE_DEG, POSE_TOLERANCE_DEG)
 
 
