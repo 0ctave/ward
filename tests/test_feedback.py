@@ -143,5 +143,45 @@ class Notification(unittest.TestCase):
             self.assertEqual(uid, os.getuid())
 
 
+class SudoTerminal(unittest.TestCase):
+    """The native PAM module nulls the helper's stderr, so under sudo feedback must find the
+    caller's terminal via PAM_TTY (normalised) or the controlling /dev/tty."""
+
+    def _non_tty(self):
+        s = io.StringIO(); s.isatty = lambda: False; return s
+
+    def test_pam_tty_is_normalised_and_used(self):
+        import unittest.mock as mock
+        term = _Tty(); opened = []
+        def fake_open(path, *a, **k):
+            opened.append(path); return term
+        with mock.patch("builtins.open", fake_open):
+            fb = feedback.Feedback("octave", err=self._non_tty(),
+                                   env={"PAM_SERVICE": "sudo", "PAM_TTY": "pts/5", "PAM_TYPE": "auth", "NO_COLOR": "1"})
+        self.assertTrue(fb.tty)                      # found a terminal
+        self.assertEqual(opened[0], "/dev/pts/5")    # "pts/5" → "/dev/pts/5"
+        self.assertIs(fb.err, term)
+
+    def test_falls_back_to_dev_tty(self):
+        import unittest.mock as mock
+        term = _Tty(); tried = []
+        def fake_open(path, *a, **k):
+            tried.append(path)
+            if path == "/dev/tty":
+                return term
+            raise OSError("nope")
+        with mock.patch("builtins.open", fake_open):
+            fb = feedback.Feedback("octave", err=self._non_tty(),
+                                   env={"PAM_SERVICE": "sudo", "PAM_TYPE": "auth", "NO_COLOR": "1"})
+        self.assertTrue(fb.tty); self.assertEqual(tried[-1], "/dev/tty")
+
+    def test_login_service_never_grabs_a_terminal(self):   # gdm must not get the spinner
+        import unittest.mock as mock
+        with mock.patch("builtins.open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not open a tty"))):
+            fb = feedback.Feedback("octave", err=self._non_tty(),
+                                   env={"PAM_SERVICE": "gdm-password", "PAM_TTY": "/dev/tty1", "PAM_TYPE": "auth"})
+        self.assertFalse(fb.tty)
+
+
 if __name__ == "__main__":
     unittest.main()

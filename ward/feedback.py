@@ -122,20 +122,26 @@ class Feedback:
         self.service = self.env.get("PAM_SERVICE", "")
         self.tty = (not verbose) and self._isatty(self.err)
         self._own_tty = None
-        # Under sudo, pam_exec's child has no terminal on stderr (observed: the PAM lines were
-        # printed instead of the spinner). PAM_TTY names the caller's pseudo-terminal; write the
-        # spinner there — only for terminal services and only on a /dev/pts device, never on a VT
-        # (gdm sets PAM_TTY to a console or display name).
-        pam_tty = self.env.get("PAM_TTY", "")
-        if not self.tty and not verbose and self.service in TERMINAL_SERVICES and pam_tty.startswith("/dev/pts/"):
-            try:
-                f = open(pam_tty, "w")
+        # Under sudo the native PAM module sends the helper's stderr to /dev/null, so the spinner
+        # has nowhere to go (observed: nothing showed at all). Find the caller's terminal and write
+        # there. Only for TERMINAL_SERVICES (sudo/su/doas) — a login greeter is never one, so this
+        # never writes to gdm's display. Try PAM_TTY (normalised: sudo may give "pts/3" without the
+        # /dev prefix), then the process's controlling terminal (/dev/tty).
+        if not self.tty and not verbose and self.service in TERMINAL_SERVICES:
+            pam_tty = self.env.get("PAM_TTY", "")
+            candidates = []
+            if pam_tty:
+                candidates.append(pam_tty if pam_tty.startswith("/") else "/dev/" + pam_tty)
+            candidates.append("/dev/tty")                        # the controlling terminal, if any
+            for cand in candidates:
+                try:
+                    f = open(cand, "w")
+                except OSError:
+                    continue
                 if f.isatty():
                     self._own_tty = f; self.err = f; self.tty = True
-                else:
-                    f.close()
-            except OSError:
-                pass
+                    break
+                f.close()
         self.pam = (not self.tty) and "PAM_TYPE" in self.env
         self.colour = self.tty and self.env.get("NO_COLOR") is None
         self.spinner: _Spinner | None = None

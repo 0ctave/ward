@@ -22,6 +22,21 @@ class Helpers(unittest.TestCase):
         self.assertIn("glasses", app.CONDITIONS)
 
 
+class DoctorAuthUser(unittest.TestCase):
+    """doctor pre-flights the user resolution: PAM on + the login user unenrolled → a clear warning
+    (the 'sudo authenticated root → no-models' class of bug, caught before the password prompt)."""
+
+    def test_warns_when_pam_on_but_human_unenrolled(self):
+        from unittest import mock
+        from ward import health
+        from ward.engine import pam as pammod
+        with mock.patch.object(pammod, "status", lambda: {"enabled": True, "native": True, "current": True, "howdy": False}), \
+             mock.patch("ward.client._human_user", lambda: "nobody-xyz"):
+            rep = health.collect(user="nobody-xyz")
+        access = next(s for s in rep["sections"] if s.key == "access")
+        self.assertTrue(any("no enrolled face" in i.text and i.fix == ["enroll", "--fresh"] for i in access.items))
+
+
 class Health(unittest.TestCase):
     def test_collect_is_structured_and_never_raises(self):
         rep = health.collect(user="nobody-here", probe_cameras=False)

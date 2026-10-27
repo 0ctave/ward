@@ -184,6 +184,24 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
         sec.items.append(Item("warn", "PAM line is from an older version", ["pam", "enable"], "Upgrade"))
     elif ps["enabled"]:
         sec.items.append(Item("ok", "face unlock enabled for login, sudo and polkit" + (" (native module)" if ps.get("native") else " (pam_exec)")))
+        # Pre-flight the user resolution: sudo/login authenticate the human (the login uid), and an
+        # unlock only works if THAT user is enrolled. Catches the "sudo authenticated root → no-models"
+        # class of bug before the user hits it at a password prompt.
+        from .client import _human_user
+        human = _human_user()
+        if human and human != user:
+            sec.items.append(Item("info", f"sudo and login will authenticate {human} (the logged-in user)"))
+        try:
+            hstore = storemod.load(human, recognise.DLIB_NAME if rk != "arcface" else f"arcface:{recognise.installed_variant() or 'unknown'}")
+            if not hstore.models:
+                sec.items.append(Item("warn", f"PAM is on but {human} has no enrolled face — sudo/login fall straight to the password",
+                                      ["enroll", "--fresh"], "Enrol"))
+            else:
+                sec.items.append(Item("ok", f"sudo and login unlock as {human} ({len(hstore.models)} models enrolled)"))
+        except PermissionError:
+            pass
+        except storemod.StoreError:
+            pass
     else:
         sec.items.append(Item("fail", "face unlock NOT enabled in PAM", ["pam", "enable"], "Enable"))
     if ps.get("howdy"):
