@@ -80,7 +80,8 @@ flow** ("look straight… look down… turn left…"). The camera has to be on *
 [Usage → Headless](usage.md#headless--ssh).
 
 Either way it finishes by testing a real unlock (`sudo -k && sudo true`). Howdy is not required and
-coexists.
+coexists — if it's installed, see **[Migrating from Howdy](migrating-from-howdy.md)**, which Ward can
+retire for you during setup.
 
 ## Distro packages
 
