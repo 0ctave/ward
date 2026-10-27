@@ -78,6 +78,23 @@ SETUP_POSES = [
 ]
 CONDITION_POSES = [p for p in SETUP_POSES if p[1] in ("centre", "down", "left", "right")]   # glasses/headset: 4 short passes
 
+# The segmented coverage ring (`ward enroll --style ring`): same capture/build backend, Face-ID-style
+# visuals. An ellipse of eight directions — yaw ±28, up +18 / down −24, the same reliable extents as
+# SETUP_POSES — plus the frontal hub, then the shared lean/light tail. Display space (yaw < 0 = the
+# user's left, pitch > 0 = up), diagonal values are 0.707 × the axis radius. Every cue is in
+# DIRECTIONAL_CUES so each segment's frames are pose-filtered to it; labels carry no "2" (build fold).
+RING_POSES = [
+    ("R/centre", "centre",    "Look here",             (0.0,   0.0)),
+    ("R/e",      "right",     "Turn right",            (28.0,  0.0)),
+    ("R/ne",     "upright",   "Up and to the right",   (19.8,  12.7)),
+    ("R/n",      "up",        "Look up",               (0.0,   18.0)),
+    ("R/nw",     "upleft",    "Up and to the left",    (-19.8, 12.7)),
+    ("R/w",      "left",      "Turn left",             (-28.0, 0.0)),
+    ("R/sw",     "downleft",  "Down and to the left",  (-19.8, -17.0)),
+    ("R/s",      "down",      "Look down",             (0.0,  -24.0)),
+    ("R/se",     "downright", "Down and to the right", (19.8,  -17.0)),
+] + SETUP_POSES[-3:]       # the shared lean-in / lean-back / change-light tail
+
 
 def satisfied(cond: dict | None, yaw, pitch, roll, face_w, baseline_w) -> bool | None:
     """Does this frame meet the pass's condition? None = pose unknown (counts as satisfied so the
@@ -364,7 +381,7 @@ def refresh(st) -> dict:
 
 
 POSE_TOLERANCE_DEG = 8.0            # arrival band per axis: a frame belongs to a pose only once the head is this close
-DIRECTIONAL_CUES = ("centre", "up", "down", "left", "right")
+DIRECTIONAL_CUES = ("centre", "up", "down", "left", "right", "upleft", "upright", "downleft", "downright")
 
 
 NEED_SAMPLES = 12                    # usable (pose-true, lit) embeddings a setup pass collects: ≤6 model + 4 held out

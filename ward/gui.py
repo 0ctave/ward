@@ -639,7 +639,7 @@ class _LiveSample:
 
 def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict, mirror: bool = True,
                  need: int | None = None, timeout: float | None = None,
-                 identity: str = "", condition: str = "", poses=None):
+                 identity: str = "", condition: str = "", poses=None, style: str = "guided"):
     """ONE guided window that both ENROLLS and CALIBRATES (roadmap: fused setup). For each pose the
     window guides the head to a target (chase-the-dot with a derived arrow, so left/right is always
     right in the mirrored preview), captures embeddings in the `_Sampler` PROCESS, and keeps them
@@ -651,6 +651,14 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
     from collections import defaultdict, deque
     sgn = -1.0 if mirror else 1.0
     poses = list(poses) if poses else cal.SETUP_POSES
+    # segmented-coverage-ring visuals (style="ring"): the angular poses OTHER than the frontal hub
+    # are ring segments, placed by their display target; the hub (centre) and the lean/light tail are
+    # not. Computed once; the per-frame snapshot says which segments are done and which is active.
+    ring_mode = style == "ring"
+    seg_idx = [i for i, p in enumerate(poses)
+               if p[1] in cal.DIRECTIONAL_CUES and tuple(_target_display(p[3], sgn)) != (0.0, 0.0)]
+    ring_segs = [list(_target_display(poses[i][3], sgn)) for i in seg_idx]
+    centre_i = next((i for i, p in enumerate(poses) if p[1] == "centre"), None)
     primary = "ir" if "ir" in cap.spectra else "rgb"
     others = [sp for sp in cap.spectra if sp != primary]
     models.sp68
@@ -873,6 +881,12 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                      "cue": cue, "pose": pose_disp, "target": _target_display(target, sgn), "progress": progress,
                      "ok": ok, "hits": st_data["hits"], "need": NEEDN, "elapsed": elapsed,
                      "counted": (now - st_data["counted_t"]) < 0.25, "small": small})
+        if ring_mode:
+            cur = st_data["i"]
+            base.update({"style": "ring", "ring_segs": ring_segs,
+                         "ring_done": [seg_idx[k] < cur for k in range(len(seg_idx))],
+                         "ring_active": seg_idx.index(cur) if cur in seg_idx else None,
+                         "hub_done": centre_i is not None and cur > centre_i})
         if done or elapsed >= TIMEOUT or wall >= 3 * TIMEOUT:
             base["pass_done"] = True
             advance()
@@ -966,6 +980,17 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         # cancelled during the optional glasses sweep: the finished main enrolment still stands
         return {"result": main["result"], "added": main["added"], "failed": ""}
     return {"result": st_data.get("result"), "added": st_data.get("added", 0), "failed": st_data.get("failed", "")}
+
+
+def ring_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict, mirror: bool = True,
+               need: int | None = None, timeout: float | None = None, identity: str = "", condition: str = ""):
+    """`ward enroll --style ring`: the same enrol+calibrate window as `guided_setup`, driven through
+    the segmented coverage ring (`calibration.RING_POSES`) with the Face-ID-style overlay. A thin
+    wrapper so the default path and all its tests are untouched — the capture → sampler →
+    build_from_captures backend is shared."""
+    from .engine import calibration as cal
+    return guided_setup(st, cap, models, cams, rec, mirror, need, timeout, identity, condition,
+                        poses=cal.RING_POSES, style="ring")
 
 
 def _target_display(target, sgn):

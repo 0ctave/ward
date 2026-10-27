@@ -175,7 +175,7 @@ class FakeSampler:
 
 
 def run_setup(world: World, max_s: float = 240.0, condition: str = "", poses=None, st=None,
-              sampler_cls=None, cap_spectra=("ir",), need=None, timeout=None):
+              sampler_cls=None, cap_spectra=("ir",), need=None, timeout=None, style="guided"):
     """Run guided_setup against `world`. Returns (result, snapshots, store)."""
     clock = Clock()
     world.t0 = clock()
@@ -214,5 +214,5 @@ def run_setup(world: World, max_s: float = 240.0, condition: str = "", poses=Non
         es.enter_context(mock.patch("ward.engine.emitter.instructions_for", lambda *a, **k: []))
         es.enter_context(mock.patch.object(gui, "_ir_device", lambda cap: ""))
         res = gui.guided_setup(st, cap, models, cams, {"fusion_frames": 4}, condition=condition,
-                               poses=poses, need=need, timeout=timeout)
+                               poses=poses, need=need, timeout=timeout, style=style)
     return res, list(screen.snaps), st
