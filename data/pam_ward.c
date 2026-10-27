@@ -82,6 +82,9 @@ static void info(pam_handle_t *pamh, const char *text) {
 }
 
 static void parse_opts(struct opts *o, int argc, const char **argv) {
+    /* 8 s default sits above the helper's own cascade (engine hard_timeout ~4 s < daemon read ~8 s
+     * < ward-auth process backstop ~12 s, see ward/client.py); if hard_timeout_ms is raised past
+     * ~4 s, pass timeout=N here to match. On timeout we fall through to the password (fail open). */
     o->helper = DEFAULT_HELPER; o->creds_dir = DEFAULT_CREDS_DIR; o->creds = DEFAULT_CREDS; o->timeout = 8; o->debug = 0;
     for (int i = 0; i < argc; i++) {
         if (!strncmp(argv[i], "helper=", 7)) o->helper = argv[i] + 7;
@@ -131,6 +134,7 @@ static int run_helper_(pam_handle_t *pamh, const struct opts *o, const char *use
          * polkit agent helper that is the unprivileged user's (PYTHONHOME, HOME → user site…) */
         clearenv();
         setenv("LANG", "C.UTF-8", 1);
+        /* The PAM_* subset of the canonical forward list (ward/daemon.py PAM_ENV); keep in step. */
         setenv("PAM_USER", user, 1);
         setenv("PAM_TYPE", "auth", 1);
         setenv("PAM_SERVICE", item_str(pamh, PAM_SERVICE), 1);

@@ -17,7 +17,7 @@ import gi
 gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-from . import appui, attempts as att, health, manage  # noqa: E402,F401
+from . import appdata, appui, attempts as att, health  # noqa: E402,F401
 from .app import (  # noqa: E402,F401
     CAMERA_CMDS, CONDITIONS, ENROL, PROFILE_TEXT, child_env, describe_stats, setup_steps, ward_cmd, priv_cmd, strip_ansi,
 )
@@ -180,7 +180,7 @@ class App(Adw.Application):
         super().__init__(application_id="org.ward.App")
         self.connect("activate", self.on_activate)
         self.report = None
-        self.people = None                 # None = not loaded (needs admin), else manage.people() records
+        self.people = None                 # None = not loaded (needs admin), else appdata.people() records
         self._groups = {}
 
     # ---- window
@@ -227,7 +227,7 @@ class App(Adw.Application):
                 rep = health.collect(probe_cameras=False)
             except Exception as e:
                 rep = {"sections": [health.Section("error", "Error", [health.Item("fail", str(e))])], "identities": [], "conditions": [],
-                       "policy": "", "attempts": {}, "user": manage.invoking_user(), "profile": "-", "calibrated": None, "root": ROOT}
+                       "policy": "", "attempts": {}, "user": appdata.invoking_user(), "profile": "-", "calibrated": None, "root": ROOT}
             try:
                 rep["rows"] = att.read(cfgmod.LOG_PATH, 500)
             except Exception:
@@ -551,7 +551,7 @@ class App(Adw.Application):
 
     def _overview(self, rep):
         p = self.pages["overview"]; self._clear(p)
-        rel = manage.reliability(rep["rows"], self._n_people())
+        rel = appdata.reliability(rep["rows"], self._n_people())
         on = rep.get("pam")
         if not on:                                   # not set up yet → lead straight into the guided wizard
             g0 = self._group(p, "Get started", "Set up face unlock in a few guided steps — right here in this window.")
@@ -638,7 +638,7 @@ class App(Adw.Application):
                       "list-add-symbolic", "Add…",
                       lambda: self.ask_text("Register another person", f"They will be able to unlock {user}'s account. Sit them in front of the camera after Continue.",
                                             "Name", lambda n: self.run_cmd(["enroll", "--identity", n], people=True),
-                                            validate=lambda t: manage.valid_name(t, user) or ("already registered" if any(t == x["name"] for x in self.people) else "")),
+                                            validate=lambda t: appdata.valid_name(t, user) or ("already registered" if any(t == x["name"] for x in self.people) else "")),
                       style="suggested-action")
         g = self._group(p, "Thresholds")
         self._row(g, "Recalibrate", f"calibrated {getattr(self, 'calibrated', '') or 'at registration'} · eight guided passes re-measure your real distances",
@@ -647,7 +647,7 @@ class App(Adw.Application):
     def _reliability(self, rep):
         p = self.pages["reliability"]; self._clear(p)
         rows = rep["rows"]
-        rel = manage.reliability(rows, self._n_people())
+        rel = appdata.reliability(rows, self._n_people())
         text, cls = VERDICT[rel["verdict"]]
         g = self._group(p, "How well it works", "From the last 50 attempts in the log. Every attempt falls back to the password on failure.")
         pill = appui._pill(text, cls); pill.set_valign(Gtk.Align.CENTER)

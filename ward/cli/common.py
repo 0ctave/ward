@@ -33,5 +33,16 @@ def need_root(what: str) -> None:
 
 
 def real_user(args) -> str:
-    from ..manage import invoking_user
-    return getattr(args, "user", None) or os.environ.get("PAM_USER") or invoking_user()
+    """Whose store/config a command acts on. An explicit --user wins; otherwise resolve the human
+    behind this process — never the root *target* of an elevation. PAM_USER can come back as 'root'
+    under sudo (the auth path has the same trap, see client._human_user), so a root PAM_USER is
+    ignored and invoking_user() resolves the sudo/pkexec caller (falling back to the kernel login
+    uid)."""
+    override = getattr(args, "user", None)
+    if override:
+        return override
+    pam = os.environ.get("PAM_USER")
+    if pam and pam != "root":                 # a login / polkit / `su bob` names a real non-root user
+        return pam
+    from ..appdata import invoking_user
+    return invoking_user()

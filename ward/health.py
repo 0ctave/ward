@@ -43,7 +43,7 @@ def profile_of(cfg: dict) -> str:
 
 def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: bool = False) -> dict:
     cfg = cfg or cfgmod.load()
-    from .manage import invoking_user
+    from .appdata import invoking_user
     user = user or invoking_user()
     out: dict = {"user": user, "profile": profile_of(cfg), "sections": [], "identities": [], "conditions": [],
                  "policy": "", "calibrated": None, "attempts": {}, "root": os.geteuid() == 0}

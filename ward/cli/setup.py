@@ -15,7 +15,10 @@ from .manage import cmd_keyring
 
 # ------------------------------------------------------------------ setup ----
 def cmd_setup(args) -> int:
-    """The whole chain in one go: cameras → emitter → recogniser → register (window) → keyring → PAM → self-check."""
+    """The whole chain in one go: cameras → emitter → recogniser → register (window) → keyring → PAM → self-check.
+
+    The in-app wizard's declarative version of this chain is `app.setup_steps`; both drive the same
+    `ward …` commands, so keep the two in step when a step is added or reordered."""
     need_root("setup")
     ui.banner(f"ward {__version__} · setup", "guided and reversible — config is rewritten, models are yours, PAM is backed up")
     from .enroll import _display_available

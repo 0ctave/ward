@@ -15,6 +15,20 @@ import sys
 from types import SimpleNamespace
 
 CONNECT_TIMEOUT = 0.15
+# One cascade of timeouts, all measured from the engine's own hard_timeout (config timing.*):
+#   engine hard_timeout  <  daemon socket read (+DAEMON_READ_MARGIN)  <  process backstop alarm
+#   (+PROC_BACKSTOP_MARGIN). At the 4 s default that is 4 < 8 < 12, as before, but now a change to
+# hard_timeout_ms moves all of them together instead of leaving three hand-picked numbers to drift.
+DAEMON_READ_MARGIN_S = 4      # the per-attempt socket read lets the daemon run its hard timeout + this
+PROC_BACKSTOP_MARGIN_S = 8    # the SIGALRM that kills a wedged ward-auth sits above the socket read
+
+
+def _hard_timeout_s() -> float:
+    try:
+        from .engine import config as cfgmod
+        return int(cfgmod.load()["timing"]["hard_timeout_ms"]) / 1000
+    except Exception:
+        return 4.0
 
 
 def _vote(d: dict):
@@ -40,12 +54,12 @@ def via_daemon(user: str, verbose: bool = False, path: str | None = None, fb=Non
     if s is None:
         return None
     started = False                                        # bound before any I/O: the except reads it
+    from .daemon import PAM_ENV                             # one canonical list of forwarded vars
     with s:
         try:
             s.settimeout(timeout)
             f = s.makefile("rwb", buffering=0)
-            env = {k: os.environ[k] for k in ("PAM_SERVICE", "PAM_TTY", "PAM_TYPE", "PAM_RHOST", "PAM_RUSER", "PAM_USER",
-                                               "SSH_CONNECTION", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_ID") if k in os.environ}
+            env = {k: os.environ[k] for k in PAM_ENV if k in os.environ}
             f.write((json.dumps({"user": user, "env": env, "verbose": verbose}) + "\n").encode())
             for raw in f:
                 msg = json.loads(raw.decode())
@@ -74,7 +88,8 @@ def _loginuid() -> int | None:
     """The kernel audit login uid (/proc/self/loginuid): the uid of whoever logged in, set once at
     login and inherited through every `sudo`/`su`. None, or 0xffffffff, when it isn't set yet."""
     try:
-        return int(open("/proc/self/loginuid").read().strip())
+        with open("/proc/self/loginuid") as f:
+            return int(f.read().strip())
     except (OSError, ValueError):
         return None
 
@@ -106,8 +121,9 @@ def main(argv: list[str] | None = None) -> int:
     if plain and os.geteuid() == 0:
         verbose = bool(argv)
         user = _human_user()
+        hard = _hard_timeout_s()
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
-        signal.alarm(12)                                   # backstop: the kernel ends a wedged attempt
+        signal.alarm(int(hard + PROC_BACKSTOP_MARGIN_S))   # backstop: the kernel ends a wedged attempt
         try:
             from . import feedback
             beh = _behaviour()
@@ -118,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             if s is not None:
                 s.close()
                 fb.start()
-                out = via_daemon(user, verbose, fb=fb)
+                out = via_daemon(user, verbose, fb=fb, timeout=hard + DAEMON_READ_MARGIN_S)
                 if out is not None:
                     fb.finish(out)
                     if verbose:

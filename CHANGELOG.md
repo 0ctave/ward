@@ -2,6 +2,25 @@
 
 ## 0.4.0 — 2026-10-25
 
+### Coherence & robustness pass
+- Security defaults now match the docs: spoof **lockout is off by default** (`lockout_failures = 0`;
+  the password is always available, so a lockout only creates denial-of-service), and the
+  "two PASSes" language is honest — `balanced` accepts on a single liveness PASS when the other
+  voters abstain (the normal IR-only night-unlock case), so two-of-two is a soft ceiling, not a
+  gate. The `whitened` path defaults off everywhere (the engine no longer defaulted a missing key
+  to on) and is documented as experimental.
+- **Fail-open hardening:** the engine now claims the camera and emitter *inside* the try/finally,
+  so an error while setting up the stream always releases the device and the IR LED — a resident
+  daemon can no longer leak either until it is restarted.
+- **Less drift between layers:** one canonical list of forwarded PAM env vars (`daemon.PAM_ENV`,
+  imported by the client; the C module cross-references it); the daemon now round-trips the full
+  attempt `Outcome` (whitened distances, learned model, policy level) to the client; the fast-path
+  auth timeouts derive from one config value (`timing.hard_timeout_ms`) as a documented cascade;
+  and user resolution no longer trusts a root `PAM_USER` (it resolves the real human behind an
+  elevation, with a kernel-login-uid fallback).
+- **Rename:** `ward/manage.py` → `ward/appdata.py`, ending the confusing clash with
+  `ward/cli/manage.py`. No behaviour change.
+
 ### Clearer, wider-angle enrollment
 - The default `ward enroll` guided sweep now asks for **real head turns**. The four angular
   targets widened — yaw ±20° → **±28°**, look-up +15° → **+18°**, look-down −18° → **−24°** — and

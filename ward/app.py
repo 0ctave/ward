@@ -32,7 +32,11 @@ def setup_steps(report: dict) -> list[dict]:
     """The in-app setup wizard's ordered steps (GTK-free so it is unit-tested). Each step runs an
     existing `ward …` action through the app: `argv` (+ optional `then_argv`) into the console,
     `camera` through the in-app camera page, or `keyring` via a password dialog. `optional` steps
-    offer Skip; the emitter step only appears with an IR camera."""
+    offer Skip; the emitter step only appears with an IR camera.
+
+    The terminal counterpart is `cli.setup.cmd_setup` (the same chain, run interactively); the two
+    are separate because one drives `ward` subprocesses and the other prompts inline — keep them in
+    step. Both delegate to the SAME `ward …` commands, which stay the single implementation."""
     profile = report.get("profile")
     has_ir = profile in ("A", "B")
     steps = [{"key": "cameras", "title": "Cameras",
