@@ -9,7 +9,7 @@ Version:        0.4.0
 Release:        1%{?dist}
 Summary:        Reliable face unlock for login, sudo and polkit
 License:        MIT
-URL:            https://github.com/<you>/ward
+URL:            https://github.com/0ctave/ward
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc
