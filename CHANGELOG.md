@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Enrollment embeds the same frames auth does (accuracy)
+- Fixed a train/serve mismatch: unlock embedded a **brightness-normalised** crop while enrollment
+  embedded the **raw** frame, so models captured in dim/bright/night light (the "change the light"
+  and IR passes) could never be reproduced at unlock. Both paths now go through one shared
+  `brightness.embed_rgb` helper — identical for in-range frames (well-lit enrolments unchanged),
+  identically normalised for out-of-range ones. Re-enroll to rebuild the affected models.
+
+### Setup steers around the missing dlib embedder
+- On Debian/Ubuntu/Fedora `python3-dlib` isn't packaged and pip is not used, so the default
+  `recogniser=dlib` had no embedder and failed at the first frame. `ward setup` now probes dlib and
+  defaults to installing ArcFace when neither embedder is present, and `doctor` reports a missing
+  dlib embedder as a real **failure** (with a fix) instead of a note.
+
 ### PAM hardening
 - The keyring unseal (which materialises your cleartext login password for `pam_gnome_keyring` /
   `pam_kwallet`) now runs **only for login/unlock services** (`gdm-password`, `sddm`, `lightdm`,

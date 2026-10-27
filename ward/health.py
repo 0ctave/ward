@@ -114,8 +114,11 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
                               f"recogniser ArcFace {recognise.installed_variant() or ''}".strip() if recognise.available() else "recogniser = arcface but the model is not installed",
                               None if recognise.available() else ["recogniser", "install", "-y"], "" if recognise.available() else "Install"))
     else:
-        sec.items.append(Item("info", "recogniser: dlib ResNet (128-d)" + ("" if det.dlib is not None else " — python3-dlib is MISSING"),
-                              None if det.dlib is not None else ["recogniser", "install", "-y"], "" if det.dlib is not None else "Install ArcFace"))
+        dlib_ok = det.dlib is not None
+        # dlib missing = recogniser=dlib has no embedder (fails at the first embedding): a real problem, not a note
+        sec.items.append(Item("info" if dlib_ok else "fail",
+                              "recogniser: dlib ResNet (128-d)" if dlib_ok else "recogniser = dlib but python3-dlib is MISSING — face unlock cannot embed; install it or switch to ArcFace",
+                              None if dlib_ok else ["recogniser", "install", "-y"], "" if dlib_ok else "Install ArcFace"))
     sec.items.append(Item("info", f"detector {rec['detector']} · gate {rec['certainty']} (rgb {rec['rgb_certainty']}) · fusion {rec['fusion_frames']}"))
     if float(rec["certainty"]) > 0.45:
         sec.items.append(Item("warn", f"gate {rec['certainty']} is loose — calibrate from your real distances", ["calibrate"], "Calibrate"))
