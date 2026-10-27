@@ -67,7 +67,7 @@ class Robustness(unittest.TestCase):
         # A4: no face ever → every pass times out on the wall clock → honest card, no auto-close
         class Nobody(World):
             def light_at(self, t):
-                return "ok" if t < 3.0 else "dark"                 # intro starts, then the face is unusable
+                return "ok" if t < 6.0 else "dark"                 # intro (5 s) starts, then the face is unusable
         res, snaps, st = run_setup(Nobody(), max_s=200, timeout=3.0)
         done = [sn for sn in snaps if sn.get("phase") == "done"]
         self.assertTrue(done)
@@ -162,10 +162,12 @@ class RgbCarries(unittest.TestCase):
 
 class Tolerance(unittest.TestCase):
     def test_level_head_is_not_look_up(self):
-        self.assertFalse(cal.pose_ok((0.0, 4.0), (0.0, 15.0)))
-        self.assertTrue(cal.pose_ok((0.0, 12.0), (0.0, 15.0)))
-        self.assertFalse(cal.pose_ok((0.0, -4.0), (0.0, -18.0)))
-        self.assertTrue(cal.pose_ok((5.0, 0.0), (0.0, 0.0)))
+        self.assertFalse(cal.pose_ok((0.0, 4.0), (0.0, 18.0)))     # level head is not look-up
+        self.assertTrue(cal.pose_ok((0.0, 12.0), (0.0, 18.0)))     # |6| <= 8
+        self.assertTrue(cal.pose_ok((0.0, 10.0), (0.0, 18.0)))     # just reaches the arrival band
+        self.assertFalse(cal.pose_ok((0.0, -7.0), (0.0, -24.0)))   # |17| > 8
+        self.assertTrue(cal.pose_ok((-20.0, 0.0), (-28.0, 0.0)))   # the required ~20° turn counts
+        self.assertTrue(cal.pose_ok((5.0, 0.0), (0.0, 0.0)))       # centre still accepts a level head
 
 
 class WindowStates(unittest.TestCase):
@@ -187,11 +189,11 @@ class WindowStates(unittest.TestCase):
 
     def test_arrow_is_coarse_and_coherent(self):
         d = self.appui.cue_direction
-        self.assertEqual(d("left", (0.0, 0.0), (-20.0, 0.0)), "left")                   # go screen-left
-        self.assertEqual(d("left", (-38.0, 0.0), (-20.0, 0.0)), "right")                # clear overshoot: come back
-        self.assertEqual(d("left", (0.0, -9.0), (-20.0, 0.0)), "left")                  # natural tilt: no diagonal
-        self.assertEqual(d("left", (-20.0, 17.0), (-20.0, 0.0)), "down")                # main axis done, pitch far off
-        self.assertIsNone(d("left", (-19.0, 1.0), (-20.0, 0.0)))                         # there: no arrow
+        self.assertEqual(d("left", (0.0, 0.0), (-28.0, 0.0)), "left")                   # go screen-left
+        self.assertEqual(d("left", (-42.0, 0.0), (-28.0, 0.0)), "right")                # clear overshoot (14° past): come back
+        self.assertEqual(d("left", (0.0, -9.0), (-28.0, 0.0)), "left")                  # natural tilt: no diagonal
+        self.assertEqual(d("left", (-28.0, 17.0), (-28.0, 0.0)), "down")                # main axis done, pitch far off
+        self.assertIsNone(d("left", (-27.0, 1.0), (-28.0, 0.0)))                         # there: no arrow
         self.assertEqual(d("up", None, None), "up")                                      # no pose yet: the cue's own way
         self.assertIsNone(d("closer", (0.0, 0.0), (0.0, 0.0)))
 
@@ -201,8 +203,8 @@ class WindowStates(unittest.TestCase):
         rng = np.random.default_rng(0)
         prev, seen = None, []
         for k in range(200):                                  # approaching "left" with ±4° estimator noise
-            yaw = -20.0 * min(1.0, k / 120) + rng.normal(scale=4.0)
-            prev = d("left", (yaw, rng.normal(scale=4.0)), (-20.0, 0.0), prev)
+            yaw = -28.0 * min(1.0, k / 120) + rng.normal(scale=4.0)
+            prev = d("left", (yaw, rng.normal(scale=4.0)), (-28.0, 0.0), prev)
             seen.append(prev)
         flips = sum(1 for a, b in zip(seen, seen[1:]) if a and b and a != b)
         self.assertEqual(flips, 0)                            # never left↔right/up/down while approaching

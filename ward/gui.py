@@ -773,7 +773,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
 
         if st_data["phase"] == "intro":
             ready = box is not None and light_state != "dark"
-            intro_wait = 6.0 if st_data.get("main") else 2.5     # time to put the glasses on before it starts
+            intro_wait = 6.0 if st_data.get("main") else 5.0     # glasses sweep: time to put them on; main: time to read the intro
             st_data["intro_t0"] = st_data["intro_t0"] or now
             # IR↔RGB alignment while the user settles in (was a separate terminal step before the window)
             if ready and need_align and not st_data.get("main") and primary == "ir" and len(align_pairs) < 10:
@@ -791,7 +791,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                 # labelled 'glasses' if the user is still putting them on (review A8)
                 st_data["ready_since"] = None
             base.update({"phase": "intro", "index": 0, "total": len(poses), "ready": ready,
-                         "intro_text": CONDITION_INTRO.get(condition, "") if st_data.get("main") else "",
+                         "intro_text": CONDITION_INTRO.get(condition, "") if st_data.get("main") else MAIN_INTRO,
                          "manual_start": bool(st_data.get("main")),
                          "waited": now - st_data["intro_t0"],
                          "countdown": max(0.0, intro_wait - (now - st_data["ready_since"])) if st_data["ready_since"] else None})
@@ -975,10 +975,14 @@ def _target_display(target, sgn):
 DONE_AUTOCLOSE_S = 12.0
 KEY_GLASSES = "glasses"                # the done card's "I wear glasses" button
 CONDITION_INTRO = {"glasses": "Put your glasses on, then press Start", "headset": "Put your headset on, then press Start"}
+MAIN_INTRO = ("Ward will learn your face.\n"
+              "Follow the arrow to turn your head to a few positions and hold each for a moment "
+              "— about 15 seconds.\nYour password always works; this just adds your face.")
 
 
 def _setup_summary(res, added, missed=(), ir: bool = False, condition: str = ""):
-    lines = [f"Enrolled {added} pose models" + (f" for the condition '{condition}'." if condition else ".")]
+    lines = ["Your face is set up — you can now unlock with your face."]
+    lines.append(f"Enrolled {added} pose models" + (f" for the condition '{condition}'." if condition else "."))
     if missed:
         lines.append("No model for: " + ", ".join(missed) + " — re-run later to add them (the timeout moved on).")
     for sp in sorted(res.gate):
