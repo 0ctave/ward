@@ -17,7 +17,7 @@ import numpy as np  # noqa: E402
 
 from ward.engine import config, pam, quality, store  # noqa: E402
 from ward.engine.detect import Box  # noqa: E402
-from ward.engine.liveness import Result, cross_spectrum, motion, shadow  # noqa: E402
+from ward.engine.liveness import ABSTAIN, FAIL, PASS, Result, cross_spectrum, motion, shadow  # noqa: E402
 
 
 def textured(h=360, w=640, seed=1):
@@ -155,6 +155,29 @@ class ShadowTests(unittest.TestCase):
         on_grad = np.clip(60 + (ys - 80) * 0.6, 0, 255).astype(np.uint8)   # strong top→bottom falloff
         self.assertEqual(shadow.vote(off, on_grad, self.box).result, Result.PASS)
         self.assertEqual(shadow.vote(off, off, self.box).result, Result.ABSTAIN)
+
+
+class AcceptVotesTests(unittest.TestCase):
+    """The liveness vote decision (Engine._accept_votes), the security-critical core of _decide.
+    STRONG_VOTERS = (shadow, cnn); cross is a spoof voter but NOT a strong one."""
+
+    def test_table(self):
+        # (name, votes, required_votes, need_strong, require_when_available, expected)
+        cases = [
+            ("single cross PASS accepts", [PASS("cross")], 2, False, True, True),
+            ("strict: only a non-strong PASS rejects", [PASS("cross")], 2, True, True, False),
+            ("strict: a strong PASS accepts", [PASS("shadow")], 2, True, True, True),
+            ("any FAIL rejects even with passes", [PASS("shadow"), FAIL("cross")], 2, False, True, False),
+            ("all-ABSTAIN rejects when liveness required", [ABSTAIN("motion"), ABSTAIN("cross")], 2, False, True, False),
+            ("all-ABSTAIN accepts when not required", [ABSTAIN("motion"), ABSTAIN("cross")], 2, False, False, True),
+            ("nothing enabled accepts", [], 2, False, True, True),
+            ("n_pass >= required accepts", [PASS("shadow"), PASS("cross")], 2, False, True, True),
+            ("one PASS carries when the rest abstain", [PASS("cross"), ABSTAIN("motion")], 2, False, True, True),
+        ]
+        from ward.engine.auth import Engine
+        for name, votes, req, strong, require, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(Engine._accept_votes(votes, req, strong, require), expected)
 
 
 class PamTests(unittest.TestCase):

@@ -184,6 +184,13 @@ class Models:
                 self.sp5; self.rec
             except OSError:                           # dlib without its model files (Tumbleweed has no
                 pass                                  # dlib-models): the first embed raises the clear error
+        # Build the YuNet FaceDetectorYN now too: it is constructed lazily on the first detect()
+        # (~50–150 ms to allocate its buffers), which otherwise lands on the first captured frame
+        # on the cold in-process path. A one-shot dummy detect overlaps that with the camera open.
+        try:
+            self.detect(np.zeros((360, 640), np.uint8))
+        except Exception:
+            pass                                      # fail-soft: preload is a speed-up, never a dependency
 
     def _yunet_detect(self, gray: np.ndarray) -> Box | None:
         H, W = gray.shape[:2]

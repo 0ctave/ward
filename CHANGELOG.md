@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Engine hardening & portability CI
+- The liveness **accept/reject core** is now a pure `Engine._accept_votes(...)` helper with its own
+  unit-test case table (single PASS, strict-needs-a-strong-voter, any FAIL, all-abstain with/without
+  `require_liveness_when_available`, `n_pass ≥ required`). It was previously inline in `_decide` with
+  no direct test. Behaviour is unchanged — this is a refactor plus coverage of the security core.
+- `Models.preload()` now also builds the **YuNet detector** (a one-shot dummy detect, fail-soft), so
+  the ~50–150 ms detector init overlaps the camera open instead of landing on the first frame on the
+  cold path; the daemon's duplicate warm-up is removed.
+- New **`distros` CI workflow** (weekly + on-demand) runs the portability matrix — Debian 12,
+  Ubuntu 22.04, Fedora, Arch, openSUSE Tumbleweed — via the existing container harness, so the
+  version/distro fallbacks (3.10 TOML, 3.13 libcrypt, the YuNet graph split, dlib) are exercised.
+
 ### Enrollment embeds the same frames auth does (accuracy)
 - Fixed a train/serve mismatch: unlock embedded a **brightness-normalised** crop while enrollment
   embedded the **raw** frame, so models captured in dim/bright/night light (the "change the light"
