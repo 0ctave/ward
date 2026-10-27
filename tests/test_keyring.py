@@ -106,7 +106,7 @@ class NativeModule(unittest.TestCase):
         if r.returncode != 0:
             raise unittest.SkipTest(f"module did not build: {r.stderr}")
 
-    def _pam(self, helper_exit: int, cred: str | None, body: str | None = None, opts: str = "", consumer: bool = True):
+    def _pam(self, helper_exit: int, cred: str | None, body: str | None = None, opts: str = "", consumer: bool = True, service: str = "gdm-password"):
         """A real pam_authenticate over a private config dir (pam_start_confdir, Linux-PAM ≥ 1.4):
         our module first, then pam_exec with expose_authtok as the token consumer — the same
         way pam_gnome_keyring receives it."""
@@ -124,7 +124,7 @@ class NativeModule(unittest.TestCase):
         cons = d / "consumer.sh"; cons.write_text(f"#!/bin/sh\ncat > {tokfile}\n"); cons.chmod(0o755)
         conf = d / "pam.d"; conf.mkdir(exist_ok=True)
         pam_exec = next((p for p in Path("/lib/x86_64-linux-gnu/security", ).glob("pam_exec.so")), None) or Path("pam_exec.so")
-        (conf / "ward-test").write_text(
+        (conf / service).write_text(
             f"auth\t[success=1 default=ignore]\t{self.so} helper={helper} creds_dir={kd} creds={creds}{opts}\n"
             f"auth\trequisite\tpam_deny.so\n"
             + (f"auth\toptional\t{pam_exec} quiet expose_authtok {cons}\n" if consumer else "auth\toptional\tpam_permit.so\n"))
@@ -151,7 +151,7 @@ class NativeModule(unittest.TestCase):
             resp[0] = ctypes.cast(libc.calloc(n, ctypes.sizeof(Resp)), ctypes.POINTER(Resp)); return 0
         cv = Conv(CONV(conv), None)
         pamh = ctypes.c_void_p()
-        self.assertEqual(libpam.pam_start_confdir(b"ward-test", b"tester", ctypes.byref(cv), str(conf).encode(), ctypes.byref(pamh)), 0)
+        self.assertEqual(libpam.pam_start_confdir(service.encode(), b"tester", ctypes.byref(cv), str(conf).encode(), ctypes.byref(pamh)), 0)
         rc = libpam.pam_authenticate(pamh, 0)
         libpam.pam_end(pamh, 0)
         tok = tokfile.read_bytes().rstrip(b"\n") or None
@@ -161,9 +161,15 @@ class NativeModule(unittest.TestCase):
         rc, seen, tok = self._pam(0, "s3cret")
         self.assertEqual(rc, 0)
         self.assertEqual([m for _, m in seen][0], "Looking for your face…")
-        self.assertIn("svc=ward-test user=tester type=auth", [m for _, m in seen][1])   # env the helper's feedback needs
+        self.assertIn("svc=gdm-password user=tester type=auth", [m for _, m in seen][1])   # env the helper's feedback needs
         self.assertTrue(all(style == 4 for style, _ in seen))                       # PAM_TEXT_INFO
         self.assertEqual(tok, b"s3cret")
+
+    def test_sudo_does_not_unseal_the_keyring_token(self):
+        # scope fix: sudo/su/polkit never unlock the keyring, so the cleartext login password is
+        # never materialised there even when a credential is enrolled and the face is accepted
+        rc, _, tok = self._pam(0, "s3cret", service="sudo")
+        self.assertEqual(rc, 0); self.assertIsNone(tok)
 
     def test_reject_is_auth_err_without_token(self):
         rc, _, tok = self._pam(1, "s3cret")

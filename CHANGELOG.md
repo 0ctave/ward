@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Enrollment embeds the same frames auth does (accuracy)
+- Fixed a train/serve mismatch: unlock embedded a **brightness-normalised** crop while enrollment
+  embedded the **raw** frame, so models captured in dim/bright/night light (the "change the light"
+  and IR passes) could never be reproduced at unlock. Both paths now go through one shared
+  `brightness.embed_rgb` helper — identical for in-range frames (well-lit enrolments unchanged),
+  identically normalised for out-of-range ones. Re-enroll to rebuild the affected models.
+
+### Setup steers around the missing dlib embedder
+- On Debian/Ubuntu/Fedora `python3-dlib` isn't packaged and pip is not used, so the default
+  `recogniser=dlib` had no embedder and failed at the first frame. `ward setup` now probes dlib and
+  defaults to installing ArcFace when neither embedder is present, and `doctor` reports a missing
+  dlib embedder as a real **failure** (with a fix) instead of a note.
+
+### PAM hardening
+- The keyring unseal (which materialises your cleartext login password for `pam_gnome_keyring` /
+  `pam_kwallet`) now runs **only for login/unlock services** (`gdm-password`, `sddm`, `lightdm`,
+  `login`, `greetd`, `kde`) — never for `sudo`/`su`/`polkit`, which don't unlock a keyring and so
+  never need the password materialised.
+- `ward pam enable` now **refuses to silently bypass a second factor**: if a required/requisite 2FA
+  module (`pam_u2f`, `pam_google_authenticator`, `pam_yubico`, …) sits after where the ward line
+  goes, its success-jump would skip it, so enable stops with a clear message (use `--force` to
+  override). (`pam_faillock` is not treated as a second factor — its authfail line only acts on
+  failure, and it's in Fedora's default stack.)
+
 ### Manager app: clearer setup, safer first run
 - The setup wizard's **anti-spoof** step now only appears when there's a colour camera (the CNN is
   colour-only and abstains on IR), and it reflects the current state — a satisfied "already on" step
