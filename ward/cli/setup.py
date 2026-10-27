@@ -82,14 +82,25 @@ def cmd_setup(args) -> int:
     if recognise.available():
         ui.ok(f"ArcFace {recognise.installed_variant()} installed; recogniser = {cfg['recognition'].get('recogniser', 'dlib')}")
     else:
+        try:
+            import dlib  # noqa: F401
+            dlib_ok = True
+        except Exception:
+            dlib_ok = False
+        if not dlib_ok:
+            # dlib is packaged only on a couple of distros and pip is not an option here, so on
+            # Debian/Ubuntu/Fedora the default recogniser=dlib has NO embedder — steer to ArcFace.
+            ui.warn("python3-dlib is not installed, and most distros don't package it — without ArcFace there is no face embedder, so face unlock cannot work.")
         ui.info("dlib recognises well; ArcFace (insightface, run by OpenCV) gives tighter identity clusters — the Windows-Hello-class option.")
         ui.info(recognise.LICENCE_NOTE)
-        if ui.confirm("Download ArcFace (MobileFaceNet, 16 MB) and use it?", default=False):
+        if ui.confirm("Download ArcFace (MobileFaceNet, 16 MB) and use it?", default=not dlib_ok):
             try:
                 recognise.install("mbf", say=ui.info)
                 cfg["recognition"]["recogniser"] = "arcface"; ui.ok("recogniser = arcface")
             except Exception as e:
-                ui.warn(f"install failed ({e}); staying on dlib")
+                ui.warn(f"install failed ({e}); staying on dlib" + ("" if dlib_ok else " — face unlock will not work until python3-dlib is installed"))
+        elif not dlib_ok:
+            ui.warn("staying on dlib, but it will fail at the first embedding until python3-dlib is installed (`sudo ward recogniser install`, or your distro's python3-dlib package)")
     if cfg["cameras"]["rgb"]:
         if not antispoof_available():
             ui.warn("anti-spoof CNN model missing — reinstall ward to restore the daylight liveness voter")

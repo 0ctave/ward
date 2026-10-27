@@ -421,7 +421,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                 if not gate and (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS:
                     c = cells.setdefault(cell, Cell())
                     if True:
-                        items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True)]
+                        items = [(primary, brightness.embed_rgb(fr.rgb, fr.gray, primary, q.mean), (box.x, box.y, box.w, box.h), q.score(), True)]
                         for sp in others:
                             f2 = cap.read_one(sp, flush=0)
                             if f2 is None:
@@ -430,7 +430,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
                             if q2.reason(cams[f"{sp}_dark_threshold"]):
                                 continue
                             sx, sy = f2.gray.shape[1] / w, f2.gray.shape[0] / h
-                            items.append((sp, f2.rgb, (int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy)), q2.score(), False))
+                            items.append((sp, brightness.embed_rgb(f2.rgb, f2.gray, sp, q2.mean), (int(box.x * sx), int(box.y * sy), int(box.w * sx), int(box.h * sy)), q2.score(), False))
                         if worker_ok:
                             ok = sampler.submit(cell, (current.yaw, current.pitch), items)
                         else:
@@ -823,7 +823,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
             if (now - st_data["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy and sampler.alive:
                 # no synthetic lighting variants: 3 extra embeddings per sample (~255 ms) quartered the
                 # sample rate and changed no decision (review A11); whitening learns from real samples
-                items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True, False)]
+                items = [(primary, brightness.embed_rgb(fr.rgb, fr.gray, primary, q.mean), (box.x, box.y, box.w, box.h), q.score(), True, False)]
                 lights = {primary: light_state}
                 for sp in others:
                     fo = cap.read_one(sp, flush=0)
@@ -832,7 +832,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                         lights[sp] = "dark" if qo.mean < cams[f"{sp}_dark_threshold"] else ""
                         # lighting variants only for the primary: 4 embeddings per camera per sample
                         # halved the pass's sample rate, and whitening also learns from real samples
-                        items.append((sp, fo.rgb, (box.x, box.y, box.w, box.h), qo.score(), False, False))
+                        items.append((sp, brightness.embed_rgb(fo.rgb, fo.gray, sp, qo.mean), (box.x, box.y, box.w, box.h), qo.score(), False, False))
                 # the pose and light travel WITH the sample: tagged when it was taken, not when it drains
                 if sampler.submit(st_data["i"], (pose_disp, lights), items):
                     st_data["last_sample_t"] = now
@@ -1158,12 +1158,12 @@ def calibration_session(st, cap: Capture, models: Models, cams: dict, rec: dict,
                 sample.yaw, sample.pitch, sample.roll = filt.yaw, filt.pitch, filt.roll
             sample.face_w = int(box.w)
             if (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy and sampler.alive:
-                items = [(primary, fr.rgb, (box.x, box.y, box.w, box.h), q.score(), True, False)]
+                items = [(primary, brightness.embed_rgb(fr.rgb, fr.gray, primary, q.mean), (box.x, box.y, box.w, box.h), q.score(), True, False)]
                 state["pending_light"][primary] = light_state
                 for sp in others:
                     fo = cap.read_one(sp, flush=0)
                     if fo is not None:
-                        items.append((sp, fo.rgb, (box.x, box.y, box.w, box.h), q.score(), False, False))
+                        items.append((sp, brightness.embed_rgb(fo.rgb, fo.gray, sp), (box.x, box.y, box.w, box.h), q.score(), False, False))
                 if sampler.submit(None, None, items):
                     state["last_sample_t"] = now
         # results from the process → recent embeddings → distances

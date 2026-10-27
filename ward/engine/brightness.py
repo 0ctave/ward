@@ -171,3 +171,15 @@ def normalise_rgb(rgb: np.ndarray, gray: np.ndarray) -> np.ndarray:
     ycc = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
     ycc[:, :, 0] = normalise(ycc[:, :, 0], m)
     return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
+
+
+def embed_rgb(rgb: np.ndarray, gray: np.ndarray, spectrum: str, mean: float | None = None) -> np.ndarray:
+    """The exact crop-source both AUTH and ENROLLMENT feed to the embedder, so a stored model and a
+    live attempt are embedded identically — no train/serve skew. Identity for an in-range frame (a
+    well-lit enrolment is untouched); for IR it normalises luminance, for colour it normalises
+    luminance keeping colour. `gray` is the frame's own grayscale, `mean` its measured mean (the
+    frame's own when None). Mirrors engine.auth._observe's inline logic exactly — keep them in step."""
+    gn = normalise(gray, mean)
+    if spectrum == "ir":
+        return rgb if gn is gray else cv2.cvtColor(gn, cv2.COLOR_GRAY2RGB)
+    return normalise_rgb(rgb, gray)
