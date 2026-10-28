@@ -1,0 +1,1 @@
+- New `changelog` CI check: a pull request that adds no `changelog.d/` fragment fails unless it carries the `skip-changelog` label, so every user-facing change ships with a changelog entry.
