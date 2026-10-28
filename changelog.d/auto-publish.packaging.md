@@ -1,0 +1,1 @@
+- New `publish-packages` workflow auto-pushes to the AUR and submits a Fedora COPR build on each `v*` tag (secret-gated: no-ops until `AUR_SSH_PRIVATE_KEY` / `COPR_CONFIG` are set). See RELEASING.md.
