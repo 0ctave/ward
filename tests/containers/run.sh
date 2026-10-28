@@ -8,6 +8,7 @@
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 out=${OUT:-/tmp/ward-containers}; mkdir -p "$out"
+ver=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$repo/ward/__init__.py")   # the rpm source tarball name must match ward.spec's Version
 pkgs() { (cd "$repo" && python3 -c "from ward.distro import PACKAGES as P; t=P['$1']; print(' '.join(t[k] for k in ('opencv','numpy','dlib','dlib-models','gtk','gcc') if t[k]))"); }
 declare -A IMG=([fedora]=registry.fedoraproject.org/fedora:latest [arch]=docker.io/library/archlinux:latest
   [tumbleweed]=registry.opensuse.org/opensuse/tumbleweed:latest [ubuntu2204]=docker.io/library/ubuntu:22.04
@@ -41,7 +42,7 @@ for d in "${@:-fedora arch tumbleweed ubuntu2204 debian12}"; do
     r5=0
     if command -v rpmbuild >/dev/null; then
       dnf -y -q builddep packaging/ward.spec || r5=12
-      mkdir -p ~/rpmbuild/SOURCES && tar --transform 's,^\.,ward-0.4.0,' -czf ~/rpmbuild/SOURCES/ward-0.4.0.tar.gz . &&
+      mkdir -p ~/rpmbuild/SOURCES && tar --transform 's,^\.,ward-$ver,' -czf ~/rpmbuild/SOURCES/ward-$ver.tar.gz . &&
       rpmbuild -bb packaging/ward.spec 2>&1 | tail -15; r5=\$((r5 + \${PIPESTATUS[0]}))
       rpm -qpl ~/rpmbuild/RPMS/*/ward-*.rpm | grep -E 'pam_ward.so|yunet' || r5=13
     fi

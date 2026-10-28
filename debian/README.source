@@ -1,0 +1,22 @@
+Source format: 3.0 (native)
+============================
+
+Ward is its own upstream — the code and this debian/ packaging live in one git
+repository (github.com/0ctave/ward). "3.0 (native)" is the correct, low-ceremony
+fit for that: one tarball is the whole tree (dpkg-source auto-excludes .git), there
+is NO separate .orig tarball to generate, and the version carries no Debian revision
+(use 0.5.0, not 0.5.0-1). It also avoids the 3.0 (quilt) pitfall where dpkg-source -b
+refuses to build because changes outside debian/ do not match an .orig tarball — which
+would happen constantly here since every code change lives in the same tree.
+
+If this package were ever submitted to Debian proper (where native is discouraged for
+non-Debian-specific software), switch debian/source/format to "3.0 (quilt)", bump the
+changelog version to 0.5.0-1, and produce a ward_0.5.0.orig.tar.xz that excludes debian/
+(gbp + pristine-tar). For a personal Launchpad PPA, native is accepted and simpler.
+
+This debian/ directory is only for dpkg-buildpackage / debuild (source builds, PPA).
+The repo also ships two other Debian/Ubuntu channels that do NOT use it:
+  * packaging/build-deb.sh  — an offline binary .deb via dpkg-deb (its own -1 revision);
+  * the prebuilt .deb attached to each GitHub release.
+All channels share the one install contract: packaging/stage.sh DESTDIR /usr UNITDIR,
+and none of them edit PAM at build time.

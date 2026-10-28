@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ward"
-version = "0.4.0"
+version = "0.5.0"
 description = "Face unlock for Linux that actually works: dual-spectrum (IR+RGB) recognition with liveness voters, fail-open PAM integration."
 readme = "README.md"
 license = { text = "MIT" }
