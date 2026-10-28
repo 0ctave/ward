@@ -36,7 +36,9 @@ them; see below) so the problem can be replayed without your hardware.
 
 - Match the surrounding style; keep diffs focused. One concern per PR.
 - Run the test suite and `gcc -fsyntax-only data/pam_ward.c` if you touch the PAM module.
-- Update `docs/DESIGN.md` when you change a mechanism and `CHANGELOG.md` (Unreleased) always.
+- Update `docs/DESIGN.md` when you change a mechanism, and add a changelog entry with
+  `python3 tools/changelog.py add -t <type> -m "..."` (don't edit `CHANGELOG.md` directly — each PR
+  drops its own fragment under `changelog.d/`, so changelogs never conflict). See [RELEASING.md](RELEASING.md).
 - New bundled models must be permissively licensed, pinned by sha256, and small; their license and
   notice go in `ward/models/`. Non-redistributable models (e.g. ArcFace) are downloaded, not
   bundled.
