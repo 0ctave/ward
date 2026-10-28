@@ -1,0 +1,1 @@
+- The release workflow no longer fails when the GitHub release already exists — it creates the release if absent, else uploads the `.deb` to it (idempotent).
