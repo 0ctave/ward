@@ -1,0 +1,80 @@
+name: publish-packages
+# On a pushed v* tag (after `tools/release.py` bumped the versions), publish the new release to the
+# AUR and submit a COPR build. Both jobs are SECRET-GATED: without the secret they log a notice and
+# succeed as a no-op, so tagging never fails just because a channel isn't configured yet.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   AUR_SSH_PRIVATE_KEY — the private key whose public half is on your aur.archlinux.org account.
+#   COPR_CONFIG         — the contents of your ~/.config/copr API token (copr.fedorainfracloud.org/api).
+# Optional repository variable:
+#   COPR_PROJECT        — the COPR project, e.g. "0ctave/ward" (the default).
+#
+# The .deb + GitHub release are built separately by release.yml on the same tag. The Debian/Ubuntu PPA
+# stays manual (it needs a GPG-signed source upload) — see packaging/README.md.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, e.g. v0.5.0"
+        required: true
+permissions:
+  contents: read
+jobs:
+  aur:
+    name: AUR
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - id: gate
+        run: echo "ok=${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.ok != 'true'
+        run: echo "::notice::AUR_SSH_PRIVATE_KEY is not set — skipping the AUR publish."
+      # Bumped by tools/release.py before the tag, so packaging/PKGBUILD's pkgver already matches the
+      # tag; the action runs makepkg in an Arch container, updpkgsums fetches the release tarball and
+      # writes the real sha256, regenerates .SRCINFO, and pushes to aur@aur.archlinux.org.
+      - if: steps.gate.outputs.ok == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@084b0d9b15415bf9cdb65d44dad1efe37a354050 # v4.2.0
+        with:
+          pkgname: ward
+          pkgbuild: ./packaging/PKGBUILD
+          updpkgsums: true
+          commit_username: octave
+          commit_email: 0ctave@users.noreply.github.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "ward ${{ inputs.tag || github.ref_name }}"
+
+  copr:
+    name: Fedora COPR
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - id: gate
+        run: echo "ok=${{ secrets.COPR_CONFIG != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.ok != 'true'
+        run: echo "::notice::COPR_CONFIG is not set — skipping the COPR build."
+      - name: Build SRPM and submit to COPR
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+          COPR_PROJECT: ${{ vars.COPR_PROJECT || '0ctave/ward' }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          ver="${TAG#v}"
+          # Build the SRPM from ward.spec + a tag tarball in a Fedora container, then copr-cli submit.
+          docker run --rm -e VER="$ver" -e COPR_CONFIG -e COPR_PROJECT -v "$PWD:/w:ro" \
+            fedora:latest bash -euo pipefail -c '
+              dnf -y -q install copr-cli rpm-build git-core >/dev/null
+              install -d ~/.config ~/rpmbuild/SOURCES ~/rpmbuild/SRPMS
+              printf "%s" "$COPR_CONFIG" > ~/.config/copr
+              git config --global --add safe.directory /w
+              git -C /w archive --prefix="ward-$VER/" -o ~/rpmbuild/SOURCES/ward-$VER.tar.gz HEAD
+              rpmbuild -bs /w/packaging/ward.spec \
+                --define "_topdir $HOME/rpmbuild" --define "_sourcedir $HOME/rpmbuild/SOURCES"
+              copr-cli build "$COPR_PROJECT" ~/rpmbuild/SRPMS/ward-*.src.rpm
+            '

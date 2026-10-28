@@ -69,7 +69,30 @@ publishes the GitHub Release with checksums.
 
 ## Update the downstream channels
 
-After the tag and GitHub Release exist, publish to AUR, Fedora COPR and the
-Ubuntu PPA as described in [`packaging/README.md`](packaging/README.md)
-(`updpkgsums` + `.SRCINFO` for AUR, the SCM rebuild for COPR, `debuild -S`
-per Ubuntu series for the PPA).
+### Automated (AUR + COPR), once the secrets are set
+
+The pushed `v*` tag also triggers
+[`.github/workflows/publish-packages.yml`](.github/workflows/publish-packages.yml),
+which pushes the new `PKGBUILD` + `.SRCINFO` to the **AUR** and submits a
+**Fedora COPR** build. Each job is **secret-gated**: until you add its secret it
+just logs a notice and succeeds, so tagging never fails. To turn them on, add
+under *Settings → Secrets and variables → Actions*:
+
+| Secret | Value |
+|---|---|
+| `AUR_SSH_PRIVATE_KEY` | the private key whose public half is on your [aur.archlinux.org](https://aur.archlinux.org) account |
+| `COPR_CONFIG` | the contents of your `~/.config/copr` API token (from copr.fedorainfracloud.org/api) |
+
+Optional variable `COPR_PROJECT` (default `0ctave/ward`) selects the COPR
+project — create it once in the COPR web UI. You can re-run the publish for an
+existing tag from the Actions tab (*workflow_dispatch* → the tag).
+
+> First time: do one manual AUR/COPR run (below) so the AUR package exists and
+> the COPR project is created, then let the workflow take over on later tags.
+
+### Manual (and the Ubuntu PPA, which stays manual)
+
+The Debian/Ubuntu PPA needs a GPG-signed source upload, so it is not automated.
+Do it — and any manual AUR/COPR run — as described in
+[`packaging/README.md`](packaging/README.md) (`updpkgsums` + `.SRCINFO` for AUR,
+the SRPM/SCM build for COPR, `debuild -S` per Ubuntu series for the PPA).
