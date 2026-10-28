@@ -10,4 +10,5 @@ case "$1" in
     rm -rf /etc/ward; rm -f /var/log/ward.log /var/log/ward.log.*
     ;;
 esac
+#DEBHELPER#
 exit 0

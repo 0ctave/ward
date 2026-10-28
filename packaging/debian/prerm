@@ -16,4 +16,5 @@ case "$1" in
     find /usr/lib/ward -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
     ;;
 esac
+#DEBHELPER#
 exit 0

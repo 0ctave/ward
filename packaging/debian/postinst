@@ -19,4 +19,8 @@ if [ "$1" = configure ]; then
   fi
   [ -n "$2" ] || echo "ward installed. Next: ward doctor, then sudo ward setup (wires PAM; nothing was changed in /etc/pam.d)"
 fi
+# Inert '#'-comment under dpkg-deb (build-deb.sh); the dpkg-buildpackage/debhelper path
+# (./debian) substitutes any generated snippets here. dh_installsystemd is suppressed in
+# debian/rules, so the enable logic above stays the single cross-distro implementation.
+#DEBHELPER#
 exit 0

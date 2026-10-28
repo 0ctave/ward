@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-10-28
 
 ### Launch readiness
 - The README now shows the **face-free terminal demo** (`docs/demo.gif`) as its hero.
