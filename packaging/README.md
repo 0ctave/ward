@@ -130,33 +130,46 @@ git archive --prefix=ward-0.5.0/ -o ~/rpmbuild/SOURCES/ward-0.5.0.tar.gz HEAD
 rpmbuild -ba packaging/ward.spec
 ```
 
-### COPR — build from git (recommended, auto-rebuild on push)
+### COPR — automated on each tag (recommended)
 
-In the COPR web UI (or `copr-cli`), add an **SCM** package:
+The simplest path is the CI workflow: a pushed `v*` tag triggers
+[`.github/workflows/publish-packages.yml`](../.github/workflows/publish-packages.yml),
+which builds the SRPM (`git archive` → `rpmbuild -bs`) in a Fedora container and
+submits it with `copr-cli build`. Set the `COPR_CONFIG` repository secret (your
+`~/.config/copr` token) and the optional `COPR_PROJECT` variable (default
+`0ctave/ward`); create the COPR project once (any method), then tags take over.
+You can re-run it for an existing tag from the Actions tab (*workflow_dispatch*).
+
+### COPR — SCM package with webhook auto-rebuild
+
+To have COPR itself rebuild on every push/tag, add an **SCM** package — but use
+the **`make_srpm`** method, **not `rpkg`**: our `ward.spec` has a plain
+`Source0: %{name}-%{version}.tar.gz` with no lookaside cache, so rpkg can't
+produce the tarball (`Bad file: ward-<ver>.tar.gz: No such file`). The
+[`.copr/Makefile`](../.copr/Makefile) in this repo builds the SRPM for COPR.
 
 ```
 copr-cli create ward --chroot fedora-rawhide-x86_64 --chroot fedora-41-x86_64
 copr-cli add-package-scm ward --name ward \
     --clone-url https://github.com/0ctave/ward \
-    --commit v0.5.0 --spec packaging/ward.spec --type git --method rpkg
+    --commit v0.5.0 --spec packaging/ward.spec --type git --method make_srpm
 copr-cli build-package ward --name ward
 ```
 
-- Clone URL `https://github.com/0ctave/ward`, Spec `packaging/ward.spec`,
-  Committish `v0.5.0` (or a branch), SRPM method **rpkg** (the default — the
-  spec uses `%autosetup` and rpkg generates the `%{name}-%{version}.tar.gz`
-  from the checkout, so no release-tarball upload is needed).
-- Enable the webhook rebuild and add COPR's webhook URL to the GitHub repo so
-  every push/tag rebuilds.
+- Web UI equivalent: Clone URL `https://github.com/0ctave/ward`, Committish
+  `v0.5.0` (or a branch), SRPM build method **make_srpm**. Enable the webhook
+  rebuild and add COPR's webhook URL to the GitHub repo.
 - `python3-dlib` is packaged only on openSUSE, so on Fedora chroots it stays an
   unsatisfied `Recommends` (not an error) — consistent with the no-hard-dlib rule.
 
 ### COPR — upload a prebuilt SRPM (one-off)
 
 ```
+ver=$(sed -n 's/^Version:[[:space:]]*//p' packaging/ward.spec)
+git archive --prefix=ward-$ver/ -o ~/rpmbuild/SOURCES/ward-$ver.tar.gz HEAD
 rpmbuild -bs packaging/ward.spec
 copr-cli create ward --chroot fedora-rawhide-x86_64
-copr-cli build ward ~/rpmbuild/SRPMS/ward-0.5.0-1.*.src.rpm
+copr-cli build ward ~/rpmbuild/SRPMS/ward-$ver-1.*.src.rpm
 ```
 
 ---
@@ -188,8 +201,8 @@ own package manager. Use the `.deb`/RPM/AUR channels above.
 3. **AUR:** drop `PKGBUILD` + `ward.install` into the AUR repo, run
    `updpkgsums && makepkg --printsrcinfo > .SRCINFO`, test `makepkg -si`, commit
    `PKGBUILD .SRCINFO ward.install`.
-4. **COPR:** create the project and add the SCM package pointing at
-   `packaging/ward.spec` @ `v0.5.0` (Route 1 above).
+4. **COPR:** create the project once, then let the tag-triggered workflow build
+   it (set the `COPR_CONFIG` secret), or add the `make_srpm` SCM package above.
 5. **PPA:** `debuild -S -sa` per Ubuntu series (ascending `~` suffixes) and
    `dput` each.
 6. Verify `build-deb.sh` still produces a working `.deb` and
