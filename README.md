@@ -75,15 +75,27 @@ your password fallback.
 
 ## Quick start
 
+**Install from your distro** (pulls in its own dependencies):
+
 ```bash
-# 1. Dependencies (Debian/Ubuntu shown — see the Install guide for Fedora/Arch/openSUSE)
-sudo apt install python3-opencv python3-gi python3-gi-cairo gir1.2-adw-1 gcc libc6-dev
+# Ubuntu 24.04 & derivatives
+sudo add-apt-repository ppa:0ctave/ward && sudo apt update && sudo apt install ward
 
-# 2. Install Ward
-git clone https://github.com/0ctave/ward && cd ward
-sudo ./install.sh
+# Fedora
+sudo dnf copr enable 0ctave/ward && sudo dnf install ward
+```
 
-# 3. Set it up — open "Ward" from your apps (or run `ward`) and follow the guided wizard
+Or grab the `.deb` from [Releases](https://github.com/0ctave/ward/releases/latest), or install **from
+source** on any distro:
+
+```bash
+sudo apt install python3-opencv python3-gi python3-gi-cairo gir1.2-adw-1 gcc libc6-dev  # Debian/Ubuntu deps
+git clone https://github.com/0ctave/ward && cd ward && sudo ./install.sh
+```
+
+Then **set it up** — open "Ward" from your apps (or run `ward`) and follow the guided wizard:
+
+```bash
 ward
 ```
 

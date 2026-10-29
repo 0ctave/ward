@@ -1,0 +1,1 @@
+- Install guide and README now lead with the live package channels — the Ubuntu PPA (`ppa:0ctave/ward`), Fedora Copr (`0ctave/ward`) and the `.deb` from Releases — with from-source kept as the universal fallback.
