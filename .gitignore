@@ -4,6 +4,21 @@ build/
 dist/
 *.egg-info/
 
+# Packaging build byproducts (debuild -S / dpkg-buildpackage / rpmbuild / .copr/Makefile).
+# The source package and its artifacts are generated, not source — never commit them.
+/debian/files
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/*.substvars
+/debian/*.debhelper.log
+/debian/ward/
+/rpmbuild/
+*.deb
+*.dsc
+*.buildinfo
+*.changes
+*.src.rpm
+
 # Private local extension (duress failsafe etc.) — never committed or distributed
 extensions/
 

@@ -1,0 +1,1 @@
+- `.gitignore`: ignore packaging build byproducts (`debian/files`, debhelper stamps/substvars, `debian/ward/`, `rpmbuild/`, and generated `*.deb`/`*.dsc`/`*.changes`/`*.buildinfo`/`*.src.rpm`) so a stray `git add -A` after a local `debuild`/`rpmbuild` run can never commit them.
