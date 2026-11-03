@@ -68,6 +68,9 @@ class _Dialog(Gtk.Window):
     def set_default_response(self, rid):
         pass
 
+    def set_close_response(self, rid):
+        pass
+
     def set_response_enabled(self, rid, on):
         c = self._buttons.get_first_child()
         while c is not None:
@@ -509,6 +512,7 @@ class App(Adw.Application):
         dlg = message_dialog(self.win, heading, body)
         dlg.add_response("cancel", "Cancel"); dlg.add_response("ok", label)
         dlg.set_response_appearance("ok", RA.DESTRUCTIVE if destructive else RA.SUGGESTED)
+        dlg.set_default_response("ok"); dlg.set_close_response("cancel")   # Enter = confirm, Esc = cancel
         dlg.connect("response", lambda d, r: cb() if r == "ok" else None); dlg.present()
 
     def ask_text(self, title, body, placeholder, cb, password=False, validate=None):
@@ -527,7 +531,19 @@ class App(Adw.Application):
             why = validate(t) if (validate and t) else ""
             hint.set_label(why); dlg.set_response_enabled("ok", bool(t) and not why)
         entry.connect("changed", check); check()
-        dlg.connect("response", lambda d, r: cb(entry.get_text().strip()) if r == "ok" and entry.get_text().strip() else None)
+        # Single OK path, shared by the button and by pressing Enter in the entry (which used to do
+        # nothing — M1). Validates, fires once, then dismisses; closing emits the close response, so
+        # the guard stops a double call.
+        done = {"v": False}
+
+        def _ok(*_):
+            t = entry.get_text().strip()
+            why = validate(t) if (validate and t) else ""
+            if t and not why and not done["v"]:
+                done["v"] = True; cb(t); dlg.close()
+        entry.connect("activate", _ok)
+        dlg.set_default_response("ok"); dlg.set_close_response("cancel")
+        dlg.connect("response", lambda d, r: _ok() if r == "ok" else None)
         dlg.present()
 
     def ask_condition(self, who_label, cb):
@@ -587,6 +603,7 @@ class App(Adw.Application):
         # on first run / nobody enrolled the 'Start setup' card above is the single entry point
         if not on and not (self.people and any(x["owner"] and x["models"] for x in self.people)):
             sw.set_sensitive(False)
+            sw.set_tooltip_text("Register a face first — use the “Set up Ward” card above")
         self._row(g, "On" if on else "Off", "your password always works as well — a failed face check falls back to it", "system-lock-screen-symbolic", suffix=sw)
         text, cls = VERDICT[rel["verdict"]]
         self._row(g, text, describe_stats(rel["overall"]) + " · recent attempts", "emblem-ok-symbolic" if cls == "ok" else "dialog-warning-symbolic",

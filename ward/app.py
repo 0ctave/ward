@@ -61,6 +61,20 @@ def setup_steps(report: dict) -> list[dict]:
                           "desc": "Turn on the anti-spoof CNN — a second liveness check on the colour camera that "
                                   "abstains when unsure and never blocks a real face.",
                           "argv": ["antispoof", "on"], "run_label": "Turn on", "optional": True})
+    # A working embedder must exist before Register, or the first frame fails to embed. On distros
+    # without python3-dlib (Fedora/Ubuntu/Debian) steer to the bundled ArcFace model — mirrors
+    # cli.setup.cmd_setup step 3. embedder_ok comes from health.collect; None (unknown) → assume ok.
+    rk = report.get("recogniser") or report.get("cfg", {}).get("recognition", {}).get("recogniser") or "dlib"
+    if report.get("embedder_ok") is False:
+        steps.append({"key": "recogniser", "title": "Face recogniser",
+                      "desc": "No face embedder is installed yet — your distro doesn't package dlib. Install the "
+                              "bundled ArcFace model so Ward can recognise you (no dlib, no pip needed).",
+                      "argv": ["recogniser", "install", "-y"], "then_argv": ["recogniser", "use", "arcface"],
+                      "run_label": "Install ArcFace"})
+    else:
+        steps.append({"key": "recogniser", "title": "Face recogniser", "satisfied": True, "run_label": "Done",
+                      "desc": f"The {'ArcFace' if rk == 'arcface' else 'dlib'} recogniser is ready — it turns each "
+                              "frame into the numbers Ward matches against your enrolment. Nothing to do here."})
     steps.append({"key": "register", "title": "Register your face",
                   "desc": "One guided sweep, right here in this window: follow the ring and the arrow through each "
                           "pose. The same sweep sets the recognition gate from your own frames.",

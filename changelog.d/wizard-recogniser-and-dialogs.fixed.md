@@ -1,0 +1,2 @@
+- The in-app setup wizard now has a **recogniser step** before "Register", mirroring `ward setup`: on distros without `python3-dlib` (Fedora/Ubuntu/Debian) it installs the bundled ArcFace model so enrolment can embed, instead of dead-ending the first-run Register step at the first frame. `health.collect` exposes `embedder_ok`/`recogniser` for it.
+- Password/confirm dialogs in the app now **submit on Enter** (and cancel on Esc) instead of forcing a mouse click, and the disabled Overview on-switch explains itself with a tooltip ("Register a face first").

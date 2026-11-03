@@ -196,11 +196,27 @@ class SetupWizard(unittest.TestCase):
         steps = setup_steps({"profile": "A"})
         keys = [s["key"] for s in steps]
         self.assertEqual(keys[0], "cameras"); self.assertEqual(keys[-1], "pam")
-        self.assertEqual(keys, ["cameras", "emitter", "antispoof", "register", "keyring", "pam"])
+        self.assertEqual(keys, ["cameras", "emitter", "antispoof", "recogniser", "register", "keyring", "pam"])
         reg = next(s for s in steps if s["key"] == "register")
         self.assertEqual(reg["camera"], ENROL)                 # register draws in-app
         self.assertTrue(next(s for s in steps if s["key"] == "keyring")["keyring"])
         self.assertTrue(next(s for s in steps if s["key"] == "emitter").get("then_argv"))
+        # the recogniser step must come BEFORE register (the embedder is needed to enrol)
+        self.assertLess(keys.index("recogniser"), keys.index("register"))
+
+    def test_recogniser_step_mirrors_cli(self):
+        """No embedder (dlib-less distro) → install ArcFace before Register, like `ward setup` step 3;
+        embedder present → a satisfied 'Done' step. Unknown (no signal) → assume ready, never a dead
+        install prompt. This keeps the GUI wizard from dead-ending Register on Fedora/Ubuntu/Debian."""
+        from ward.app import setup_steps
+        none = next(s for s in setup_steps({"profile": "A", "embedder_ok": False}) if s["key"] == "recogniser")
+        self.assertEqual(none.get("argv"), ["recogniser", "install", "-y"])
+        self.assertEqual(none.get("then_argv"), ["recogniser", "use", "arcface"])
+        self.assertFalse(none.get("satisfied"))
+        ok = next(s for s in setup_steps({"profile": "A", "embedder_ok": True, "recogniser": "arcface"}) if s["key"] == "recogniser")
+        self.assertTrue(ok.get("satisfied")); self.assertNotIn("argv", ok)
+        unknown = next(s for s in setup_steps({"profile": "A"}) if s["key"] == "recogniser")
+        self.assertTrue(unknown.get("satisfied")); self.assertNotIn("argv", unknown)
 
     def test_emitter_only_with_ir(self):
         from ward.app import setup_steps
