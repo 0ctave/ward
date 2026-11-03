@@ -126,7 +126,8 @@ def main(argv=None) -> int:
     rg.add_argument("-y", "--yes", action="store_true"); rg.set_defaults(fn=cmd_recogniser)
 
     lg = sub.add_parser("log", help="recent authentication attempts; --summary for rates and latency, --follow to watch")
-    lg.add_argument("-n", type=int, default=20); lg.add_argument("--summary", action="store_true"); lg.add_argument("--follow", "-f", action="store_true")
+    lg.add_argument("-n", type=int, default=None, help="how many recent attempts (default 20 for the list; all for --summary unless set)")
+    lg.add_argument("--summary", action="store_true"); lg.add_argument("--follow", "-f", action="store_true")
     lg.add_argument("--json", action="store_true"); lg.set_defaults(fn=cmd_log)
 
     cb = sub.add_parser("calibrate", help="session (default): measure your real distances and set the gate + whitening threshold · refresh: from recent accepts · pose: rebuild the 3D face model (root)")
