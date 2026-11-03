@@ -1,0 +1,2 @@
+- **The app Settings page now asks for the admin password once, not once per toggle.** Policy, per-service and behaviour changes are collected and applied together via a single `ward tune` call behind one `pkexec` prompt (an "Apply"/"Discard" row shows the pending count), instead of a separate prompt per control.
+- `ward tune` accepts **several `section.key=value` pairs in one invocation** (applied atomically — a bad key saves nothing), in addition to the existing `ward tune section.key VALUE` form.

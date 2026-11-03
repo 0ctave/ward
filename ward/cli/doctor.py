@@ -347,32 +347,58 @@ def recommend_cnn(b: probe.Bench) -> int | None:
 
 
 # ------------------------------------------------------------------- tune ----
+def _tune_one(cfg, polmod, key, value):
+    """Apply one key→value into cfg in memory (does not save). 'policy' = a preset; else set_key.
+    Returns the message to print on success; raises ValueError for a bad key/value/level."""
+    if key == "policy":
+        polmod.apply_preset(cfg, value)
+        return f"policy = {value} — {polmod.describe(value)}"
+    return f"{key} = {cfgmod.set_key(cfg, key, value)}"
+
+
 def cmd_tune(args) -> int:
     need_root("tune")
     cfg = cfgmod.load()
     from ..engine import policy as polmod
-    if not args.key:
+    toks = list(getattr(args, "args", None) or [])
+    if not toks:
         print(cfgmod.dump(cfg))
         lvl = polmod.level_for(cfg)
         ui.info(f"policy: {lvl} — {polmod.describe(lvl)}"); return 0
-    if args.key == "policy":
-        if not args.value:
-            for lvl in polmod.LEVELS:
-                (ui.ok if lvl == polmod.level_for(cfg) else ui.info)(f"{lvl:<12} {polmod.describe(lvl)}")
-            return 0
-        try:
-            changed = polmod.apply_preset(cfg, args.value)
-        except ValueError as e:
-            ui.fail(str(e)); return 1
+
+    # Several `section.key=value` in one call — the manager app applies all Settings changes under a
+    # single pkexec prompt this way. Applied in memory, then saved once: a bad key saves nothing.
+    if any("=" in t for t in toks):
+        pairs = []
+        for t in toks:
+            k, sep, v = t.partition("=")           # v may be empty (e.g. security.policy_sudo= clears to default)
+            if not sep or not k:
+                ui.fail(f"expected key=value, got {t!r}"); return 1
+            pairs.append((k, v))
+        msgs = []
+        for k, v in pairs:
+            try:
+                msgs.append(_tune_one(cfg, polmod, k, v))
+            except ValueError as e:
+                ui.fail(str(e)); return 1                       # nothing saved
         cfgmod.save(cfg)
-        ui.ok(f"policy = {args.value} — {polmod.describe(args.value)}")
-        if args.value == "strict":
-            ui.tip("strict needs a shadow-test or anti-spoof PASS: run `sudo ward emitter probe` + `toggle-bench` if not done")
+        for m in msgs:
+            ui.ok(m)
+        return 0
+
+    # Legacy single `section.key [value]` / `policy [level]` — unchanged behaviour.
+    key = toks[0]
+    value = toks[1] if len(toks) > 1 else None
+    if key == "policy" and not value:
+        for lvl in polmod.LEVELS:
+            (ui.ok if lvl == polmod.level_for(cfg) else ui.info)(f"{lvl:<12} {polmod.describe(lvl)}")
         return 0
     try:
-        val = cfgmod.set_key(cfg, args.key, args.value)
+        msg = _tune_one(cfg, polmod, key, value)
     except ValueError as e:
         ui.fail(str(e)); return 1
     cfgmod.save(cfg)
-    ui.ok(f"{args.key} = {val}")
+    ui.ok(msg)
+    if key == "policy" and value == "strict":
+        ui.tip("strict needs a shadow-test or anti-spoof PASS: run `sudo ward emitter probe` + `toggle-bench` if not done")
     return 0
