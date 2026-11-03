@@ -1,0 +1,1 @@
+- Roadmap refreshed for v0.5.0: §0 "Where we stand" and the milestones now reflect what actually shipped (resident daemon R4, the manager app + in-window wizard U1–U3, anti-spoof CNN L5, keyring K1/K2, packaging + launch), with a v0.4.0→launch status log and the remaining 0.6/0.7/1.0 themes re-pointed at what is genuinely left.
