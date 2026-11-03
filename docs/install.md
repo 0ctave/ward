@@ -55,11 +55,11 @@ sudo apt install ./ward_*.deb
 [from-source install](#install-from-source); it's one command.
 
 > [!NOTE]
-> **Recogniser.** Fedora's package pulls in **dlib** automatically. On **Ubuntu/Debian**, dlib isn't
-> in the archive, so after installing run
-> `sudo ward recogniser install && sudo ward recogniser use arcface` to switch to the bundled ArcFace
-> model (no dlib needed), or install dlib yourself. `ward doctor` tells you which you have. See
-> [Pick a recogniser](#pick-a-recogniser).
+> **Recogniser.** Only **openSUSE Tumbleweed** packages `python3-dlib`. On **Fedora, Ubuntu and
+> Debian** dlib isn't in the archive and Ward never uses pip, so `ward setup` (and the app's wizard)
+> default to the bundled **ArcFace** model instead — or do it yourself after installing:
+> `sudo ward recogniser install && sudo ward recogniser use arcface`. `ward doctor` tells you which
+> embedder you have. See [Pick a recogniser](#pick-a-recogniser).
 
 These packages **never edit PAM** — finish with the app's wizard or `sudo ward setup`, both under
 [Set it up](#set-it-up).
@@ -91,15 +91,17 @@ asks first.
 
 ## Pick a recogniser
 
-- **dlib** (default). Packaged as `python3-dlib` on **Fedora** and **openSUSE Tumbleweed** (the Fedora
-  package and the Tumbleweed deps above pull it in). On **Ubuntu/Debian** it comes from Howdy's PPA,
-  on **Arch** from the AUR (`python-dlib`); elsewhere build it from source. You also need the model
-  files in `/usr/share/dlib` (package `dlib-models`, or download
-  `shape_predictor_5_face_landmarks.dat`, `shape_predictor_68_face_landmarks.dat` and
-  `dlib_face_recognition_resnet_model_v1.dat` from [dlib.net/files](http://dlib.net/files/)).
-- **ArcFace** (no dlib). The simplest path when dlib isn't packaged for you (e.g. Ubuntu/Debian):
+- **ArcFace** (no dlib — the default on Fedora, Ubuntu and Debian). `ward setup` installs it for you
+  when no dlib embedder is present; to do it by hand:
   `sudo ward recogniser install && sudo ward recogniser use arcface`. Ward then uses its bundled
   YuNet detector and a downloaded ArcFace model, both through OpenCV — no dlib at all.
+- **dlib** (default only where it's packaged). `python3-dlib` is in the archive **only on openSUSE
+  Tumbleweed** (the deps above pull it in). On **Fedora, Ubuntu and Debian** it isn't packaged and
+  Ward never pip-installs — use ArcFace there, or build dlib from source (Ubuntu/Debian can also take
+  it from Howdy's PPA, Arch from the AUR `python-dlib`). dlib also needs the model files in
+  `/usr/share/dlib` (package `dlib-models`, or download `shape_predictor_5_face_landmarks.dat`,
+  `shape_predictor_68_face_landmarks.dat` and `dlib_face_recognition_resnet_model_v1.dat` from
+  [dlib.net/files](http://dlib.net/files/)).
 
 > [!TIP]
 > Not sure what you have? Run `ward doctor` — it checks every dependency and prints the exact command

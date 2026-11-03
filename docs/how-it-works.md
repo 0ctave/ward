@@ -71,10 +71,12 @@ instead.
 The same enrollment sweep holds out some of your frames and derives the gate from your **real**
 distances, with a hard ceiling for safety. (Distances are in dlib units — roughly `0.0` is identical
 and `0.6` is "same person, loosely"; a well-measured personal gate lands around **0.33–0.45**.) From
-then on every unlock feeds a rolling window, and a lighting-invariance threshold follows your actual
-conditions within bounds, so your first night-time unlock is absorbed rather than rejected. `ward
-doctor` shows when the thresholds were set and from how many measurements, and warns when your recent
-unlocks disagree with them. Re-measure anytime with `ward calibrate`.
+then on every accept the gate's whitening threshold follows a rolling window of your real distances
+within bounds. (A second, lighting-invariant *whitened* acceptance path also exists but is
+**experimental and off by default** — measured never to fire live, so it is not what carries a
+night-time unlock; that comes from enrolling in normal light and the IR path, §2.) `ward doctor`
+shows when the thresholds were set and from how many measurements, and warns when your recent unlocks
+disagree with them. Re-measure anytime with `ward calibrate`.
 
 ## 5. A detector that handles real heads
 
@@ -87,9 +89,12 @@ milliseconds. `ward bench` times the options on your CPU.
 ## 6. Liveness: is it a real face?
 
 Recognising *you* isn't enough — a photo of you is also "you." Ward runs several liveness voters with
-**PASS / FAIL / ABSTAIN** semantics: a FAIL ends the attempt and feeds a spoof lock-out, while an
-ABSTAIN never counts against a genuine user. The anti-replay guarantee comes from the infrared
-camera; the rest add to it.
+**PASS / FAIL / ABSTAIN** semantics: a FAIL ends the attempt (and can feed the optional, off-by-default
+spoof lock-out), while an ABSTAIN never counts against a genuine user. The anti-replay guarantee comes
+from the infrared camera; the rest add to it. In practice a genuine accept usually carries exactly
+**one** PASS (typically IR cross-spectrum): Ward needs one PASS and zero FAILs rather than a fixed
+quorum, because in the dark the colour-dependent voters can't contribute and demanding two would block
+IR-only night unlocks.
 
 - **Cross-spectrum consistency** — the face must appear in **both** the IR and the colour frame, at
   the same place. A phone or monitor emits ~no infrared, so a screen replay has no face in IR and is

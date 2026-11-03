@@ -85,8 +85,9 @@ sudo add-apt-repository ppa:0ctave/ward && sudo apt update && sudo apt install w
 sudo dnf copr enable 0ctave/ward && sudo dnf install ward
 ```
 
-Or grab the `.deb` from [Releases](https://github.com/0ctave/ward/releases/latest), or install **from
-source** on any distro:
+(The PPA targets **Ubuntu 24.04+**; Arch is **coming to the AUR** — for now use source.) Or grab the
+`.deb` from [Releases](https://github.com/0ctave/ward/releases/latest), or install **from source** on
+any distro:
 
 ```bash
 sudo apt install python3-opencv python3-gi python3-gi-cairo gir1.2-adw-1 gcc libc6-dev  # Debian/Ubuntu deps
@@ -118,7 +119,9 @@ are in the **[Install guide](docs/install.md)**.
 | **[How it works](docs/how-it-works.md)** | Why Linux face unlock is unreliable and how Ward fixes each part — IR, emitter, poses, measured thresholds, liveness, and the honest limits. |
 | **[Migrating from Howdy](docs/migrating-from-howdy.md)** | Install alongside Howdy, let Ward retire it, verify, fully remove it, and roll back. |
 | **[Security](SECURITY.md)** | Threat model, what's in and out of scope, the fail-open guarantee, and how to report a vulnerability. |
+| **[FAQ](docs/faq.md)** | Quick answers: security vs Face ID, lock-out, privacy, no-IR webcams, suspend/resume, keyring, twins. |
 | **[Design](docs/DESIGN.md)** · **[Roadmap](docs/ROADMAP.md)** | Full rationale and thresholds · what's planned next. |
+| **[Changelog](CHANGELOG.md)** · **[Releases](https://github.com/0ctave/ward/releases)** | What shipped in each version, newest first. |
 
 ## Security & limits, up front
 
