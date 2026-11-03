@@ -63,8 +63,10 @@ A single trick that fools one layer is usually not a system bypass:
 - **Anti-spoof CNN** catches the *physical* artifacts of a camera filming a screen or print (moiré,
   reflection, lack of depth). It does **not** flag a digitally re-encoded image — verified by
   `ward benchmark redteam` — so it is a complement to the IR layer, not a replacement.
-- A suspected spoof (a liveness FAIL from cross-spectrum / shadow / CNN) **ends the attempt** and
-  feeds the spoof lock-out; repeated spoof attempts pause face unlock (the password still works).
+- A suspected spoof (a liveness FAIL from cross-spectrum / shadow / CNN) **ends the attempt**. An
+  optional spoof lock-out (**off by default**, since a lockout only creates denial-of-service while
+  the password always works) can pause face unlock after repeated spoofs —
+  `sudo ward tune security.lockout_failures N` turns it on.
 
 You can measure these yourself: `ward benchmark lfw` (impostor rate, recogniser),
 `ward benchmark spoof` (APCER/BPCER, CNN), `ward benchmark ir` (cross-spectrum PAD), and

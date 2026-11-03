@@ -66,8 +66,10 @@ sudo ward tune policy convenience|balanced|strict
 # per service: security.policy_sudo / policy_polkit / policy_login / policy_unlock  ("off" = password only there)
 ```
 `balanced` (default) makes the colour camera agree whenever it sees you well. `strict` requires a
-liveness PASS and turns learning off. Three suspected-spoof failures in 15 minutes pause face unlock
-for 15 minutes — the password always works.
+liveness PASS and turns learning off. A spoof **lockout is available but off by default** (a lockout
+only creates denial-of-service, since the password always works): turn it on with
+`sudo ward tune security.lockout_failures N` to pause face unlock after N suspected-spoof failures
+within `security.lockout_minutes` (default 15).
 
 **See what's happening:**
 ```bash
