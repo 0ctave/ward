@@ -109,6 +109,11 @@ def collect(user: str | None = None, cfg: dict | None = None, probe_cameras: boo
     from .engine.liveness import antispoof_cnn
     rec, live = cfg["recognition"], cfg["liveness"]
     rk = rec.get("recogniser", "dlib")
+    out["recogniser"] = rk
+    # Does the configured recogniser actually have a working embedder? (ArcFace model installed, or
+    # python3-dlib present.) The setup wizard reads this to add a recogniser step on dlib-less distros
+    # before the Register step, mirroring `ward setup` step 3 — otherwise the first embedding fails.
+    out["embedder_ok"] = recognise.available() if rk == "arcface" else (det.dlib is not None)
     if rk == "arcface":
         sec.items.append(Item("ok" if recognise.available() else "fail",
                               f"recogniser ArcFace {recognise.installed_variant() or ''}".strip() if recognise.available() else "recogniser = arcface but the model is not installed",
