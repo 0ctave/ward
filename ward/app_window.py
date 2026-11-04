@@ -698,12 +698,9 @@ class App(Adw.Application):
                 self._row(g, f"Unlocked as {who or rep['user']}", f"{n} accepts", "avatar-default-symbolic")
         if rel["reasons"]:
             g = self._group(p, "Why attempts failed")
-            labels = {"no-match": "face not recognised", "liveness": "could not prove a live face", "spoof": "looked like a photo or screen",
-                      "no-face": "no face seen", "dark": "too dark", "timeout": "took too long", "lockout": "locked out after spoof attempts"}
-            tips = {"no-match": "register again in this light", "liveness": "move your head slightly during the attempt",
-                    "no-face": "face the camera", "dark": "more light, or an IR camera", "timeout": "check the camera isn't busy"}
+            from . import reasons as _reasons               # shared with `ward log --summary` (no drift)
             for r, n in rel["reasons"].items():
-                self._row(g, f"{n} × {labels.get(r, r)}", tips.get(r, ""), "dialog-error-symbolic")
+                self._row(g, f"{n} × {_reasons.label(r)}", _reasons.tip(r), "dialog-error-symbolic")
         g = self._group(p, "What to do")
         for text_, argv in rel["advice"]:
             self._row(g, text_, "", "dialog-information-symbolic", "Do it" if argv else None,

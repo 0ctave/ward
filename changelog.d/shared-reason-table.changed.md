@@ -1,0 +1,2 @@
+- `ward log --summary` now prints a human label beside each failure-reason code, from a new shared `ward/reasons.py` table that the manager app also uses — so the app and CLI can no longer drift on what a reason means (a new reason gets its label + tip in one place).
+- `ward log --summary -n N` now honours an explicit `-n 20` (it was silently ignored by a magic-number check); `-n` defaults to showing the last 20 for the listing and all attempts for `--summary` unless set.

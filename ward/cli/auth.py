@@ -142,9 +142,13 @@ def cmd_log(args) -> int:
         except KeyboardInterrupt:
             print()
         return 0
-    rows = attempts.read(path, None if args.summary else args.n)
+    # -n defaults to None (unset). The listing shows the last 20 by default; --summary covers every
+    # attempt unless -n explicitly narrows it (no magic 20 sentinel — an explicit `-n 20 --summary`
+    # now means 20, not "all").
+    n = args.n
+    rows = attempts.read(path, None if args.summary else (n or 20))
     if args.summary:
-        s = attempts.summary(rows[-args.n:] if args.n and args.n < len(rows) and args.n != 20 else rows)
+        s = attempts.summary(rows[-n:] if n else rows)
         if args.json:
             print(json.dumps(s, indent=1)); return 0
         ui.banner("ward · attempts", f"{s['attempts']} attempts in {path}")
@@ -157,8 +161,9 @@ def cmd_log(args) -> int:
                 + ("" if s["median_accept_ms"] <= 800 else "   (target < 800 ms — see docs/ROADMAP.md §1)"))
         if s["ir_median"] is not None:
             ui.info(f"IR distance on accepts: median {s['ir_median']} (gate {cfgmod.load()['recognition']['certainty']})")
-        for reason, n in s["reasons"].items():
-            ui.info(f"{reason:<10} {n}")
+        from .. import reasons as _reasons
+        for reason, cnt in s["reasons"].items():
+            ui.info(f"{reason:<10} {cnt:>3}  {_reasons.label(reason)}")
         for svc, d in s["services"].items():
             ui.info(f"{svc:<14} {d['accepted']}/{d['attempts']} accepted")
         if s["learned"]:
