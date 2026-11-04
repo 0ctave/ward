@@ -722,15 +722,42 @@ class App(Adw.Application):
     def test_unlock(self):
         self.run_cmd(["auth", "-v"])
 
+    def _queue_tune(self, key, value):
+        """Record a Settings change instead of applying it immediately (collapses the per-toggle
+        admin-password storm). set_selected/set_active ran before these handlers were connected, so
+        only a real user change reaches here."""
+        self._pending[key] = value
+        n = len(self._pending)
+        self._pending_row.set_title(f"{n} unsaved change{'' if n == 1 else 's'}")
+        self._apply_btn.set_sensitive(True); self._discard_btn.set_sensitive(True)
+
+    def _apply_settings(self):
+        if not self._pending:
+            return
+        argv = ["tune"] + [f"{k}={v}" for k, v in self._pending.items()]
+        self._pending = {}
+        self.run_cmd(argv)                 # one pkexec; then_refresh re-renders this page
+
     def _settings(self, rep):
         p = self.pages["settings"]; self._clear(p)
         cfg = rep["cfg"]
+        # Settings changes are collected and applied together (one `ward tune a=1 b=2 …`) so the page
+        # asks for the admin password ONCE, not once per toggle. The daemon/keyring rows below are
+        # single actions and stay immediate.
+        self._pending = {}
+        pg = self._group(p, "Unsaved changes", "Changes below are applied together in a single admin prompt.")
+        self._pending_row = Adw.ActionRow(title="No unsaved changes")
+        self._discard_btn = self._button("Discard", lambda: self._settings(self.report), style="flat")
+        self._apply_btn = self._button("Apply", self._apply_settings, style="suggested-action")
+        self._discard_btn.set_sensitive(False); self._apply_btn.set_sensitive(False)
+        self._pending_row.add_suffix(self._discard_btn); self._pending_row.add_suffix(self._apply_btn)
+        pg.add(self._pending_row)
         g = self._group(p, "Security", "Presets only ever tighten the gate measured at registration.")
         levels = list(polmod.LEVELS)
         dd = Gtk.DropDown.new_from_strings(levels); dd.set_valign(Gtk.Align.CENTER)
         if rep.get("policy") in levels:
             dd.set_selected(levels.index(rep["policy"]))
-        dd.connect("notify::selected", lambda d, _p: self.run_cmd(["tune", "policy", levels[d.get_selected()]]))
+        dd.connect("notify::selected", lambda d, _p: self._queue_tune("policy", levels[d.get_selected()]))
         self._row(g, "Policy", polmod.describe(rep.get("policy") or "balanced"), "security-high-symbolic", suffix=dd)
         opts = ["", "convenience", "balanced", "strict", "off"]
         names = ["Same as overall", "Convenience", "Balanced", "Strict", "Password only"]
@@ -738,14 +765,14 @@ class App(Adw.Application):
             cur = cfg.get("security", {}).get(key, "") or ""
             d = Gtk.DropDown.new_from_strings(names); d.set_valign(Gtk.Align.CENTER)
             d.set_selected(opts.index(cur) if cur in opts else 0)
-            d.connect("notify::selected", lambda d, _p, k=key: self.run_cmd(["tune", f"security.{k}", opts[d.get_selected()]]))
+            d.connect("notify::selected", lambda d, _p, k=key: self._queue_tune(f"security.{k}", opts[d.get_selected()]))
             self._row(g, svc, "", suffix=d)
         g = self._group(p, "Behaviour")
         b = cfg["behaviour"]
 
         def switch(title, sub, key, val):
             s = Gtk.Switch(active=bool(val)); s.set_valign(Gtk.Align.CENTER)
-            s.connect("notify::active", lambda w, _p: self.run_cmd(["tune", key, "true" if w.get_active() else "false"]))
+            s.connect("notify::active", lambda w, _p: self._queue_tune(key, "true" if w.get_active() else "false"))
             self._row(g, title, sub, suffix=s)
         switch("First login uses the password", "keeps the keyring unlocking the classic way", "behaviour.skip_login", b.get("skip_login"))
         switch("Face unlock on text consoles", "Ctrl+Alt+F3 logins", "behaviour.tty_login", b.get("tty_login"))
@@ -753,7 +780,7 @@ class App(Adw.Application):
         notes = ["accept", "all", "off"]
         d = Gtk.DropDown.new_from_strings(["After unlocks", "After every attempt", "Never"]); d.set_valign(Gtk.Align.CENTER)
         d.set_selected(notes.index(b.get("notify")) if b.get("notify") in notes else 0)
-        d.connect("notify::selected", lambda d, _p: self.run_cmd(["tune", "behaviour.notify", notes[d.get_selected()]]))
+        d.connect("notify::selected", lambda d, _p: self._queue_tune("behaviour.notify", notes[d.get_selected()]))
         self._row(g, "Desktop notification", "", suffix=d)
         g = self._group(p, "Speed")
         ds = rep.get("daemon") or {"installed": False, "active": False}

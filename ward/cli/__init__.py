@@ -81,8 +81,10 @@ def main(argv=None) -> int:
     e.add_argument("--stream-ui", action="store_true", help=argparse.SUPPRESS)   # used by `ward app`
     e.set_defaults(fn=cmd_enroll)
 
-    t = sub.add_parser("tune", help="show config, or set section.key VALUE (root)")
-    t.add_argument("key", nargs="?"); t.add_argument("value", nargs="?"); t.set_defaults(fn=cmd_tune)
+    t = sub.add_parser("tune", help="show config, or set section.key VALUE — or several section.key=value at once (root)")
+    t.add_argument("args", nargs="*", metavar="ITEM",
+                   help="nothing = show config; `section.key value`; or one-or-more `section.key=value` applied together")
+    t.set_defaults(fn=cmd_tune)
 
     b = sub.add_parser("bench", help="time HOG vs CNN detectors on a live frame"); b.add_argument("--device"); b.set_defaults(fn=cmd_bench)
 
