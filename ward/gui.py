@@ -304,7 +304,7 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     cell still needs samples, at most every SAMPLE_EVERY_MS, and the second camera is read
     only at those moments.
     """
-    models.sp68; models.preload()                           # preload: no stall on the first face
+    models.preload_pose(); models.preload()                 # preload: no stall on the first face
     primary = "ir" if "ir" in cap.spectra else "rgb"
     cells: dict[tuple[int, int], Cell] = {}
     others = [sp for sp in cap.spectra if sp != primary]
@@ -661,7 +661,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
     centre_i = next((i for i, p in enumerate(poses) if p[1] == "centre"), None)
     primary = "ir" if "ir" in cap.spectra else "rgb"
     others = [sp for sp in cap.spectra if sp != primary]
-    models.sp68
+    models.preload_pose()
     em = None
     if "ir" in cap.spectra:
         try:
@@ -1035,7 +1035,7 @@ def calibration_session(st, cap: Capture, models: Models, cams: dict, rec: dict,
     col = cal.Collector(need=need or cal.NEED_FRAMES, timeout=timeout or cal.PASS_TIMEOUT_S, sgn=sgn)
     primary = "ir" if "ir" in cap.spectra else "rgb"
     others = [sp for sp in cap.spectra if sp != primary]
-    models.sp68
+    models.preload_pose()
     em = None
     if "ir" in cap.spectra:
         try:

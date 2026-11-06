@@ -136,6 +136,9 @@ class FakeModels:
     def __init__(self, world: World, clock: Clock):
         self.world, self.clock = world, clock
 
+    def preload_pose(self):
+        pass
+
     def detect(self, gray, near=None):
         t = self.clock() - self.world.t0
         if not self.world.face(t):

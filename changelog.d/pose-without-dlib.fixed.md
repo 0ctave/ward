@@ -1,0 +1,1 @@
+- Pose-guided enrollment no longer crashes on machines without `python3-dlib` (the common ArcFace + YuNet setup on most distros). Head pose now falls back to YuNet's 5 landmarks when dlib's 68-point predictor is absent, so `ward setup` / `ward enroll` complete instead of raising `RuntimeError: the 68-point landmarks (pose) needs python3-dlib`.

@@ -170,6 +170,15 @@ class Models:
         from . import recognise
         return recognise.scale_factor(self.arc.radius) if self.recogniser_kind == "arcface" else 1.0
 
+    def preload_pose(self) -> None:
+        """Warm the 68-point predictor so the first face does not stall — a no-op without dlib,
+        where pose comes from YuNet's 5 points (landmarks68) and needs nothing to preload."""
+        if dlib is not None:
+            try:
+                self.sp68
+            except OSError:          # dlib present but its model files are not (e.g. Tumbleweed)
+                pass
+
     def preload(self) -> None:
         """Load what `embed` will need, so the cost overlaps the camera open rather than the first face."""
         if self.recogniser_kind == "arcface":
@@ -276,6 +285,14 @@ class Models:
         return self.sp5(rgb, box.rect)
 
     def landmarks68(self, gray: np.ndarray, box: Box) -> np.ndarray:
+        if dlib is None:
+            # no 68-point predictor: build the generic-path landmarks from YuNet's 5 points, so
+            # pose (hence pose-guided enrollment) works on the dlib-less + ArcFace setup. YuNet is
+            # the only detector that runs without dlib, so a box here always carries lm5.
+            if box.lm5 is None:
+                self._need_dlib("the 68-point landmarks (pose)")
+            from . import pose
+            return pose.stub68_from5(box.lm5)
         shape = self.sp68(gray, box.rect)
         return np.array([(p.x, p.y) for p in shape.parts()], dtype=np.float64)
 
