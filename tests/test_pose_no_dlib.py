@@ -84,25 +84,6 @@ class Landmarks68Fallback(unittest.TestCase):
         detect.Models(recogniser="arcface").preload_pose()   # must not raise
 
 
-class CoarseSmoothing(unittest.TestCase):
-    def test_coarse_pose_filter_lags_more_on_jitter(self):
-        # a still signal with frame-to-frame noise: the coarse filter must damp it harder
-        rng = [0.0, 3.0, -2.5, 2.0, -3.0, 2.5, -2.0, 3.0, -2.5, 2.0]
-        _, normal = pose.enroll_filters(coarse=False)
-        _, coarse = pose.enroll_filters(coarse=True)
-        no, co = [], []
-        for i, v in enumerate(rng):
-            t = i / 30.0
-            no.append(normal(pose.Pose(v, 0, 0), t).yaw)
-            co.append(coarse(pose.Pose(v, 0, 0), t).yaw)
-        self.assertLess(np.std(co[2:]), np.std(no[2:]))     # coarse output is steadier
-
-    def test_coarse_lowers_cutoffs(self):
-        lmf, posef = pose.enroll_filters(coarse=True)
-        self.assertLess(lmf.mc, 1.2)                         # LandmarkFilter default
-        self.assertLess(posef.min_cutoff, 0.6)               # PoseFilter default
-
-
 class SmoothBoxKeepsLm5(unittest.TestCase):
     def test_smooth_box_preserves_lm5(self):
         f = pose.LandmarkFilter()

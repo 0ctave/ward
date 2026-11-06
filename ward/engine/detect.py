@@ -170,12 +170,6 @@ class Models:
         from . import recognise
         return recognise.scale_factor(self.arc.radius) if self.recogniser_kind == "arcface" else 1.0
 
-    @property
-    def has_dlib(self) -> bool:
-        """True when dlib is importable: pose then uses its 68-point landmarks; otherwise the
-        coarser YuNet 5-point path (which the UI smooths harder — see gui pose-filter setup)."""
-        return dlib is not None
-
     def preload_pose(self) -> None:
         """Warm the 68-point predictor so the first face does not stall — a no-op without dlib,
         where pose comes from YuNet's 5 points (landmarks68) and needs nothing to preload."""

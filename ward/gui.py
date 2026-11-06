@@ -324,14 +324,13 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     finished = False
     fps_t, fps_n, fps = time.monotonic(), 0, 0.0
     prof = _Profile(profile, cap)
-    _lmf, _posef = posemod.enroll_filters(not models.has_dlib)
     state = {"finished": False, "cancel": False, "fps_t": fps_t, "fps_n": 0, "fps": 0.0,
              "prev_pose": None, "prev_box": None, "last_sample_t": 0.0,
              "sampler": sampler, "restarts": 0,
-             "filter": _posef, "neutral": None, "neutral_samples": [], "neutral_t0": None,
+             "filter": posemod.PoseFilter(), "neutral": None, "neutral_samples": [], "neutral_t0": None,
              "tracks": [], "fast_poses": [], "shape3d": (np.array(st.calib["shape3d"]) if st.calib.get("shape3d") else None),
              "coverage": posemod.Coverage(), "t_complete": None,
-             "lmfilter": _lmf, "stability": posemod.Stability(),
+             "lmfilter": posemod.LandmarkFilter(), "stability": posemod.Stability(),
              "neutral_ratio_samples": [], "neutral_ratios": None}
     # Mirror convention for everything the user sees: the preview is mirrored, so "left" on the
     # panel and in the hints must be the USER's left. Camera yaw is negative when the nose moves
@@ -699,9 +698,8 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
     need_align = len(cap.spectra) == 2 and not condition and not st.calib.get("s")
     align_pairs: list = []
     widths: list = []
-    _lmf, _posef = posemod.enroll_filters(not models.has_dlib)   # 5-point pose is noisier → smooth harder
     st_data = {"phase": "intro", "cancel": False, "done": None, "i": 0, "hits": 0, "started": None,
-               "last_sample_t": 0.0, "lmfilter": _lmf, "filter": _posef,
+               "last_sample_t": 0.0, "lmfilter": posemod.LandmarkFilter(), "filter": posemod.PoseFilter(),
                "prev_box": None, "fps_t": time.monotonic(), "fps_n": 0, "fps": 0.0, "emit_t": 0.0,
                "counted_t": 0.0, "ready_since": None, "intro_t0": None}
     NEEDN = need or cal.NEED_FRAMES
@@ -909,10 +907,9 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         except Exception:
             pass
         sampler = _Sampler(models)
-        _lmf, _posef = posemod.enroll_filters(not models.has_dlib)
         st_data.update({"respawns": 0, "phase": "intro", "i": 0, "hits": 0, "started": None, "ready_since": None,
                         "intro_t0": None, "done": None, "offer_glasses": False, "prev_box": None,
-                        "lmfilter": _lmf, "filter": _posef})
+                        "lmfilter": posemod.LandmarkFilter(), "filter": posemod.PoseFilter()})
 
     def finish():
         from .engine import calibration as cal
@@ -1070,9 +1067,8 @@ def calibration_session(st, cap: Capture, models: Models, cams: dict, rec: dict,
     offset = tuple(st.calib.get("pose_offset") or (0.0, 0.0))
     n_fuse = int(rec.get("fusion_frames", 4))
     recent: dict[str, deque] = {sp: deque(maxlen=n_fuse) for sp in cap.spectra}
-    _lmf, _posef = posemod.enroll_filters(not models.has_dlib)
     state = {"phase": "intro", "cancel": False, "pass_done_at": None, "done": None, "last_sample_t": 0.0,
-             "lmfilter": _lmf, "filter": _posef, "prev_box": None,
+             "lmfilter": posemod.LandmarkFilter(), "filter": posemod.PoseFilter(), "prev_box": None,
              "fps_t": time.monotonic(), "fps_n": 0, "fps": 0.0, "counted_t": 0.0, "pending_light": {}}
 
     def snapshot_base(fr, box, light_state):
