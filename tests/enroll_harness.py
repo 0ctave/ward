@@ -130,6 +130,7 @@ class FakeCap:
 class FakeModels:
     max_height = 320
     sp68 = None
+    has_dlib = True                 # the harness feeds synthetic 68-point landmarks (normal smoothing)
     detector_kind = "yunet"
     recogniser_kind = "dlib"
 

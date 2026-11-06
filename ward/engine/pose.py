@@ -342,11 +342,12 @@ class OneEuro:
 class PoseFilter:
     """One Euro per angle; call reset() when the face is lost so it doesn't drag old state in."""
 
-    def __init__(self):
+    def __init__(self, min_cutoff: float = 0.6, beta: float = 0.05):
+        self.min_cutoff, self.beta = min_cutoff, beta
         self.reset()
 
     def reset(self) -> None:
-        self.f = [OneEuro(), OneEuro(), OneEuro()]
+        self.f = [OneEuro(self.min_cutoff, self.beta) for _ in range(3)]
 
     def __call__(self, p: Pose, t: float) -> Pose:
         return Pose(self.f[0](p.yaw, t), self.f[1](p.pitch, t), self.f[2](p.roll, t))
@@ -376,6 +377,17 @@ class LandmarkFilter:
         vals = [self.box[i](float(v), t) for i, v in enumerate((box.x, box.y, box.w, box.h))]
         # keep lm5: the dlib-less pose path reads it from the (smoothed) box in landmarks68
         return type(box)(int(vals[0]), int(vals[1]), int(vals[2]), int(vals[3]), getattr(box, "lm5", None))
+
+
+def enroll_filters(coarse: bool) -> tuple["LandmarkFilter", "PoseFilter"]:
+    """The (landmark, pose) One-Euro pair for a guided enrollment/calibration window. `coarse=True`
+    (dlib absent → YuNet 5-point pose) smooths harder: each of the 5 points carries the detector's
+    full per-frame jitter, where dlib averages 6 points per eye, so the default cutoffs let the ring
+    flicker and jump. Lower cutoffs trade a little lag for a steady dot; the hold band is 10°, well
+    above the residual noise, so arrival is unaffected."""
+    if coarse:
+        return LandmarkFilter(min_cutoff=0.5, beta=0.004), PoseFilter(min_cutoff=0.3, beta=0.03)
+    return LandmarkFilter(), PoseFilter()
 
 
 class Stability:
