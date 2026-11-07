@@ -248,6 +248,31 @@ def angles_from_ratios(r: dict[str, float], neutral: "Neutral | None" = None) ->
 YAW_GAIN = 1.2
 
 
+def stub68_from5(lm5: np.ndarray) -> np.ndarray:
+    """A 68-point landmark array built from YuNet's 5 points (two eyes, nose tip, two mouth
+    corners), populated ONLY at the indices `ratios()`/`roll_from_eyes()` actually read — so the
+    whole generic-path pipeline (filter → estimate → coverage) runs unchanged when dlib (and its
+    68-point predictor) is absent. Without this, pose-guided enrollment can't work on the common
+    dlib-less + ArcFace setup (most distros): see detect.Models.landmarks68.
+
+    Eyes and mouth corners are sorted by x into image-left/right, so roll and yaw signs match the
+    dlib path regardless of the detector's own point order. The nose-wings cue (31,35) is left at
+    the nose tip so its span is ~0 and `ratios()` self-skips it; every unused index is filled with
+    the nose tip so the landmark filter never sees a (0,0) outlier.
+    """
+    lm5 = np.asarray(lm5, dtype=np.float64).reshape(5, 2)
+    eyes, nose, mouth = lm5[:2], lm5[2], lm5[3:5]
+    eye_l, eye_r = eyes[np.argsort(eyes[:, 0])]        # image-left, image-right
+    m_l, m_r = mouth[np.argsort(mouth[:, 0])]
+    out = np.tile(nose, (68, 1))
+    out[36:42] = eye_l
+    out[42:48] = eye_r
+    out[30] = nose
+    out[48], out[54] = m_l, m_r
+    out[51] = out[57] = (m_l + m_r) / 2.0              # lip centre ≈ mouth-corner midpoint
+    return out
+
+
 def estimate(landmarks68: np.ndarray, frame_w: int, frame_h: int, shape3d: np.ndarray | None = None,
              neutral: "Neutral | None" = None) -> Pose | None:
     """Head pose. With `shape3d` (the user's personal rigid-landmark model from sfm.calibrate) all
@@ -349,7 +374,8 @@ class LandmarkFilter:
 
     def smooth_box(self, box, t: float):
         vals = [self.box[i](float(v), t) for i, v in enumerate((box.x, box.y, box.w, box.h))]
-        return type(box)(int(vals[0]), int(vals[1]), int(vals[2]), int(vals[3]))
+        # keep lm5: the dlib-less pose path reads it from the (smoothed) box in landmarks68
+        return type(box)(int(vals[0]), int(vals[1]), int(vals[2]), int(vals[3]), getattr(box, "lm5", None))
 
 
 class Stability:
