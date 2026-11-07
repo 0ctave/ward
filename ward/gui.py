@@ -121,30 +121,43 @@ def _sampler_main(req, res, detector_kind: str, max_height: int, recogniser: str
     thread would freeze the preview (measured: 30 → 14 fps). A separate process keeps the UI
     at camera rate; frames travel over a pipe (~0.7 MB per sample, a few times per second)."""
     models = Models("yunet", max_height, recogniser=recogniser)   # fast detector here: this must keep up with the preview
+    from . import hw
+    hw.apply()                   # bound OpenCV threads (default is every core): without this the embed
+                                 # and the UI preview both grab all cores and thrash — an ArcFace embed
+                                 # measured ~80 ms alone balloons to ~500 ms, so a pose takes ~10 s
     models.preload()
+    dbg = bool(os.environ.get("WARD_ENROLL_DEBUG"))
     while True:
         job = req.get()
         if job is None:
             break
+        t_job = time.monotonic()
         cell, pose, items = job
         results = []
+        waits = []
         for item in items:
             try:                                          # one bad frame must not kill the worker (review A3)
                 sp, rgb, hint, q, exact = item[:5]
                 want_aug = item[5] if len(item) > 5 else True
+                t_det = time.monotonic()
                 gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                 box = hint if isinstance(hint, Box) else Box(*hint)   # a Box carries lm5 (ArcFace alignment)
                 if not exact:
                     box = models.detect(gray, box)
                 if box is None or box.w < MIN_ENROLL_FACE_PX:
                     continue
+                t_emb = time.monotonic()
                 emb = models.embed(rgb, box)
                 # lighting variants of the same frame: not match targets, but they teach the
                 # whitening which embedding directions are "just lighting" for this user
                 aug = [models.embed(v, box) for v in _light_variants(rgb)] if want_aug else []
+                if dbg:
+                    waits.append(f"{sp} {rgb.shape[1]}x{rgb.shape[0]} det={1000*(t_emb-t_det):.0f}ms emb={1000*(time.monotonic()-t_emb):.0f}ms")
                 results.append((sp, q, emb, aug))
             except Exception:
                 continue
+        if dbg:
+            print(f"[worker] job={1000*(time.monotonic()-t_job):.0f}ms  " + " | ".join(waits), flush=True)
         res.put((cell, pose, results))
 
 
@@ -649,6 +662,9 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
     from .engine import calibration as cal
     from .engine.detect import fuse
     from collections import defaultdict, deque
+    from . import hw
+    hw.apply()                   # cap this process's OpenCV threads so the preview's per-frame detect
+                                 # does not oversubscribe the cores the embed worker needs (see _sampler_main)
     sgn = -1.0 if mirror else 1.0
     poses = list(poses) if poses else cal.SETUP_POSES
     # the dlib-less 5-point pose is noisier → a wider arrival band so a hold fills without being
