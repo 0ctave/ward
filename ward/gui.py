@@ -317,6 +317,8 @@ def free_move_enroll(st: Store, cap: Capture, models: Models, cams: dict, mirror
     cell still needs samples, at most every SAMPLE_EVERY_MS, and the second camera is read
     only at those moments.
     """
+    from . import hw
+    hw.apply()                   # bound OpenCV threads so the preview does not starve the embed worker (see guided_setup / _sampler_main)
     models.preload_pose(); models.preload()                 # preload: no stall on the first face
     primary = "ir" if "ir" in cap.spectra else "rgb"
     cells: dict[tuple[int, int], Cell] = {}
@@ -1072,6 +1074,8 @@ def calibration_session(st, cap: Capture, models: Models, cams: dict, rec: dict,
     from .engine import calibration as cal
     from .engine.detect import fuse
     from collections import deque
+    from . import hw
+    hw.apply()                   # bound OpenCV threads so the preview does not starve the embed worker (see guided_setup / _sampler_main)
     sgn = -1.0 if mirror else 1.0
     col = cal.Collector(need=need or cal.NEED_FRAMES, timeout=timeout or cal.PASS_TIMEOUT_S, sgn=sgn)
     primary = "ir" if "ir" in cap.spectra else "rgb"

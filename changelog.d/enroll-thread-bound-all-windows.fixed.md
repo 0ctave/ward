@@ -1,0 +1,1 @@
+- The classic free-move enrollment (`ward enroll --classic`) and the standalone calibration window (`ward calibrate`) now bound their OpenCV thread count like the guided window does, so the live preview no longer oversubscribes every core and starve the embedding worker — the same ~60× embed slowdown that PR #28 fixed for guided enrollment.
