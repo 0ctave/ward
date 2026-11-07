@@ -381,6 +381,7 @@ def refresh(st) -> dict:
 
 
 POSE_TOLERANCE_DEG = 10.0           # arrival band per axis: samples start counting ~2° sooner so a pose fills faster and feels less fussy; still >> estimator ±4° noise and < the 18° nearest inter-pose gap
+POSE_TOLERANCE_COARSE_DEG = 14.0    # the YuNet 5-point pose (no dlib) is noisier than dlib's 68-point, so at 10° a still head keeps ticking out of band and a hold drags; 14° fits that jitter and still sits below the 18° inter-pose gap
 DIRECTIONAL_CUES = ("centre", "up", "down", "left", "right", "upleft", "upright", "downleft", "downright")
 
 
@@ -400,25 +401,30 @@ def pose_tolerance(target) -> tuple[float, float]:
     return (POSE_TOLERANCE_DEG, POSE_TOLERANCE_DEG)
 
 
-def pose_ok(pose, target) -> bool:
-    """The one predicate for 'this display pose is at the target' (window progress and model selection)."""
+def pose_ok(pose, target, tol: float | None = None) -> bool:
+    """The one predicate for 'this display pose is at the target' (window progress and model
+    selection). `tol` overrides the arrival band — the window passes the wider coarse band on the
+    dlib-less 5-point path so the live check and usable_rows() below agree."""
     if pose is None:
         return False
-    ty, tp = pose_tolerance(target)
+    if tol is None:
+        ty, tp = pose_tolerance(target)
+    else:
+        ty = tp = tol
     return abs(pose[0] - target[0]) <= ty and abs(pose[1] - target[1]) <= tp
 
 
-def usable_rows(rows: list, target, cue: str) -> list:
-    """The frames that may enrol this pose: not dark, and (directional poses) within
-    POSE_TOLERANCE_DEG of the target when a pose was measured. Arrival order is kept."""
+def usable_rows(rows: list, target, cue: str, tol: float | None = None) -> list:
+    """The frames that may enrol this pose: not dark, and (directional poses) within the arrival
+    band (POSE_TOLERANCE_DEG, or `tol`) of the target when a pose was measured. Arrival order kept."""
     rows = [r for r in rows if not (len(r) > 3 and r[3] == "dark")]   # a camera blind in this light enrols nothing
     posed = [r for r in rows if len(r) > 4 and r[4] is not None]
     if cue in DIRECTIONAL_CUES and posed:
-        rows = [r for r in posed if pose_ok(r[4], target)]
+        rows = [r for r in posed if pose_ok(r[4], target, tol)]
     return rows
 
 
-def select_rows(rows: list, target, cue: str, samples_per_cell: int) -> tuple[list, list] | None:
+def select_rows(rows: list, target, cue: str, samples_per_cell: int, tol: float | None = None) -> tuple[list, list] | None:
     """Split one pose's captured frames into (model rows, held-out rows), or None if too few.
 
     rows = (quality, embedding, aug, light[, (yaw, pitch) display pose]) in ARRIVAL order.
@@ -428,7 +434,7 @@ def select_rows(rows: list, target, cue: str, samples_per_cell: int) -> tuple[li
     - Honest holdout: the LAST third in time is held out, so the gate is measured on frames a
       few seconds after the model's, not interleaved with them (interleaved p95 0.20 vs temporal
       0.25 on the owner's samples, review A2). The model takes the best-quality of the rest."""
-    rows = usable_rows(rows, target, cue)
+    rows = usable_rows(rows, target, cue, tol)
     if len(rows) < 3:
         return None
     n_held = len(rows) // 3 if len(rows) >= 6 else 0
@@ -473,7 +479,7 @@ def drop_other_faces(caps: dict, limit: float = OTHER_FACE_DIST, scale: float = 
 
 
 def build_from_captures(st, caps: dict, poses: list, samples_per_cell: int, fuse,
-                        identity: str = "", condition: str = "") -> tuple[int, dict, dict]:
+                        identity: str = "", condition: str = "", tol: float | None = None) -> tuple[int, dict, dict]:
     """Turn per-pose captured frames into enrolled models, holding out frames to measure the gate
     honestly (roadmap: fused setup). `caps[pose_index][spectrum]` = list of rows in arrival order
     (see `select_rows`). Returns (models_added, dist_by_spectrum, extra_for_whitening).
@@ -482,7 +488,7 @@ def build_from_captures(st, caps: dict, poses: list, samples_per_cell: int, fuse
     from collections import defaultdict
     holdout = defaultdict(list); extra = defaultdict(list); added = 0
     caps = drop_other_faces(caps, scale=float(getattr(st, "scale", 1.0) or 1.0))   # limit is in dlib units
-    splits = {(i, sp): select_rows(rows, poses[i][3], poses[i][1], samples_per_cell)
+    splits = {(i, sp): select_rows(rows, poses[i][3], poses[i][1], samples_per_cell, tol)
               for i in caps for sp, rows in caps[i].items()}
     # clear each target label ONCE up front (only THIS person's, THIS condition's) — and only labels
     # that produced a new model: a skipped or timed-out pose keeps its old models

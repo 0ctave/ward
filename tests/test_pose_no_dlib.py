@@ -84,6 +84,25 @@ class Landmarks68Fallback(unittest.TestCase):
         detect.Models(recogniser="arcface").preload_pose()   # must not raise
 
 
+class CoarseArrivalBand(unittest.TestCase):
+    def test_wider_band_accepts_a_pose_the_default_rejects(self):
+        from ward.engine import calibration as cal
+        target = (0.0, 0.0)
+        pose = (12.0, 0.0)                                  # 12° off: outside 10°, inside 14°
+        self.assertFalse(cal.pose_ok(pose, target))                                 # default band
+        self.assertTrue(cal.pose_ok(pose, target, cal.POSE_TOLERANCE_COARSE_DEG))   # coarse band
+
+    def test_usable_rows_honours_the_tolerance(self):
+        from ward.engine import calibration as cal
+        rows = [(0.9, None, [], "", (12.0, 0.0))]           # one sample tagged 12° off a directional pose
+        self.assertEqual(len(cal.usable_rows(rows, (0.0, 0.0), "centre")), 0)
+        self.assertEqual(len(cal.usable_rows(rows, (0.0, 0.0), "centre", cal.POSE_TOLERANCE_COARSE_DEG)), 1)
+
+    def test_coarse_band_below_interpose_gap(self):
+        from ward.engine import calibration as cal
+        self.assertLess(cal.POSE_TOLERANCE_COARSE_DEG, 18.0)
+
+
 class SmoothBoxKeepsLm5(unittest.TestCase):
     def test_smooth_box_preserves_lm5(self):
         f = pose.LandmarkFilter()

@@ -133,7 +133,7 @@ def _sampler_main(req, res, detector_kind: str, max_height: int, recogniser: str
                 sp, rgb, hint, q, exact = item[:5]
                 want_aug = item[5] if len(item) > 5 else True
                 gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-                box = Box(*hint)
+                box = hint if isinstance(hint, Box) else Box(*hint)   # a Box carries lm5 (ArcFace alignment)
                 if not exact:
                     box = models.detect(gray, box)
                 if box is None or box.w < MIN_ENROLL_FACE_PX:
@@ -651,6 +651,10 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
     from collections import defaultdict, deque
     sgn = -1.0 if mirror else 1.0
     poses = list(poses) if poses else cal.SETUP_POSES
+    # the dlib-less 5-point pose is noisier → a wider arrival band so a hold fills without being
+    # fussy. None keeps the default 10° for the dlib path. Live progress (satisfied/got) and the
+    # post-hoc model split (build_from_captures) must share this, so it is threaded to all of them.
+    pose_tol = None if models.has_dlib else cal.POSE_TOLERANCE_COARSE_DEG
     # segmented-coverage-ring visuals (style="ring"): the angular poses OTHER than the frontal hub
     # are ring segments, placed by their display target; the hub (centre) and the lean/light tail are
     # not. Computed once; the per-frame snapshot says which segments are done and which is active.
@@ -715,7 +719,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
             return face_w is not None and widths and face_w <= float(np.median(widths)) * 0.9
         if pose_disp is None:
             return None
-        return cal.pose_ok(pose_disp, poses[st_data["i"]][3])
+        return cal.pose_ok(pose_disp, poses[st_data["i"]][3], pose_tol)
 
     def advance():
         if st_data["i"] == 0 and widths:
@@ -819,11 +823,25 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                 pose_disp = (sgn * filt.yaw, filt.pitch)
             if st_data["i"] == 0 and not st_data.get("main"):
                 widths.append(face_w)
+            # For a DIRECTIONAL pose, sample only while on target. The sampler runs one embedding
+            # job at a time, so a sample taken mid-turn both fails usable_rows() (wrong pose tag)
+            # AND burns the worker cycle the next on-target frame needed — with the noisier 5-point
+            # pose that waste is what made a hold take ~10 s. Mirrors usable_rows(): closer/away/
+            # light poses aren't pose-filtered, so they keep sampling as before.
+            _cue = poses[st_data["i"]][1]
+            capture_ok = (_cue not in cal.DIRECTIONAL_CUES
+                          or (pose_disp is not None and cal.pose_ok(pose_disp, poses[st_data["i"]][3], pose_tol)))
             # capture embeddings for this pose in the worker process
-            if (now - st_data["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy and sampler.alive:
+            # pipeline: keep up to 2 jobs in flight so the worker never idles while the UI prepares
+            # the next sample (the sample rate was ~1/s — mostly the per-sample frame IPC, not the
+            # millisecond embed). Embeddings are unchanged, so recognition is unaffected.
+            if capture_ok and (now - st_data["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and sampler.pending < 2 and sampler.alive:
                 # no synthetic lighting variants: 3 extra embeddings per sample (~255 ms) quartered the
                 # sample rate and changed no decision (review A11); whitening learns from real samples
-                items = [(primary, brightness.embed_rgb(fr.rgb, fr.gray, primary, q.mean), (box.x, box.y, box.w, box.h), q.score(), True, False)]
+                # pass the whole Box (carries lm5): the primary isn't re-detected in the worker
+                # (exact=True), and ArcFace alignment needs lm5 — without it every IR embed throws
+                # and IR enrols nothing (the recogniser=arcface path, i.e. most dlib-less machines).
+                items = [(primary, brightness.embed_rgb(fr.rgb, fr.gray, primary, q.mean), box, q.score(), True, False)]
                 lights = {primary: light_state}
                 for sp in others:
                     fo = cap.read_one(sp, flush=0)
@@ -836,6 +854,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                 # the pose and light travel WITH the sample: tagged when it was taken, not when it drains
                 if sampler.submit(st_data["i"], (pose_disp, lights), items):
                     st_data["last_sample_t"] = now
+                    st_data["submits"] = st_data.get("submits", 0) + 1
         if not sampler.alive:                                # the worker died (OOM, dlib crash): respawn once
             if st_data.get("respawns", 0) < 1:
                 st_data["respawns"] = st_data.get("respawns", 0) + 1
@@ -870,7 +889,7 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
         # a pass is done when it has enough USABLE embeddings (pose-true, lit), not camera frames:
         # the sampler yields one every ~0.3–0.7 s, so 20 on-target frames (~0.7 s) left most
         # directional poses with < 3 samples once transition frames stopped counting
-        got = max([len(cal.usable_rows(rows, target, cue)) for rows in caps[st_data["i"]].values()] or [0])
+        got = max([len(cal.usable_rows(rows, target, cue, pose_tol)) for rows in caps[st_data["i"]].values()] or [0])
         if cue == "light":                                # time to actually change the light, then samples
             progress = min(1.0, elapsed / cal.LIGHT_PASS_MIN_S, got / NEED_S)
             done = elapsed >= cal.LIGHT_PASS_MIN_S and got >= NEED_S
@@ -888,6 +907,12 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
                          "ring_active": seg_idx.index(cur) if cur in seg_idx else None,
                          "hub_done": centre_i is not None and cur > centre_i})
         if done or elapsed >= TIMEOUT or wall >= 3 * TIMEOUT:
+            if os.environ.get("WARD_ENROLL_DEBUG"):
+                gotc = {sp: len(cal.usable_rows(rows, target, cue, pose_tol)) for sp, rows in caps[st_data["i"]].items()}
+                print(f"[enroll] pose {label!r}: wall={wall:.1f}s active={elapsed:.1f}s "
+                      f"submits={st_data.get('submits', 0)} usable={gotc} hits={st_data['hits']} "
+                      f"{'DONE' if done else ('TIMEOUT' if elapsed >= TIMEOUT else 'WALLCAP')}", flush=True)
+                st_data["submits"] = 0
             base["pass_done"] = True
             advance()
             if st_data["i"] >= len(poses):
@@ -921,11 +946,11 @@ def guided_setup(st: Store, cap: Capture, models: Models, cams: dict, rec: dict,
             from .engine.enroll import summarise_pairs
             st.calib.update(summarise_pairs(align_pairs))
         added, dist_by, _extra = cal.build_from_captures(st, caps, poses, SAMPLES_PER_POSE, fuse,
-                                                         identity=identity, condition=condition)
+                                                         identity=identity, condition=condition, tol=pose_tol)
         # a pose counts when ANY camera produced its model: in bright daylight the IR face can meter
         # dark while RGB carries — that is a good enrolment, not a failed one
         missed = [poses[i][2] for i in range(len(poses))
-                  if all(cal.select_rows(rows, poses[i][3], poses[i][1], SAMPLES_PER_POSE) is None
+                  if all(cal.select_rows(rows, poses[i][3], poses[i][1], SAMPLES_PER_POSE, pose_tol) is None
                          for rows in caps[i].values()) or not caps[i]]
         main = st_data.get("main")
         if main is not None:                                 # the condition sweep: the main result stands
@@ -1158,7 +1183,10 @@ def calibration_session(st, cap: Capture, models: Models, cams: dict, rec: dict,
                 sample.yaw, sample.pitch, sample.roll = filt.yaw, filt.pitch, filt.roll
             sample.face_w = int(box.w)
             if (now - state["last_sample_t"]) * 1000 >= SAMPLE_EVERY_MS and not sampler.busy and sampler.alive:
-                items = [(primary, brightness.embed_rgb(fr.rgb, fr.gray, primary, q.mean), (box.x, box.y, box.w, box.h), q.score(), True, False)]
+                # pass the whole Box (carries lm5): the primary isn't re-detected in the worker
+                # (exact=True), and ArcFace alignment needs lm5 — without it every IR embed throws
+                # and IR enrols nothing (the recogniser=arcface path, i.e. most dlib-less machines).
+                items = [(primary, brightness.embed_rgb(fr.rgb, fr.gray, primary, q.mean), box, q.score(), True, False)]
                 state["pending_light"][primary] = light_state
                 for sp in others:
                     fo = cap.read_one(sp, flush=0)

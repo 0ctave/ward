@@ -130,6 +130,7 @@ class FakeCap:
 class FakeModels:
     max_height = 320
     sp68 = None
+    has_dlib = True                 # the harness feeds synthetic 68-point landmarks → default arrival band
     detector_kind = "yunet"
     recogniser_kind = "dlib"
 
@@ -161,6 +162,10 @@ class FakeSampler:
     @property
     def busy(self) -> bool:
         return bool(self._out) or not self.alive
+
+    @property
+    def pending(self) -> int:
+        return len(self._out)
 
     def submit(self, cell, tag, items) -> bool:
         if not self.alive:
